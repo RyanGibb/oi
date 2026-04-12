@@ -1,0 +1,18 @@
+(library
+ (name oi)
+ (public_name oi)
+ (libraries
+  d10
+  osrel
+  eio
+  opam-format
+  opam-state
+  opam-client
+  opam-repository
+  opam-0install
+  progress
+  xdge
+  fmt
+  logs
+  jsont
+  jsont.bytesrw))

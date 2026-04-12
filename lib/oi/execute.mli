@@ -1,0 +1,25 @@
+[@@@ai_disclosure "ai-generated"]
+[@@@ai_model "claude-opus-4-6"]
+[@@@ai_provider "Anthropic"]
+
+(** Stage-based parallel build executor.
+
+    Executes a {!Plan.t} by processing stages sequentially. Within each stage,
+    fetch and build run in parallel via Eio fibers. Install is serialised at
+    stage boundaries. Uses {!Subst} for [.in] file expansion and
+    [opam-installer] CLI for [.install] file processing.
+
+    Layers are captured via {!D10.Prefix.diff} and stored in the d10 cache for
+    future reuse. *)
+
+val run :
+  proc_mgr:_ Eio.Process.mgr ->
+  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  clock:D10.Config.clk ->
+  sys:D10.Sysops.t ->
+  os_key:string ->
+  Plan.t ->
+  unit
+(** [run ~proc_mgr ~fs ~clock ~sys ~os_key plan] executes the build plan.
+    Reports per-package failures to stderr and exits with code 1 if any package
+    fails. *)

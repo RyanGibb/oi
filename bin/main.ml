@@ -1,0 +1,1148 @@
+[@@@ai_disclosure "ai-assisted"]
+[@@@ai_model "claude-opus-4-6"]
+[@@@ai_provider "Anthropic"]
+
+open Cmdliner
+
+let ( / ) = Filename.concat
+let app_name = "oi"
+
+(* -- Common terms -------------------------------------------------------- *)
+
+let setup_log style_renderer level =
+  Fmt_tty.setup_std_outputs ?style_renderer ();
+  Logs.set_level level;
+  Logs.set_reporter (Progress.logs_reporter ())
+
+let log_term =
+  Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
+
+let data_dir_term =
+  let app_upper = String.uppercase_ascii app_name in
+  let app_env = app_upper ^ "_DATA_DIR" in
+  let xdg_var = "XDG_DATA_HOME" in
+  let home = Sys.getenv "HOME" in
+  let default_path = home / ".local" / "share" / app_name in
+  let doc =
+    Fmt.str
+      "Override data directory. Can also be set with %s or %s. Default: %s"
+      app_env xdg_var default_path
+  in
+  let arg =
+    Arg.(value & opt string default_path & info ~docv:"DIR" ~doc [ "data-dir" ])
+  in
+  Term.(
+    const (fun cmdline_val ->
+        if cmdline_val <> default_path then cmdline_val
+        else
+          match Sys.getenv_opt app_env with
+          | Some v when v <> "" -> v
+          | _ -> (
+              match Sys.getenv_opt xdg_var with
+              | Some v when v <> "" -> v / app_name
+              | _ -> default_path))
+    $ arg)
+
+let cache_dir_term = Xdge.Cmd.cache_term app_name
+
+(* -- Helpers ------------------------------------------------------------- *)
+
+let init_opam_root ~fs ~data_dir =
+  let opam_root = data_dir / "opam-root" in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / opam_root);
+  Oi.Opam_ctx.init_opam ~root:opam_root
+
+(* Run a command and return its exit code (never raises on non-zero exit) *)
+let run_exec proc_mgr ~env cmd =
+  Eio.Switch.run @@ fun sw ->
+  let child = Eio.Process.spawn ~sw proc_mgr ~env cmd in
+  match Eio.Process.await child with `Exited n -> n | `Signaled n -> 128 + n
+
+(* Wrap command body to catch structured errors *)
+let with_error_handling f =
+  try f () with
+  | Oi.Error.E e ->
+      Fmt.epr "%a@." Oi.Error.pp e;
+      exit 1
+  | Failure msg ->
+      Fmt.epr "%a %s@." Fmt.(styled `Red string) "error:" msg;
+      exit 1
+  | Oi.Error.Build_error { pkg; cmd; output } ->
+      Fmt.epr "%a@." Oi.Error.pp (Build_failed { pkg; cmd; output });
+      exit 1
+  | Eio.Exn.Multiple exns ->
+      List.iter
+        (fun (e, _bt) ->
+          match e with
+          | Oi.Error.Build_error { pkg; cmd; output } ->
+              Fmt.epr "%a@." Oi.Error.pp (Build_failed { pkg; cmd; output })
+          | Oi.Error.E e -> Fmt.epr "%a@." Oi.Error.pp e
+          | e ->
+              Fmt.epr "%a %s@."
+                Fmt.(styled `Red string)
+                "error:" (Printexc.to_string e))
+        exns;
+      exit 1
+
+let get_packages_dirs ~data_dir =
+  let dirs = Oi.Repo.packages_dirs ~data_dir in
+  if dirs = [] then
+    Oi.Error.config_error "No repositories configured. Run 'oi repo' first.";
+  dirs
+
+let make_d10 ~sys ~fs ~clock ~cache ~os_key : D10.Config.t =
+  { sys; fs; clock; root = Oi.Cache.root cache; os_key }
+
+(* -- Platform config ------------------------------------------------------ *)
+
+let ocaml_version = "5.4.1"
+
+let make_conf ~platform:(p : Osrel.t) : Oi.Opam_ctx.conf =
+  {
+    arch = Osrel.Arch.to_string p.arch;
+    os = Osrel.OS.to_string p.os;
+    os_distribution = Osrel.OS.kind_to_string p.os.kind;
+    os_version = p.os.version;
+    os_family = p.os.family;
+    ocaml_version;
+    jobs = p.jobs;
+  }
+
+(** Solve for [names], ensure all layers exist (building from source via the
+    build prefix if needed), return the layer hashes in topo order. When
+    [dry_run] is true, print the build plan and exit. *)
+let solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+    ~os_key ?(dry_run = false) ?(extra_repos = []) names =
+  let extra_pkg_dirs = Oi.Repo.ensure_extra ~data_dir extra_repos in
+  let packages_dirs = extra_pkg_dirs @ get_packages_dirs ~data_dir in
+  let cache_root = Oi.Cache.root_s cache in
+  let build_prefix = cache_root / "build" / "prefix" in
+  let ctx = Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf in
+  let pkgs =
+    match
+      Oi.Solve.solve ctx ~packages_dirs ~constraints:OpamPackage.Name.Map.empty
+        names
+    with
+    | Ok pkgs -> pkgs
+    | Error msg -> Oi.Error.no_solution msg
+  in
+  let d10 = make_d10 ~sys ~fs ~clock ~cache ~os_key in
+  let build_plan = Oi.Action.plan ctx ~d10 ~packages_dirs pkgs in
+  if dry_run then begin
+    Fmt.pr "%a@." Oi.Action.pp_tree build_plan;
+    exit 0
+  end;
+  let hashes = Oi.Action.layer_hashes ~packages_dirs build_plan in
+  (* Check if the requested packages' layers are cached *)
+  let targets_cached =
+    List.for_all
+      (fun name ->
+        match Oi.Action.layer_hash_for ~packages_dirs build_plan name with
+        | Some h -> D10.Layer.succeeded d10 ~hash:h
+        | None -> true)
+      names
+  in
+  if targets_cached then begin
+    Logs.info (fun m -> m "Layers cached, skipping build");
+    hashes
+  end
+  else begin
+    let exec_plan =
+      Oi.Plan.create ctx ~cache_root ~packages_dirs ~os_key
+        ~ocaml_version:conf.ocaml_version build_plan
+    in
+    Oi.Execute.run ~proc_mgr ~fs
+      ~clock:(clock :> D10.Config.clk)
+      ~sys ~os_key exec_plan;
+    (* Invalidate any stale prefix cache *)
+    let prefix_hash = D10.Prefix.solve_hash hashes in
+    let prefix_dir =
+      Eio.Path.native_exn Eio.Path.(d10.root / "prefixes" / prefix_hash)
+    in
+    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix_dir)
+     with _ -> ());
+    hashes
+  end
+
+(** Assemble a prefix from all layer hashes, return the prefix path. *)
+let assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes =
+  let d10 = make_d10 ~sys ~fs ~clock ~cache ~os_key in
+  D10.Prefix.assemble_cached d10 ~layer_hashes
+
+(* -- run ----------------------------------------------------------------- *)
+
+let run_script ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
+    script_path with_deps args =
+  let file_deps = Oi.Script.parse_deps_from_file script_path in
+  let cli_deps = List.map Oi.Script.parse_dep with_deps in
+  let all_deps = file_deps @ cli_deps in
+  if all_deps = [] then
+    Oi.Error.msg
+      "No dependencies found. Add [@@@opam pkg1 pkg2] to the first line or use \
+       --with=pkg";
+  let script_hash = Oi.Script.script_hash script_path all_deps in
+  let run_dir = Oi.Cache.run_dir cache ~hash:script_hash in
+  let run_dir_s = Eio.Path.native_exn run_dir in
+  let cached_bin = run_dir_s / "main.exe" in
+  let cached_exists =
+    try
+      ignore (Eio.Path.stat ~follow:true Eio.Path.(fs / cached_bin));
+      true
+    with Eio.Exn.Io _ -> false
+  in
+  if cached_exists then
+    exit
+      (run_exec proc_mgr
+         ~env:
+           (Oi.Prefix.make_env ~prefix
+              ~dune_cache_root:(Oi.Cache.dune_root cache))
+         (cached_bin :: args))
+  else begin
+    let packages_dirs = Oi.Repo.packages_dirs ~data_dir in
+    let ocaml_name = OpamPackage.Name.of_string "ocaml" in
+    let dep_names =
+      List.filter_map
+        (fun (d : Oi.Script.dep) ->
+          if OpamPackage.Name.equal d.name ocaml_name then None else Some d.name)
+        all_deps
+    in
+    let constraints = Oi.Script.constraints all_deps in
+    if dep_names <> [] then begin
+      let cache_root = Oi.Cache.root_s cache in
+      let build_prefix = cache_root / "build" / "prefix" in
+      let ctx = Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf in
+      let pkgs =
+        match Oi.Solve.solve ctx ~packages_dirs ~constraints dep_names with
+        | Ok pkgs -> pkgs
+        | Error msg ->
+            Fmt.epr "No solution: %s@." msg;
+            exit 1
+      in
+      let d10 = make_d10 ~sys ~fs ~clock ~cache ~os_key in
+      let plan = Oi.Action.plan ctx ~d10 ~packages_dirs pkgs in
+      let exec_plan =
+        Oi.Plan.create ctx ~cache_root ~packages_dirs ~os_key
+          ~ocaml_version:conf.ocaml_version plan
+      in
+      Oi.Execute.run ~proc_mgr ~fs
+        ~clock:(clock :> D10.Config.clk)
+        ~sys ~os_key exec_plan
+    end;
+    let build_dir = run_dir_s in
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / build_dir);
+    Oi.Script.generate_project ~script:script_path ~deps:all_deps ~dir:build_dir;
+    let build_env =
+      Oi.Prefix.make_env ~prefix ~dune_cache_root:(Oi.Cache.dune_root cache)
+    in
+    Eio.Process.run proc_mgr ~env:build_env
+      [ "/bin/sh"; "-c"; Fmt.str "cd %s && dune build main.exe 2>&1" build_dir ];
+    let built = build_dir / "_build" / "default" / "main.exe" in
+    let built_exists =
+      try
+        ignore (Eio.Path.stat ~follow:true Eio.Path.(fs / built));
+        true
+      with Eio.Exn.Io _ -> false
+    in
+    if built_exists then begin
+      let content = Eio.Path.load Eio.Path.(fs / built) in
+      Eio.Path.save ~create:(`Or_truncate 0o755)
+        Eio.Path.(fs / cached_bin)
+        content
+    end;
+    let cached_now =
+      try
+        ignore (Eio.Path.stat ~follow:true Eio.Path.(fs / cached_bin));
+        true
+      with Eio.Exn.Io _ -> false
+    in
+    let exe = if cached_now then cached_bin else built in
+    exit (run_exec proc_mgr ~env:build_env (exe :: args))
+  end
+
+let run_cmd =
+  let run () data_dir cache_dir dry_run target with_deps with_repos args =
+    with_error_handling @@ fun () ->
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    let cache = Oi.Cache.create ~root:cache_dir fs in
+    init_opam_root ~fs ~data_dir;
+    Oi.Repo.ensure ~data_dir;
+    let conf = make_conf ~platform in
+    let dune_cache_root = Oi.Cache.dune_root cache in
+    let solve_assemble_run pkg_names =
+      Logs.info (fun m ->
+          m "Solving for packages: %s" (String.concat ", " pkg_names));
+      let names = List.map OpamPackage.Name.of_string pkg_names in
+      let layer_hashes =
+        solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+          ~os_key ~dry_run ~extra_repos:with_repos names
+      in
+      Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
+      let prefix =
+        assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
+      in
+      Logs.info (fun m -> m "Assembled prefix at %s" prefix);
+
+      let bin = prefix / "bin" / target in
+      Logs.info (fun m -> m "Looking for binary: %s" bin);
+      let bin_exists =
+        try
+          ignore (Eio.Path.stat ~follow:true Eio.Path.(fs / bin));
+          true
+        with Eio.Exn.Io _ -> false
+      in
+      if bin_exists then begin
+        Logs.info (fun m -> m "Found binary, executing");
+        exit
+          (run_exec proc_mgr
+             ~env:(Oi.Prefix.make_env ~prefix ~dune_cache_root)
+             (bin :: args))
+      end
+      else begin
+        (* List what binaries are available in the prefix *)
+        let bin_dir = prefix / "bin" in
+        (try
+           let bins = Eio.Path.read_dir Eio.Path.(fs / bin_dir) in
+           Logs.info (fun m ->
+               m "Available binaries in prefix: %s"
+                 (String.concat ", " (List.sort String.compare bins)))
+         with Eio.Exn.Io _ ->
+           Logs.info (fun m -> m "No bin/ directory in prefix"));
+        false
+      end
+    in
+    (* Only .ml files are treated as scripts *)
+    let cwd = Eio.Stdenv.cwd env in
+    if Filename.check_suffix target ".ml" then begin
+      (try ignore (Eio.Path.stat ~follow:true Eio.Path.(cwd / target))
+       with Eio.Exn.Io _ ->
+         Oi.Error.not_found target "file not found: %s" target);
+      (* For scripts, solve deps first to get a prefix with the compiler *)
+      let all_script_deps =
+        Oi.Script.parse_deps_from_file target
+        @ List.map Oi.Script.parse_dep with_deps
+      in
+      let ocaml_name = OpamPackage.Name.of_string "ocaml" in
+      let dep_opam_names =
+        List.filter_map
+          (fun (d : Oi.Script.dep) ->
+            if OpamPackage.Name.equal d.name ocaml_name then None
+            else Some d.name)
+          all_script_deps
+      in
+      let layer_hashes =
+        if dep_opam_names = [] then []
+        else
+          solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir
+            ~conf ~os_key ~extra_repos:with_repos dep_opam_names
+      in
+      let prefix =
+        assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
+      in
+      run_script ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache
+        ~data_dir target with_deps args
+    end
+    else begin
+      (* Include --with deps in every solve *)
+      let extra_deps = List.map Oi.Script.parse_dep with_deps in
+      let ocaml_name = OpamPackage.Name.of_string "ocaml" in
+      let extra_names =
+        List.filter_map
+          (fun (d : Oi.Script.dep) ->
+            if OpamPackage.Name.equal d.name ocaml_name then None
+            else Some (Oi.Script.name_s d))
+          extra_deps
+      in
+      let solve_assemble_run_with pkg_names =
+        solve_assemble_run (pkg_names @ extra_names)
+      in
+      (* Step 0: If --with deps are given, try solving for just those first.
+         The target binary might come from a --with package. *)
+      let from_with =
+        if extra_names <> [] then solve_assemble_run extra_names else false
+      in
+      if not from_with then begin
+        (* Dash-split prefixes: "a-b-c" → ["a-b-c"; "a-b"; "a"] *)
+        let dash_prefixes name =
+          let parts = String.split_on_char '-' name in
+          let rec aux acc prefix = function
+            | [] -> List.rev acc
+            | p :: rest ->
+                let prefix = match prefix with "" -> p | s -> s ^ "-" ^ p in
+                aux (prefix :: acc) prefix rest
+          in
+          List.rev (aux [] "" parts)
+        in
+        (* Step 1: Check layer index for which package provides this binary *)
+        let index_path = Oi.Cache.root_s cache / "layers" / "index.db" in
+        let index_exists =
+          try
+            ignore (Eio.Path.stat ~follow:true Eio.Path.(fs / index_path));
+            true
+          with Eio.Exn.Io _ -> false
+        in
+        let from_index =
+          if index_exists then begin
+            let os_key =
+              D10.Os_key.(to_string (of_platform (Osrel.detect ~proc_mgr ~fs)))
+            in
+            let db = D10.Index.open_ ~path:index_path in
+            let results = D10.Index.find_binary db ~binary:target ~os_key in
+            D10.Index.close db;
+            match results with
+            | (pkg_name, _pkg_ver, _hash) :: _ -> (
+                Logs.info (fun m ->
+                    m "Index: bin/%s provided by package %s" target pkg_name);
+                try solve_assemble_run_with [ pkg_name ] with _ -> false)
+            | [] -> false
+          end
+          else false
+        in
+        if not from_index then begin
+          (* Step 2: Try target name and dash-split prefixes. Skip any
+             prefix already in [extra_names] (Step 0 solved that already)
+             and skip any prefix that doesn't exist as a package in any
+             configured repo — a missing package name cannot possibly
+             provide the binary, and attempting to solve for it wastes
+             a full solver run. *)
+          let packages_dirs =
+            Oi.Repo.ensure_extra ~data_dir with_repos
+            @ Oi.Repo.packages_dirs ~data_dir
+          in
+          let package_exists name =
+            List.exists (fun dir -> Sys.file_exists (dir / name)) packages_dirs
+          in
+          let prefixes =
+            dash_prefixes target
+            |> List.filter (fun p -> not (List.mem p extra_names))
+            |> List.filter package_exists
+          in
+          if prefixes = [] then
+            Oi.Error.not_found target "no package provides bin/%s" target
+          else begin
+            Logs.info (fun m ->
+                m "Trying packages: %s" (String.concat ", " prefixes));
+            let found =
+              List.exists
+                (fun name ->
+                  try solve_assemble_run_with [ name ]
+                  with Oi.Error.E _ -> false)
+                prefixes
+            in
+            if not found then
+              Oi.Error.not_found target "no package provides bin/%s" target
+          end
+        end
+      end
+    end
+  in
+  let target =
+    Arg.(
+      required
+      & pos 0 (some string) None
+      & info ~docv:"TARGET" ~doc:"OCaml script (.ml) or binary name" [])
+  in
+  let with_deps =
+    Arg.(
+      value & opt_all string []
+      & info ~docv:"PKG" ~doc:"Additional dependency (e.g. --with=fmt>=0.9)"
+          [ "with" ])
+  in
+  let with_repos =
+    Arg.(
+      value & opt_all string []
+      & info ~docv:"URL"
+          ~doc:"Additional opam repository URL to include in solving"
+          [ "with-repo" ])
+  in
+  let dry_run =
+    Arg.(
+      value & flag
+      & info ~doc:"Show what would be built without building" [ "n"; "dry-run" ])
+  in
+  let args =
+    Arg.(
+      value & pos_right 0 string []
+      & info ~docv:"ARG" ~doc:"Arguments passed to the target" [])
+  in
+  let info =
+    Cmd.info "run" ~doc:"Run an OCaml script or an installed binary"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Solve dependencies, build from source (or restore from cache), \
+             assemble a prefix, and run the target. Subsequent runs with the \
+             same dependencies are instant.";
+          `S "BINARY MODE";
+          `P
+            "When TARGET is not a .ml file, oi looks for a binary of that \
+             name. If --with is given, those packages are solved first. \
+             Otherwise oi tries the target name as a package, then dash-split \
+             prefixes (e.g. $(b,ocluster-admin) tries $(b,ocluster-admin), \
+             then $(b,ocluster)).";
+          `P "Examples:";
+          `Pre
+            "  oi run utop\n\
+            \  oi run ocamlformat -- --help\n\
+            \  oi run --with=crockford roguedoi";
+          `S "SCRIPT MODE";
+          `P
+            "When TARGET ends in .ml, oi treats it as an OCaml script. \
+             Dependencies are declared on the first line using an OCaml \
+             attribute:";
+          `Pre "  [@@@opam fmt cmdliner lwt]";
+          `P "Version constraints use standard opam syntax:";
+          `Pre "  [@@@opam fmt>=0.9.0 cmdliner>=1.2.0]";
+          `P
+            "The script is compiled into a dune project with the declared \
+             packages as libraries. The compiled binary is cached by a hash of \
+             the script contents and its dependencies, so edits trigger a \
+             rebuild but unchanged scripts run instantly.";
+          `P "Examples:";
+          `Pre
+            "  oi run my_script.ml\n\
+            \  oi run my_script.ml --with=tls -- arg1 arg2";
+          `S "DRY RUN";
+          `P
+            "With -n/--dry-run, oi solves and checks the layer cache but does \
+             not build or run anything. The output shows each package as \
+             $(b,source) (needs building), $(b,binary) (cached), or \
+             $(b,virtual) (no-op).";
+        ]
+  in
+  Cmd.v info
+    Term.(
+      const run $ log_term $ data_dir_term $ cache_dir_term $ dry_run $ target
+      $ with_deps $ with_repos $ args)
+
+(* -- plan ---------------------------------------------------------------- *)
+
+let plan_cmd =
+  let run () data_dir cache_dir targets with_repos =
+    with_error_handling @@ fun () ->
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let _clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    let cache = Oi.Cache.create ~root:cache_dir fs in
+    init_opam_root ~fs ~data_dir;
+    Oi.Repo.ensure ~data_dir;
+    let conf = make_conf ~platform in
+    let extra_pkg_dirs = Oi.Repo.ensure_extra ~data_dir with_repos in
+    let packages_dirs = extra_pkg_dirs @ get_packages_dirs ~data_dir in
+    let names = List.map OpamPackage.Name.of_string targets in
+    let build_prefix = Oi.Cache.root_s cache / "build" / "prefix" in
+    let ctx = Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf in
+    let pkgs =
+      match
+        Oi.Solve.solve ctx ~packages_dirs
+          ~constraints:OpamPackage.Name.Map.empty names
+      with
+      | Ok pkgs -> pkgs
+      | Error msg -> Oi.Error.no_solution msg
+    in
+    let d10 =
+      make_d10 ~sys ~fs
+        ~clock:(Eio.Stdenv.clock env :> D10.Config.clk)
+        ~cache ~os_key
+    in
+    let action_plan = Oi.Action.plan ctx ~d10 ~packages_dirs pkgs in
+    let plan =
+      Oi.Plan.create ctx ~cache_root:(Oi.Cache.root_s cache) ~packages_dirs
+        ~os_key ~ocaml_version:conf.ocaml_version action_plan
+    in
+    Fmt.pr "%a@." Oi.Plan.pp plan
+  in
+  let targets =
+    Arg.(
+      non_empty & pos_all string []
+      & info ~docv:"PKG" ~doc:"Package(s) to plan" [])
+  in
+  let with_repos =
+    Arg.(
+      value & opt_all string []
+      & info ~docv:"URL" ~doc:"Additional opam repository URL" [ "with-repo" ])
+  in
+  let info =
+    Cmd.info "plan" ~doc:"Show the resolved build plan for package(s)"
+  in
+  Cmd.v info
+    Term.(
+      const run $ log_term $ data_dir_term $ cache_dir_term $ targets
+      $ with_repos)
+
+(* -- env ----------------------------------------------------------------- *)
+
+let env_cmd =
+  let run () data_dir cache_dir =
+    with_error_handling @@ fun () ->
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    let cache = Oi.Cache.create ~root:cache_dir fs in
+    let dune_cache_root = Oi.Cache.dune_root cache in
+    (* Detect _oi/ project directory *)
+    let cwd = Eio.Path.native_exn (Eio.Stdenv.cwd env) in
+    let oi_prefix = cwd / "_oi" / "prefix" in
+    let has_oi_prefix =
+      try
+        ignore (Eio.Path.stat ~follow:true Eio.Path.(fs / oi_prefix));
+        true
+      with Eio.Exn.Io _ -> false
+    in
+    let prefix =
+      if has_oi_prefix then oi_prefix
+      else begin
+        (* Fall back to a minimal compiler-only prefix *)
+        init_opam_root ~fs ~data_dir;
+        Oi.Repo.ensure ~data_dir;
+        let conf = make_conf ~platform in
+        let layer_hashes =
+          solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir
+            ~conf ~os_key
+            [ OpamPackage.Name.of_string "ocaml" ]
+        in
+        assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
+      end
+    in
+    let vars = Oi.Prefix.env_vars ~prefix ~dune_cache_root in
+    let current_path =
+      try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin"
+    in
+    List.iter
+      (fun (k, v) ->
+        let v =
+          if k = "PATH" then (prefix / "bin") ^ ":" ^ current_path else v
+        in
+        Fmt.pr "export %s=\"%s\"@." k v)
+      vars
+  in
+  let info =
+    Cmd.info "env" ~doc:"Print shell environment for the current project"
+  in
+  Cmd.v info Term.(const run $ log_term $ data_dir_term $ cache_dir_term)
+
+(* -- init ---------------------------------------------------------------- *)
+
+(* -- sync ---------------------------------------------------------------- *)
+
+(* Scan directory for *.opam files and extract dependency names *)
+let deps_from_opam_files ~fs dir =
+  let opam_files =
+    Eio.Path.read_dir Eio.Path.(fs / dir)
+    |> List.filter (fun f -> Filename.check_suffix f ".opam")
+  in
+  let deps = Hashtbl.create 64 in
+  List.iter
+    (fun file ->
+      let path = dir / file in
+      try
+        let opam = OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)) in
+        let extract_names formula =
+          OpamFormula.fold_left
+            (fun () (name, _) ->
+              let s = OpamPackage.Name.to_string name in
+              if s <> "ocaml" then Hashtbl.replace deps s true)
+            () formula
+        in
+        extract_names (OpamFile.OPAM.depends opam)
+      with _ -> Logs.warn (fun m -> m "Could not parse %s" file))
+    opam_files;
+  Hashtbl.fold (fun k _ acc -> k :: acc) deps [] |> List.sort String.compare
+
+let sync_cmd =
+  let run () data_dir cache_dir =
+    with_error_handling @@ fun () ->
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    let cache = Oi.Cache.create ~root:cache_dir fs in
+    init_opam_root ~fs ~data_dir;
+    Oi.Repo.ensure ~data_dir;
+    let cwd = Eio.Path.native_exn (Eio.Stdenv.cwd env) in
+    let deps = deps_from_opam_files ~fs cwd in
+    if deps = [] then
+      Oi.Error.config_error "No .opam files found in current directory.";
+    Fmt.pr "Dependencies from opam files: %s@." (String.concat ", " deps);
+    let conf = make_conf ~platform in
+    let names = List.map OpamPackage.Name.of_string deps in
+    let layer_hashes =
+      solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+        ~os_key names
+    in
+    (* Assemble into _oi/prefix/ *)
+    let oi_dir = cwd / "_oi" in
+    let prefix = oi_dir / "prefix" in
+    Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix);
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / oi_dir);
+    let all_hashes = layer_hashes in
+    let d10 = make_d10 ~sys ~fs ~clock ~cache ~os_key in
+    D10.Prefix.assemble d10 ~layer_hashes:all_hashes ~dst:Eio.Path.(fs / prefix);
+    (* Write .envrc with direnv stdlib calls *)
+    let root_envrc = cwd / ".envrc" in
+    let envrc_path = Eio.Path.(fs / root_envrc) in
+    let dune_cache_root = Oi.Cache.dune_root cache in
+    let envrc = Oi.Prefix.envrc_content ~prefix ~dune_cache_root in
+    (try Eio.Path.unlink envrc_path with Eio.Exn.Io _ -> ());
+    Eio.Path.save ~create:(`Exclusive 0o644) envrc_path envrc;
+    Fmt.pr "Wrote .envrc (run 'direnv allow' to activate)@.";
+    Fmt.pr "Prefix assembled at %s (%d packages)@." prefix
+      (List.length layer_hashes)
+  in
+  let info =
+    Cmd.info "sync"
+      ~doc:
+        "Scan *.opam files, solve dependencies, build, and assemble _oi/prefix/"
+  in
+  Cmd.v info Term.(const run $ log_term $ data_dir_term $ cache_dir_term)
+
+(* -- tools --------------------------------------------------------------- *)
+
+let tools_cmd =
+  let run () _cache_dir data_dir =
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let _clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    Fmt.pr "@[<v>%a %s@,@," Fmt.(styled `Bold string) "Platform" os_key;
+    Fmt.pr "  ocaml:  %s (relocatable)@," ocaml_version;
+    Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Repositories";
+    let config = Oi.Repo.config in
+    List.iter
+      (fun (r : Oi.Repo.remote) ->
+        let dir = Oi.Repo.repo_dir ~data_dir r.name in
+        let is_default = r.name = config.default in
+        let marker = if is_default then "* " else "  " in
+        let status =
+          if Sys.file_exists (dir / ".git") then
+            let hash =
+              try D10.Sysops.Git.head_short sys ~dir:Eio.Path.(fs / dir)
+              with _ -> "?"
+            in
+            Fmt.str "%a (%s)" Fmt.(styled `Green string) "cloned" hash
+          else Fmt.str "%a" Fmt.(styled `Yellow string) "not cloned"
+        in
+        Fmt.pr "%s%a  %s  %s@," marker
+          Fmt.(styled `Bold string)
+          r.name status r.url)
+      config.remotes;
+    Fmt.pr "@]@."
+  in
+  let info =
+    Cmd.info "tools"
+      ~doc:"List available toolchains, repositories, and their status"
+  in
+  Cmd.v info Term.(const run $ log_term $ cache_dir_term $ data_dir_term)
+
+(* -- repo ---------------------------------------------------------------- *)
+
+let repo_cmd =
+  let run () data_dir =
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let _clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    init_opam_root ~fs ~data_dir;
+    Oi.Repo.ensure ~data_dir;
+    Fmt.pr "%a@." Oi.Repo.pp_config Oi.Repo.config;
+    List.iter
+      (fun (r : Oi.Repo.remote) ->
+        let dir = Oi.Repo.repo_dir ~data_dir r.name in
+        if Sys.file_exists (dir / ".git") then
+          Fmt.pr "  %s: %s@." r.name
+            (D10.Sysops.Git.head_short sys ~dir:Eio.Path.(fs / dir))
+        else Fmt.pr "  %s: not cloned@." r.name)
+      Oi.Repo.config.remotes
+  in
+  let info = Cmd.info "repo" ~doc:"Show repository status" in
+  Cmd.v info Term.(const run $ log_term $ data_dir_term)
+
+(* -- clean --------------------------------------------------------------- *)
+
+(* dir_size and pp_size are now in Oi.Cache *)
+
+let clean_cmd =
+  let run () cache_dir data_dir all toolchains sources binaries dune_cache repos
+      dry_run =
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let _clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let cache = Oi.Cache.create ~root:cache_dir fs in
+    let clean_any =
+      all || toolchains || sources || binaries || dune_cache || repos
+    in
+    if not clean_any then begin
+      Fmt.pr "@[<v>%a@,@," Fmt.(styled `Bold string) "Cleanable items:";
+      let items = Oi.Cache.cleanable_items cache ~data_dir in
+      List.iter
+        (fun (item : Oi.Cache.item) ->
+          let path_s = Eio.Path.native_exn item.path in
+          if Sys.file_exists path_s then
+            Fmt.pr "  --%-20s %a  %s@," item.label Oi.Cache.pp_size
+              (Oi.Cache.size ~sys item.path)
+              item.description
+          else
+            Fmt.pr "  --%-20s %a  %s@," item.label
+              Fmt.(styled `Faint string)
+              "(empty)" item.description)
+        items;
+      Fmt.pr "@,Use --all to clean everything, or select specific items.@]@."
+    end
+    else begin
+      let items = Oi.Cache.cleanable_items cache ~data_dir in
+      let find_item label =
+        List.find_opt (fun (i : Oi.Cache.item) -> i.label = label) items
+      in
+      let rm label =
+        match find_item label with
+        | None -> ()
+        | Some item ->
+            let path_s = Eio.Path.native_exn item.path in
+            if Sys.file_exists path_s then begin
+              let sz = Oi.Cache.size ~sys item.path in
+              if dry_run then
+                Fmt.pr "Would remove %s (%a) %s@." label Oi.Cache.pp_size sz
+                  path_s
+              else begin
+                Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / path_s);
+                Fmt.pr "Removed %s (%a)@." label Oi.Cache.pp_size sz
+              end
+            end
+      in
+      if all || toolchains then rm "toolchains";
+      if all || sources then rm "sources";
+      if all || binaries then rm "layers";
+      if all || binaries then rm "runs";
+      if all || dune_cache then rm "dune";
+      if all || repos then rm "repos";
+      Fmt.pr "Done.@."
+    end
+  in
+  let all =
+    Arg.(
+      value & flag
+      & info ~doc:"Remove everything (caches, builds, config, repos)" [ "all" ])
+  in
+  let toolchains =
+    Arg.(
+      value & flag
+      & info ~doc:"Remove cached toolchain tarballs" [ "toolchains" ])
+  in
+  let sources =
+    Arg.(value & flag & info ~doc:"Remove cached source tarballs" [ "sources" ])
+  in
+  let binaries =
+    Arg.(
+      value & flag
+      & info ~doc:"Remove binary layer cache and script builds" [ "layers" ])
+  in
+  let dune_cache =
+    Arg.(value & flag & info ~doc:"Remove dune shared build cache" [ "dune" ])
+  in
+  let repos =
+    Arg.(value & flag & info ~doc:"Remove cloned repositories" [ "repos" ])
+  in
+  let dry_run =
+    Arg.(
+      value & flag
+      & info ~doc:"Show what would be removed without deleting"
+          [ "dry-run"; "n" ])
+  in
+  let info =
+    Cmd.info "clean" ~doc:"Remove cached data and workspace artifacts"
+  in
+  Cmd.v info
+    Term.(
+      const run $ log_term $ cache_dir_term $ data_dir_term $ all $ toolchains
+      $ sources $ binaries $ dune_cache $ repos $ dry_run)
+
+(* -- show ---------------------------------------------------------------- *)
+
+let show_cmd =
+  let run () cache_dir _data_dir target =
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let _clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    let layers_dir = cache_dir / "layers" / os_key in
+    match target with
+    | None ->
+        (* Show overview of all layers *)
+        Fmt.pr "@[<v>%a %s@,@," Fmt.(styled `Bold string) "Layer cache" os_key;
+        if not (Sys.file_exists layers_dir) then Fmt.pr "  (empty)@,"
+        else begin
+          let entries =
+            Sys.readdir layers_dir |> Array.to_list |> List.sort String.compare
+          in
+          let total_size = ref 0L in
+          List.iter
+            (fun hash ->
+              let info =
+                D10.Layer.load_meta
+                  Eio.Path.(fs / layers_dir / hash / "layer.json")
+              in
+              match info with
+              | Some i ->
+                  let status =
+                    if i.exit_status = 0 then
+                      Fmt.str "%a" Fmt.(styled `Green string) "ok"
+                    else
+                      Fmt.str "%a (exit %d)"
+                        Fmt.(styled `Red string)
+                        "fail" i.exit_status
+                  in
+                  let fs_dir = layers_dir / hash / "fs" in
+                  let sz = Oi.Cache.size ~sys Eio.Path.(fs / fs_dir) in
+                  total_size := Int64.add !total_size sz;
+                  Fmt.pr "  %a  %s  %a  %s@,"
+                    Fmt.(styled `Faint string)
+                    (String.sub hash 0 (min 12 (String.length hash)))
+                    status Oi.Cache.pp_size sz i.package
+              | None ->
+                  Fmt.pr "  %a  %a@,"
+                    Fmt.(styled `Faint string)
+                    (String.sub hash 0 (min 12 (String.length hash)))
+                    Fmt.(styled `Yellow string)
+                    "(no metadata)")
+            entries;
+          Fmt.pr "@,%a %d layers, %a total@,"
+            Fmt.(styled `Bold string)
+            "Summary:" (List.length entries) Oi.Cache.pp_size !total_size
+        end;
+        Fmt.pr "@]@."
+    | Some pkg_name ->
+        (* Show details for a specific package *)
+        Fmt.pr "@[<v>%a %s@,@," Fmt.(styled `Bold string) "Package" pkg_name;
+        (* Find matching layers *)
+        let found = ref false in
+        if Sys.file_exists layers_dir then begin
+          let entries = Sys.readdir layers_dir |> Array.to_list in
+          List.iter
+            (fun hash ->
+              let info =
+                D10.Layer.load_meta
+                  Eio.Path.(fs / layers_dir / hash / "layer.json")
+              in
+              match info with
+              | Some i
+                when String.length i.package >= String.length pkg_name
+                     && String.sub i.package 0 (String.length pkg_name)
+                        = pkg_name ->
+                  found := true;
+                  Fmt.pr "  %a %s@," Fmt.(styled `Bold string) "Layer" hash;
+                  Fmt.pr "  package:     %s@," i.package;
+                  Fmt.pr "  status:      %s@,"
+                    (if i.exit_status = 0 then "ok"
+                     else Fmt.str "failed (exit %d)" i.exit_status);
+                  Fmt.pr "  created:     %s@,"
+                    (let t = Unix.gmtime i.created in
+                     Fmt.str "%04d-%02d-%02d %02d:%02d:%02d UTC"
+                       (t.tm_year + 1900) (t.tm_mon + 1) t.tm_mday t.tm_hour
+                       t.tm_min t.tm_sec);
+                  Fmt.pr "  deps:        %s@,"
+                    (if i.deps = [] then "(none)" else String.concat ", " i.deps);
+                  Fmt.pr "  parent hash: %s@,"
+                    (if i.hashes = [] then "(none)"
+                     else
+                       String.concat ", "
+                         (List.map
+                            (fun h -> String.sub h 0 (min 12 (String.length h)))
+                            i.hashes));
+                  let fs_dir = layers_dir / hash / "fs" in
+                  if Sys.file_exists fs_dir then begin
+                    let sz = Oi.Cache.size ~sys Eio.Path.(fs / fs_dir) in
+                    Fmt.pr "  size:        %a@," Oi.Cache.pp_size sz;
+                    (* List files in fs/ *)
+                    let files = ref [] in
+                    let rec scan dir =
+                      if Sys.file_exists dir && Sys.is_directory dir then
+                        Array.iter
+                          (fun name ->
+                            let path = dir / name in
+                            if Sys.is_directory path then scan path
+                            else
+                              let rel =
+                                String.sub path
+                                  (String.length fs_dir + 1)
+                                  (String.length path - String.length fs_dir - 1)
+                              in
+                              files := rel :: !files)
+                          (Sys.readdir dir)
+                    in
+                    scan fs_dir;
+                    let files = List.sort String.compare !files in
+                    Fmt.pr "  files:       %d@," (List.length files);
+                    if List.length files <= 20 then
+                      List.iter (fun f -> Fmt.pr "    %s@," f) files
+                    else begin
+                      List.iteri
+                        (fun i f -> if i < 10 then Fmt.pr "    %s@," f)
+                        files;
+                      Fmt.pr "    ... (%d more)@," (List.length files - 10)
+                    end
+                  end;
+                  Fmt.pr "@,"
+              | _ -> ())
+            entries
+        end;
+        if not !found then Fmt.pr "  No layers found for %s@," pkg_name;
+        Fmt.pr "@]@."
+  in
+  let target =
+    Arg.(
+      value
+      & pos 0 (some string) None
+      & info ~docv:"PACKAGE" ~doc:"Package name to inspect (omit for overview)"
+          [])
+  in
+  let info =
+    Cmd.info "show" ~doc:"Show layer cache stats and package details"
+  in
+  Cmd.v info
+    Term.(const run $ log_term $ cache_dir_term $ data_dir_term $ target)
+
+(* -- index --------------------------------------------------------------- *)
+
+let index_cmd =
+  let run () cache_dir =
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let layers_root = cache_dir / "layers" in
+    let index_path = layers_root / "index.db" in
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / layers_root);
+    let db = D10.Index.open_ ~path:index_path in
+    (* Index all os_key subdirectories *)
+    let total_layers = ref 0 in
+    let total_bins = ref 0 in
+    let total_files = ref 0 in
+    if Sys.file_exists layers_root then
+      Array.iter
+        (fun entry ->
+          let dir = layers_root / entry in
+          if
+            Sys.is_directory dir && entry <> "." && entry <> ".."
+            && (not (Filename.check_suffix entry ".db"))
+            && (not (Filename.check_suffix entry ".db-shm"))
+            && not (Filename.check_suffix entry ".db-wal")
+          then begin
+            D10.Index.rebuild
+              {
+                D10.Config.sys;
+                fs;
+                clock :> D10.Config.clk;
+                root = Eio.Path.(fs / cache_dir);
+                os_key = entry;
+              }
+              db;
+            let nl, nb, nf = D10.Index.stats db ~os_key:entry in
+            Fmt.pr "  %s: %d layers, %d binaries, %d files@." entry nl nb nf;
+            total_layers := !total_layers + nl;
+            total_bins := !total_bins + nb;
+            total_files := !total_files + nf
+          end)
+        (Sys.readdir layers_root);
+    D10.Index.close db;
+    Fmt.pr "Total: %d layers, %d binaries, %d files@." !total_layers !total_bins
+      !total_files;
+    Fmt.pr "Index: %s@." index_path
+  in
+  let info =
+    Cmd.info "index" ~doc:"Build a SQLite index of the binary layer cache"
+  in
+  Cmd.v info Term.(const run $ log_term $ cache_dir_term)
+
+(* -- main ---------------------------------------------------------------- *)
+
+let () =
+  let info =
+    Cmd.info "oi" ~version:"0.1.0" ~doc:"Stateless OCaml package builder"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "oi is a stateless OCaml package builder. It solves dependencies \
+             with opam-0install, builds packages in parallel stages using a \
+             relocatable OCaml compiler, and caches each package as a binary \
+             layer. Assembled prefixes are created on demand via hardlinks. No \
+             global state, no switches, no ~/.opam.";
+          `S "QUICK START";
+          `P "Run any binary from the opam repository:";
+          `Pre "  oi run utop\n  oi run ocamlformat -- --help";
+          `P "Run an OCaml script with dependencies:";
+          `Pre "  oi run my_script.ml";
+          `P "The first line of the script declares opam packages:";
+          `Pre "  [@@@opam fmt cmdliner lwt>=5.0]";
+          `P "Show what would be built without building:";
+          `Pre "  oi run -n utop";
+          `P "Show the fully resolved build plan:";
+          `Pre "  oi plan utop";
+          `S "HOW IT WORKS";
+          `P
+            "On first use, oi fetches a relocatable OCaml compiler and the \
+             opam package repository. For each $(b,oi run), it:";
+          `P "1. Solves dependencies (opam-0install solver)";
+          `P "2. Checks the binary layer cache for each package";
+          `P "3. Builds uncached packages in parallel stages";
+          `P "4. Captures each build as a content-addressed layer";
+          `P "5. Assembles a prefix from all layers via hardlinks";
+          `P "6. Runs the target binary or script";
+          `P "Subsequent runs with the same dependencies skip steps 2-5.";
+          `S "SCRIPT FORMAT";
+          `P
+            "OCaml scripts (.ml files) declare opam dependencies on the first \
+             line using an attribute:";
+          `Pre "  [@@@opam fmt cmdliner>=1.2.0 lwt]";
+          `P
+            "Each token is parsed as an opam package atom. Version constraints \
+             use opam syntax: $(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=). The \
+             packages are installed as dune libraries, so use the findlib/dune \
+             library name in your code (e.g. $(b,open Fmt) for the fmt \
+             package).";
+          `S "ENVIRONMENT";
+          `P (Xdge.Cmd.env_docs app_name);
+        ]
+  in
+  let cmd =
+    Cmd.group info
+      [
+        run_cmd;
+        plan_cmd;
+        sync_cmd;
+        env_cmd;
+        tools_cmd;
+        show_cmd;
+        index_cmd;
+        repo_cmd;
+        clean_cmd;
+      ]
+  in
+  exit (Cmd.eval cmd)

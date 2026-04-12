@@ -1,0 +1,23 @@
+(executable
+ (name main)
+ (public_name oi)
+ (package oi)
+ (libraries
+  oi
+  d10
+  osrel
+  eio_main
+  cmdliner
+  xdge
+  fmt
+  fmt.cli
+  fmt.tty
+  logs
+  logs.fmt
+  logs.cli))
+
+(executable
+ (name d10_main)
+ (public_name d10)
+ (package d10)
+ (libraries d10 osrel eio_main cmdliner fmt fmt.tty logs logs.fmt))

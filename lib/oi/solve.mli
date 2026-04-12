@@ -1,0 +1,37 @@
+[@@@ai_disclosure "ai-assisted"]
+[@@@ai_model "claude-opus-4-6"]
+[@@@ai_provider "Anthropic"]
+
+(** Dependency solving.
+
+    Uses opam-0install-solver with {!Opam_ctx}'s synthetic switch state to
+    resolve platform variables. Compiler and base packages provided by the
+    toolchain are constrained to the correct versions and excluded from the
+    result.
+
+    When multiple package directories are given (from multiple repos via
+    {!Repo}), the solver uses the first (default) repo for candidate
+    enumeration, and {!load_opam} searches all repos in priority order. *)
+
+val solve :
+  Opam_ctx.t ->
+  packages_dirs:string list ->
+  constraints:OpamFormula.version_constraint OpamTypes.name_map ->
+  OpamPackage.Name.t list ->
+  (OpamPackage.t list, string) result
+(** [solve ctx ~packages_dirs ~constraints names] resolves the dependency
+    closure for [names]. Returns packages in topological order. *)
+
+val dep_names :
+  packages_dirs:string list ->
+  Opam_ctx.t ->
+  OpamPackage.t ->
+  OpamPackage.Name.Set.t ->
+  OpamPackage.Name.Set.t
+(** [dep_names ~packages_dirs ctx pkg in_solution] returns the set of dependency
+    names of [pkg] that appear in [in_solution], after filtering by the platform
+    variables. *)
+
+val load_opam : string list -> OpamPackage.t -> OpamFile.OPAM.t option
+(** [load_opam packages_dirs pkg] searches [packages_dirs] in order for the opam
+    file of [pkg]. *)
