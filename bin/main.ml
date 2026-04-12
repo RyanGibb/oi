@@ -339,8 +339,11 @@ let run_cmd =
         if dep_opam_names = [] then []
         else
           solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir
-            ~conf ~os_key ~extra_repos:with_repos dep_opam_names
+            ~conf ~os_key ~dry_run ~extra_repos:with_repos dep_opam_names
       in
+      if dry_run && dep_opam_names = [] then
+        (* No deps to solve, but still in dry-run mode — just exit *)
+        exit 0;
       let prefix =
         assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
       in
