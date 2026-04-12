@@ -1,6 +1,9 @@
 (lang dune 3.20)
 (name oi)
 (generate_opam_files true)
+(maintainers "Anil Madhavapeddy <anil@recoil.org>")
+(authors "Anil Madhavapeddy" "Mark Elvers")
+(source (github avsm/oi))
 
 (package
  (name osrel)

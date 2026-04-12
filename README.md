@@ -1,9 +1,7 @@
 # oi -- an OCaml installer
 
-A fast, stateless OCaml package runner. No global state, no `~/.opam`.
-Packages are solved with opam-0install, built in parallel stages using a
-relocatable compiler, and cached as content-addressed binary layers.
-Prefixes are assembled on demand via hardlinks.
+oi is a fast, stateless OCaml package runner that can execute binaries
+directly from the package registry without requiring any global state.
 
 ## Quick start
 
@@ -11,10 +9,11 @@ Run any binary from the opam repository:
 
     oi run utop
     oi run ocamlformat -- --help
+    oi run --with=ocluster ocluster-admin
 
 The first invocation solves, builds, caches, and runs. The second is instant.
 
-Run an OCaml script with dependencies:
+Run a local OCaml script with dependencies:
 
     oi run my_script.ml
 
@@ -39,12 +38,8 @@ Version constraints use standard opam syntax:
 [@@@opam fmt>=0.9.0 cmdliner>=1.2.0 lwt]
 ```
 
-Each token is parsed as an opam package atom (via `OpamFormula.atom_of_string`).
-The packages are installed as dune libraries, so use the findlib/dune library
-name in your code (e.g. `open Fmt` for the `fmt` package).
-
 The compiled binary is cached by a hash of the script contents and its
-dependencies. Edits trigger a rebuild; unchanged scripts run instantly.
+dependencies. Edits trigger a rebuild and unchanged scripts run instantly.
 
 ## Specifying packages
 
@@ -84,10 +79,9 @@ This writes a `.envrc` using direnv stdlib functions. Activate with:
 
     direnv allow
 
-After that, entering the directory automatically sets `PATH`, `OCAMLPATH`,
-`CAML_LD_LIBRARY_PATH`, and the other variables needed by the OCaml
-toolchain. Running `oi sync` again after changing `.opam` files updates
-the prefix.
+After that, entering the directory automatically sets all the env variables
+needed by the OCaml toolchain. Running `oi sync` again after changing `.opam`
+files updates the prefix (TODO: figure out if direnv lets us automate this). 
 
 ## Examining the cache
 
@@ -95,21 +89,14 @@ the prefix.
     oi show fmt          # details for a specific package
     oi index             # rebuild SQLite index for fast lookups
     oi tools             # relocatable compiler and repo status
-
-## Cleaning up
-
-    oi clean                  # show what can be cleaned
-    oi clean --layers         # remove binary layer cache
-    oi clean --prefixes       # remove assembled prefix cache
-    oi clean --sources        # remove downloaded source tarballs
-    oi clean --all            # remove everything
+    oi clean             # show what can be cleaned
 
 ## How it works
 
-`oi` uses a relocatable OCaml compiler (from dra27's fork) cached as a
+`oi` uses a relocatable OCaml compiler (from @dra27's fork) cached as a
 binary layer. Packages are solved with opam-0install and built in parallel
 stages: packages within a stage have no inter-dependencies and build
-concurrently via Eio fibers. Install is serialised at stage boundaries.
+concurrently, while install is serialised at stage boundaries.
 After each successful install, the newly installed files are captured as a
 content-addressed layer.
 
@@ -121,8 +108,3 @@ A prefix is a directory tree assembled by hardlinking files from all
 package layers. Prefixes are cached by a hash of their constituent layers,
 so identical solves reuse the same assembled prefix. Different `oi run`
 invocations with different dependency trees get independent prefixes.
-
-## Architecture
-
-See [CLAUDE.md](CLAUDE.md) for the module map, review order, data paths,
-and editing guide.
