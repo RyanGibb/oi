@@ -39,7 +39,7 @@ jobs:
             default: https://github.com/ocaml/opam-repository.git
 
       - name: opam deps
-        run: opam exec -- opam install --profile=release --deps-only .
+        run: opam exec -- opam install --deps-only .
 
       - name: Dune build
         run: opam exec -- dune build --profile=release @install
