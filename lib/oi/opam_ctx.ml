@@ -117,6 +117,7 @@ let switch_env ~prefix =
     ("OCAMLFIND_CONF", prefix / "lib" / "findlib.conf");
     ("OCAMLPATH", String.concat ":" [ prefix / "lib"; prefix / "lib" / "ocaml" ]);
     ("OCAMLTOP_INCLUDE_PATH", prefix / "lib" / "toplevel");
+    ("OCAML_TOPLEVEL_PATH", prefix / "lib" / "toplevel");
   ]
 
 let create ~prefix ~packages_dirs ~conf =
@@ -279,6 +280,13 @@ let compilation_env t opam =
       OpamTypesBase.env_update_resolved "CDPATH" Eq "" ~comment:"sanitize";
       OpamTypesBase.env_update_resolved "MAKEFLAGS" Eq "" ~comment:"sanitize";
       OpamTypesBase.env_update_resolved "MAKELEVEL" Eq "" ~comment:"sanitize";
+      (* OCaml reads OCAML_TOPLEVEL_PATH (underscored) to locate topfind;
+         if a host opam switch is active it points at that switch's toplevel
+         dir, so [ocaml pkg/pkg.ml] (topkg) loads a findlib_top.cma built
+         against a different OCaml and errors with "disagree over interface
+         Misc". Pin it to our prefix. *)
+      OpamTypesBase.env_update_resolved "OCAML_TOPLEVEL_PATH" Eq
+        (t.prefix / "lib" / "toplevel") ~comment:"sanitize";
       OpamTypesBase.env_update_resolved "OPAM_PACKAGE_NAME" Eq
         (OpamPackage.Name.to_string (OpamFile.OPAM.name opam))
         ~comment:"build env";

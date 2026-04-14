@@ -12,15 +12,49 @@ let ( / ) = Filename.concat
 
 (* -- Command execution --------------------------------------------------- *)
 
+(* Resolve an unqualified executable name against the PATH in [env],
+   not the parent process's PATH. Eio.Process.spawn uses execvp-style
+   lookups against the caller's PATH, so [ocaml] would otherwise resolve
+   to the host opam switch's ocaml rather than the one installed into the
+   build prefix. Resolving here forces exec to use our prefix's binary. *)
+let path_of_env env =
+  Array.find_map
+    (fun s ->
+      if String.starts_with ~prefix:"PATH=" s then
+        Some (String.sub s 5 (String.length s - 5))
+      else None)
+    env
+
+let is_executable path =
+  try Unix.access path [ Unix.X_OK ]; true with Unix.Unix_error _ -> false
+
+let resolve_in_path ~env exe =
+  if String.contains exe '/' then exe
+  else
+    match path_of_env env with
+    | None -> exe
+    | Some path ->
+        let found =
+          String.split_on_char ':' path
+          |> List.find_map (function
+               | "" -> None
+               | d ->
+                   let candidate = d / exe in
+                   if is_executable candidate then Some candidate else None)
+        in
+        Stdlib.Option.value ~default:exe found
+
 let run_cmd ~proc_mgr ~fs ~env ~cwd ~pkg cmd =
   let cmd_s = String.concat " " cmd in
   Log.debug (fun m -> m "  + %s" cmd_s);
-  (* Resolve relative executables (starting with ./) against cwd *)
+  (* Resolve relative executables (starting with ./) against cwd, and
+     resolve bare names against the build env's PATH. *)
   let cmd =
     match cmd with
     | exe :: rest when String.length exe > 0 && exe.[0] = '.' ->
         (cwd / exe) :: rest
-    | _ -> cmd
+    | exe :: rest -> resolve_in_path ~env exe :: rest
+    | [] -> cmd
   in
   Eio.Switch.run @@ fun sw ->
   (* Capture stdout+stderr to a single pipe so we can suppress output
