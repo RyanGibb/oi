@@ -239,12 +239,19 @@ let run ~proc_mgr ~fs ~clock ~sys ~os_key plan =
           let to_build =
             List.filter
               (fun (p : Plan.package_plan) ->
-                p.method_ = `Source
-                && not
-                     (List.exists
-                        (fun (d : Plan.dep_layer) ->
-                          Hashtbl.mem failed_pkgs d.pkg)
-                        p.dep_layers))
+                if
+                  p.method_ = `Source
+                  && not
+                       (List.exists
+                          (fun (d : Plan.dep_layer) ->
+                            Hashtbl.mem failed_pkgs d.pkg)
+                          p.dep_layers)
+                then true
+                else begin
+                  if p.method_ = `Source then
+                    Hashtbl.replace failed_pkgs p.pkg true;
+                  false
+                end)
               group.packages
           in
           let build_failures : (string * exn) list ref = ref [] in
@@ -282,7 +289,8 @@ let run ~proc_mgr ~fs ~clock ~sys ~os_key plan =
           (* Phase 3: serial install for successfully built packages *)
           List.iter
             (fun (p : Plan.package_plan) ->
-              if p.method_ = `Source && not (Hashtbl.mem failed_pkgs p.pkg) then begin
+              if p.method_ = `Source && not (Hashtbl.mem failed_pkgs p.pkg)
+              then begin
                 report (0, Fmt.str "[%s] %s (install)" stage_s p.pkg);
                 let before = D10.Prefix.snapshot ~fs prefix in
                 (try

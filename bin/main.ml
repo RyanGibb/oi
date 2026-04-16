@@ -648,6 +648,12 @@ let deps_from_opam_files ~fs dir =
     Eio.Path.read_dir Eio.Path.(fs / dir)
     |> List.filter (fun f -> Filename.check_suffix f ".opam")
   in
+  (* Local package names defined by *.opam files in this directory *)
+  let local_pkgs =
+    List.fold_left
+      (fun acc f -> Hashtbl.replace acc (Filename.chop_suffix f ".opam") true; acc)
+      (Hashtbl.create 16) opam_files
+  in
   let deps = Hashtbl.create 64 in
   List.iter
     (fun file ->
@@ -658,7 +664,8 @@ let deps_from_opam_files ~fs dir =
           OpamFormula.fold_left
             (fun () (name, _) ->
               let s = OpamPackage.Name.to_string name in
-              if s <> "ocaml" then Hashtbl.replace deps s true)
+              if s <> "ocaml" && not (Hashtbl.mem local_pkgs s) then
+                Hashtbl.replace deps s true)
             () formula
         in
         extract_names (OpamFile.OPAM.depends opam)
