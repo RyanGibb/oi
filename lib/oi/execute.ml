@@ -323,7 +323,5 @@ let run ~proc_mgr ~fs ~clock ~sys ~os_key plan =
             group.packages)
         plan.groups);
   let n_failed = Hashtbl.length failed_pkgs in
-  if n_failed > 0 then begin
-    Fmt.epr "%d package(s) failed.@." n_failed;
-    exit 1
-  end
+  if n_failed > 0 then
+    Error.msg "%d package(s) failed to build" n_failed

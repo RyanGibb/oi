@@ -91,3 +91,45 @@ val restore : Config.t -> hash:string -> prefix:string -> unit
 (** [restore c ~hash ~prefix] hardlinks the layer's [fs/] tree into [prefix] via
     {!Sysops.link_tree}. No-op if the layer has no [fs/] directory (e.g. virtual
     packages that install no files). *)
+
+(** {1 Remote registry} *)
+
+type remote = [ `Http_remote of string ]
+(** A remote layer source. [`Http_remote url] fetches layers as
+    [<url>/<os_key>/<hash>.tar.zst]. *)
+
+(** {2 Index}
+
+    Each os_key directory in the registry contains an [OINDEX.txt] file listing
+    all available layers with their SHA-256 checksums and sizes:
+    {v <sha256>  <hash>.tar.zst  <size_bytes> v}
+    The format is compatible with [sha256sum(1)] (the size field is ignored by
+    that tool). Clients fetch the index once per command and use it to determine
+    which layers are available remotely, avoiding per-layer HTTP probes. *)
+
+type index_entry = { sha256 : string; size : int64 }
+type remote_index = (string, index_entry) Hashtbl.t
+
+val fetch_remote_index : Config.t -> remote:remote -> remote_index
+(** [fetch_remote_index c ~remote] downloads [OINDEX.txt] from [remote] for the
+    current [os_key] and returns a map from layer hash to its SHA-256 checksum
+    and size. Returns an empty table on failure. *)
+
+val pull_remote :
+  Config.t -> remote:remote -> hash:string -> ?sha256:string -> unit -> bool
+(** [pull_remote c ~remote ?sha256 ~hash] downloads layer [hash] from [remote],
+    optionally verifying the SHA-256 checksum of the downloaded archive.
+    Returns [true] if the layer is now available with [exit_status = 0].
+    No-op (returns [true]) if the layer already exists locally. *)
+
+(** {1 Export} *)
+
+val export : Config.t -> hash:string -> dst:_ Eio.Path.t -> bool
+(** [export c ~hash ~dst] creates [<dst>/<os_key>/<hash>.tar.zst] from local
+    layer [hash]. Returns [true] if a new archive was created. Returns [false]
+    if the layer doesn't exist locally or the archive already exists. *)
+
+val export_all : Config.t -> dst:_ Eio.Path.t -> int
+(** [export_all c ~dst] exports all succeeded layers for all os_keys to [dst].
+    Writes [OINDEX.txt] for each os_key after exporting.
+    Returns the number of newly exported layers. *)

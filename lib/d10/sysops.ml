@@ -100,6 +100,18 @@ module Tar = struct
       @ if strip > 0 then [ Fmt.str "--strip-components=%d" strip ] else []
     in
     run_quiet t cmd
+
+  let create_zstd t ~src ~dst =
+    run_quiet t
+      [ t.tools.tar; "--zstd"; "-cf"; native dst; "-C"; native src; "." ]
+end
+
+module Curl = struct
+  let fetch t ~url ~dst =
+    try
+      run_quiet t [ "curl"; "-fsSL"; "-o"; native dst; url ];
+      true
+    with Failure _ -> false
 end
 
 (* -- Git operations ------------------------------------------------------ *)

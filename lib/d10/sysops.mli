@@ -39,6 +39,16 @@ module Tar : sig
     t -> archive:_ Eio.Path.t -> dst:_ Eio.Path.t -> ?strip:int -> unit -> unit
   (** [extract t ~archive ~dst ?strip ()] extracts [archive] into [dst]. Uses
       [gtar] on macOS if available. *)
+
+  val create_zstd : t -> src:_ Eio.Path.t -> dst:_ Eio.Path.t -> unit
+  (** [create_zstd t ~src ~dst] creates a zstd-compressed tar archive at [dst]
+      from the contents of directory [src]. *)
+end
+
+module Curl : sig
+  val fetch : t -> url:string -> dst:_ Eio.Path.t -> bool
+  (** [fetch t ~url ~dst] downloads [url] to [dst]. Returns [true] on success,
+      [false] on any error (404, network failure, missing curl). *)
 end
 
 (** {1 Low-level command execution} *)

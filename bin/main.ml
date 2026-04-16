@@ -45,6 +45,20 @@ let data_dir_term =
 
 let cache_dir_term = Xdge.Cmd.cache_term app_name
 
+let registry_term =
+  let doc =
+    "Remote layer registry URL. Layers are fetched as \
+     <URL>/<os_key>/<hash>.tar.zst before building from source."
+  in
+  Arg.(
+    value
+    & opt (some string) None
+    & info ~docv:"URL" ~doc [ "registry" ])
+
+let remote_of_registry = function
+  | None -> None
+  | Some url -> Some (`Http_remote url : D10.Layer.remote)
+
 (* -- Helpers ------------------------------------------------------------- *)
 
 let init_opam_root ~fs ~data_dir =
@@ -93,6 +107,55 @@ let get_packages_dirs ~data_dir =
 let make_d10 ~sys ~fs ~clock ~cache ~os_key : D10.Config.t =
   { sys; fs; clock; root = Oi.Cache.root cache; os_key }
 
+(* -- Remote registry helpers ---------------------------------------------- *)
+
+(** Try fetching uncached [Source] layers from [remote]. Returns a new
+    action plan with downloaded layers promoted to [Binary]. No-op when
+    [remote] is [None] or every layer is already cached. *)
+let fetch_remote_layers ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan =
+  match remote with
+  | None -> build_plan
+  | Some r ->
+      let source_hashes =
+        List.filter_map
+          (fun (node : Oi.Action.node) ->
+            match node.method_ with
+            | Oi.Action.Source { is_virtual = false } ->
+                Some (Oi.Action.node_hash ~packages_dirs build_plan node)
+            | _ -> None)
+          (Oi.Action.nodes build_plan)
+      in
+      if source_hashes = [] then build_plan
+      else begin
+        let index = D10.Layer.fetch_remote_index d10 ~remote:r in
+        let available =
+          List.filter (fun h -> Hashtbl.mem index h) source_hashes
+        in
+        if available = [] then begin
+          Logs.info (fun m ->
+              m "Registry has none of the %d needed layer(s)"
+                (List.length source_hashes));
+          build_plan
+        end
+        else begin
+          Fmt.pr "Fetching %d layer(s) from registry (%d needed)...@."
+            (List.length available) (List.length source_hashes);
+          Eio.Fiber.all
+            (List.map
+               (fun hash () ->
+                 let sha256 =
+                   Option.map
+                     (fun (e : D10.Layer.index_entry) -> e.sha256)
+                     (Hashtbl.find_opt index hash)
+                 in
+                 if D10.Layer.pull_remote d10 ~remote:r ~hash ?sha256 ()
+                 then
+                   Logs.info (fun m -> m "Fetched %s from registry" hash))
+               available);
+          Oi.Action.plan ctx ~d10 ~packages_dirs pkgs
+        end
+      end
+
 (* -- Platform config ------------------------------------------------------ *)
 
 let ocaml_version = "5.4.1"
@@ -112,7 +175,7 @@ let make_conf ~platform:(p : Osrel.t) : Oi.Opam_ctx.conf =
     build prefix if needed), return the layer hashes in topo order. When
     [dry_run] is true, print the build plan and exit. *)
 let solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-    ~os_key ?(dry_run = false) ?(extra_repos = []) names =
+    ~os_key ?(dry_run = false) ?(extra_repos = []) ?remote names =
   let extra_pkg_dirs = Oi.Repo.ensure_extra ~data_dir extra_repos in
   let packages_dirs = extra_pkg_dirs @ get_packages_dirs ~data_dir in
   let cache_root = Oi.Cache.root_s cache in
@@ -132,6 +195,9 @@ let solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
     Fmt.pr "%a@." Oi.Action.pp_tree build_plan;
     exit 0
   end;
+  let build_plan =
+    fetch_remote_layers ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
+  in
   let hashes = Oi.Action.layer_hashes ~packages_dirs build_plan in
   (* Check if the requested packages' layers are cached *)
   let targets_cached =
@@ -260,7 +326,8 @@ let run_script ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
   end
 
 let run_cmd =
-  let run () data_dir cache_dir dry_run target with_deps with_repos args =
+  let run () data_dir cache_dir dry_run registry target with_deps with_repos args
+      =
     with_error_handling @@ fun () ->
     Eio_main.run @@ fun env ->
     let proc_mgr = Eio.Stdenv.process_mgr env in
@@ -273,6 +340,7 @@ let run_cmd =
     init_opam_root ~fs ~data_dir;
     Oi.Repo.ensure ~data_dir;
     let conf = make_conf ~platform in
+    let remote = remote_of_registry registry in
     let dune_cache_root = Oi.Cache.dune_root cache in
     let solve_assemble_run pkg_names =
       Logs.info (fun m ->
@@ -280,7 +348,7 @@ let run_cmd =
       let names = List.map OpamPackage.Name.of_string pkg_names in
       let layer_hashes =
         solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-          ~os_key ~dry_run ~extra_repos:with_repos names
+          ~os_key ~dry_run ~extra_repos:with_repos ?remote names
       in
       Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
       let prefix =
@@ -339,7 +407,7 @@ let run_cmd =
         if dep_opam_names = [] then []
         else
           solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir
-            ~conf ~os_key ~dry_run ~extra_repos:with_repos dep_opam_names
+            ~conf ~os_key ~dry_run ~extra_repos:with_repos ?remote dep_opam_names
       in
       if dry_run && dep_opam_names = [] then
         (* No deps to solve, but still in dry-run mode — just exit *)
@@ -521,8 +589,8 @@ let run_cmd =
   in
   Cmd.v info
     Term.(
-      const run $ log_term $ data_dir_term $ cache_dir_term $ dry_run $ target
-      $ with_deps $ with_repos $ args)
+      const run $ log_term $ data_dir_term $ cache_dir_term $ dry_run
+      $ registry_term $ target $ with_deps $ with_repos $ args)
 
 (* -- plan ---------------------------------------------------------------- *)
 
@@ -674,7 +742,7 @@ let deps_from_opam_files ~fs dir =
   Hashtbl.fold (fun k _ acc -> k :: acc) deps [] |> List.sort String.compare
 
 let sync_cmd =
-  let run () data_dir cache_dir =
+  let run () data_dir cache_dir registry =
     with_error_handling @@ fun () ->
     Eio_main.run @@ fun env ->
     let proc_mgr = Eio.Stdenv.process_mgr env in
@@ -692,10 +760,11 @@ let sync_cmd =
       Oi.Error.config_error "No .opam files found in current directory.";
     Fmt.pr "Dependencies from opam files: %s@." (String.concat ", " deps);
     let conf = make_conf ~platform in
+    let remote = remote_of_registry registry in
     let names = List.map OpamPackage.Name.of_string deps in
     let layer_hashes =
       solve_and_ensure_layers ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-        ~os_key names
+        ~os_key ?remote names
     in
     (* Assemble into _oi/prefix/ *)
     let oi_dir = cwd / "_oi" in
@@ -721,7 +790,9 @@ let sync_cmd =
       ~doc:
         "Scan *.opam files, solve dependencies, build, and assemble _oi/prefix/"
   in
-  Cmd.v info Term.(const run $ log_term $ data_dir_term $ cache_dir_term)
+  Cmd.v info
+    Term.(
+      const run $ log_term $ data_dir_term $ cache_dir_term $ registry_term)
 
 (* -- tools --------------------------------------------------------------- *)
 
@@ -1090,6 +1161,290 @@ let index_cmd =
   in
   Cmd.v info Term.(const run $ log_term $ cache_dir_term)
 
+(* -- registry ------------------------------------------------------------ *)
+
+let registry_export_cmd =
+  let run () cache_dir output =
+    with_error_handling @@ fun () ->
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    let cache = Oi.Cache.create ~root:cache_dir fs in
+    let d10 = make_d10 ~sys ~fs ~clock ~cache ~os_key in
+    let dst = Eio.Path.(fs / output) in
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
+    let count = D10.Layer.export_all d10 ~dst in
+    Fmt.pr "Exported %d layer(s) to %s@." count output
+  in
+  let output =
+    Arg.(
+      required & pos 0 (some string) None
+      & info ~docv:"DIR" ~doc:"Output directory for the registry" [])
+  in
+  let info =
+    Cmd.info "export"
+      ~doc:"Export cached layers as tar.zst archives for HTTP serving"
+  in
+  Cmd.v info Term.(const run $ log_term $ cache_dir_term $ output)
+
+let registry_build_cmd =
+  (* Topological sort of a merged package list using Kahn's algorithm.
+     Each solution from the solver is already topo-sorted, but the union
+     of multiple solutions needs re-sorting. *)
+  let topo_sort ctx ~packages_dirs pkgs =
+    let module N = OpamPackage.Name in
+    let in_solution =
+      List.fold_left
+        (fun s p -> N.Set.add (OpamPackage.name p) s)
+        N.Set.empty pkgs
+    in
+    let pkg_by_name =
+      List.fold_left
+        (fun m p -> N.Map.add (OpamPackage.name p) p m)
+        N.Map.empty pkgs
+    in
+    let rdeps : (N.t, N.t list) Hashtbl.t = Hashtbl.create 256 in
+    let in_deg : (N.t, int) Hashtbl.t = Hashtbl.create 256 in
+    List.iter
+      (fun pkg ->
+        let name = OpamPackage.name pkg in
+        if not (Hashtbl.mem in_deg name) then Hashtbl.replace in_deg name 0;
+        let deps =
+          Oi.Solve.dep_names ~packages_dirs ctx pkg in_solution
+          |> N.Set.elements
+          |> List.filter (fun n -> N.Set.mem n in_solution)
+        in
+        Hashtbl.replace in_deg name (List.length deps);
+        List.iter
+          (fun dep ->
+            let cur = try Hashtbl.find rdeps dep with Not_found -> [] in
+            Hashtbl.replace rdeps dep (name :: cur))
+          deps)
+      pkgs;
+    let queue = Queue.create () in
+    Hashtbl.iter (fun n d -> if d = 0 then Queue.add n queue) in_deg;
+    let result = ref [] in
+    while not (Queue.is_empty queue) do
+      let name = Queue.pop queue in
+      result := name :: !result;
+      List.iter
+        (fun dep ->
+          let d = Hashtbl.find in_deg dep - 1 in
+          Hashtbl.replace in_deg dep d;
+          if d = 0 then Queue.add dep queue)
+        (try Hashtbl.find rdeps name with Not_found -> [])
+    done;
+    List.filter_map (fun n -> N.Map.find_opt n pkg_by_name) (List.rev !result)
+  in
+  (* Group solutions by version-compatibility. Two solutions are compatible
+     if every package name appearing in both has the same version. *)
+  let group_solutions solutions =
+    let version_map_of pkgs =
+      let m = Hashtbl.create 64 in
+      List.iter
+        (fun pkg ->
+          Hashtbl.replace m
+            (OpamPackage.Name.to_string (OpamPackage.name pkg))
+            (OpamPackage.version pkg))
+        pkgs;
+      m
+    in
+    let compatible vmap group_vmap =
+      Hashtbl.fold
+        (fun name ver ok ->
+          ok
+          &&
+          match Hashtbl.find_opt group_vmap name with
+          | None -> true
+          | Some v -> OpamPackage.Version.equal v ver)
+        vmap true
+    in
+    let groups = ref [] in
+    List.iter
+      (fun ((_, pkgs) as solution) ->
+        let vmap = version_map_of pkgs in
+        let merged = ref false in
+        groups :=
+          List.map
+            (fun (gsols, gvmap) ->
+              if !merged then (gsols, gvmap)
+              else if compatible vmap gvmap then begin
+                merged := true;
+                Hashtbl.iter
+                  (fun n v ->
+                    if not (Hashtbl.mem gvmap n) then
+                      Hashtbl.replace gvmap n v)
+                  vmap;
+                (solution :: gsols, gvmap)
+              end
+              else (gsols, gvmap))
+            !groups;
+        if not !merged then groups := ([ solution ], vmap) :: !groups)
+      solutions;
+    List.rev !groups
+  in
+  let run () data_dir cache_dir dry_run registry with_repos targets =
+    with_error_handling @@ fun () ->
+    Eio_main.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let clock = Eio.Stdenv.clock env in
+    let sys = D10.Sysops.create ~proc_mgr ~fs in
+    let platform = Osrel.detect ~proc_mgr ~fs in
+    let os_key = D10.Os_key.(to_string (of_platform platform)) in
+    let cache = Oi.Cache.create ~root:cache_dir fs in
+    init_opam_root ~fs ~data_dir;
+    Oi.Repo.ensure ~data_dir;
+    let conf = make_conf ~platform in
+    let remote = remote_of_registry registry in
+    let extra_pkg_dirs = Oi.Repo.ensure_extra ~data_dir with_repos in
+    let packages_dirs = extra_pkg_dirs @ get_packages_dirs ~data_dir in
+    let cache_root = Oi.Cache.root_s cache in
+    let build_prefix = cache_root / "build" / "prefix" in
+    let ctx = Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf in
+    let d10 = make_d10 ~sys ~fs ~clock ~cache ~os_key in
+    (* 1. Solve each target independently *)
+    let n_solve_failed = ref 0 in
+    let solutions =
+      List.filter_map
+        (fun target ->
+          let name = OpamPackage.Name.of_string target in
+          match
+            Oi.Solve.solve ctx ~packages_dirs
+              ~constraints:OpamPackage.Name.Map.empty [ name ]
+          with
+          | Ok pkgs ->
+              Fmt.pr "Solved %s: %d packages@." target (List.length pkgs);
+              Some (target, pkgs)
+          | Error msg ->
+              Fmt.epr "%a %s: %s@."
+                Fmt.(styled `Red string)
+                "FAIL (solve)" target msg;
+              incr n_solve_failed;
+              None)
+        targets
+    in
+    if solutions = [] then Oi.Error.msg "no packages solved successfully";
+    (* 2. Group compatible solutions *)
+    let groups = group_solutions solutions in
+    let n_groups = List.length groups in
+    Fmt.pr "%d target(s) in %d compatible group(s)@."
+      (List.length solutions) n_groups;
+    (* 3. Build each group *)
+    let n_build_failed = ref 0 in
+    List.iteri
+      (fun gi (group_solutions, _) ->
+        let group_targets =
+          List.map fst group_solutions |> String.concat ", "
+        in
+        (* Merge packages, deduplicate by name+version *)
+        let seen = Hashtbl.create 256 in
+        let merged_pkgs =
+          List.concat_map
+            (fun (_, pkgs) ->
+              List.filter
+                (fun pkg ->
+                  let key = OpamPackage.to_string pkg in
+                  if Hashtbl.mem seen key then false
+                  else begin
+                    Hashtbl.replace seen key true;
+                    true
+                  end)
+                pkgs)
+            group_solutions
+        in
+        let sorted_pkgs = topo_sort ctx ~packages_dirs merged_pkgs in
+        if n_groups > 1 then
+          Fmt.pr "Group %d/%d [%s]: %d packages@." (gi + 1) n_groups
+            group_targets (List.length sorted_pkgs)
+        else
+          Fmt.pr "%d unique packages@." (List.length sorted_pkgs);
+        let build_plan =
+          Oi.Action.plan ctx ~d10 ~packages_dirs sorted_pkgs
+        in
+        let n_source =
+          List.length
+            (List.filter
+               (fun (node : Oi.Action.node) ->
+                 match node.method_ with
+                 | Oi.Action.Source { is_virtual = false } -> true
+                 | _ -> false)
+               (Oi.Action.nodes build_plan))
+        in
+        if dry_run then Fmt.pr "%a@." Oi.Action.pp_tree build_plan
+        else begin
+          Fmt.pr "%d to build, %d cached@." n_source
+            (Oi.Action.total build_plan - n_source);
+          if n_source > 0 then begin
+            let build_plan =
+              fetch_remote_layers ~remote ~d10 ~packages_dirs ~ctx
+                ~pkgs:sorted_pkgs build_plan
+            in
+            (try
+               let exec_plan =
+                 Oi.Plan.create ctx ~cache_root ~packages_dirs ~os_key
+                   ~ocaml_version:conf.ocaml_version build_plan
+               in
+               Oi.Execute.run ~proc_mgr ~fs
+                 ~clock:(clock :> D10.Config.clk)
+                 ~sys ~os_key exec_plan
+             with
+            | Oi.Error.E e ->
+                Fmt.epr "%a@." Oi.Error.pp e;
+                incr n_build_failed
+            | Failure msg ->
+                Fmt.epr "%a %s: %s@."
+                  Fmt.(styled `Red string)
+                  "FAIL (build)" group_targets msg;
+                incr n_build_failed)
+          end
+        end)
+      groups;
+    if not dry_run then begin
+      Fmt.pr "Done: %d target(s)" (List.length solutions);
+      if !n_solve_failed > 0 then
+        Fmt.pr ", %d failed to solve" !n_solve_failed;
+      if !n_build_failed > 0 then
+        Fmt.pr ", %d group(s) failed to build" !n_build_failed;
+      Fmt.pr "@."
+    end
+  in
+  let targets =
+    Arg.(
+      non_empty & pos_all string []
+      & info ~docv:"PKG" ~doc:"Opam packages to build layers for" [])
+  in
+  let dry_run =
+    Arg.(
+      value & flag
+      & info ~doc:"Show the merged build plan without building"
+          [ "n"; "dry-run" ])
+  in
+  let with_repos =
+    Arg.(
+      value & opt_all string []
+      & info ~docv:"URL" ~doc:"Additional opam repository URL" [ "with-repo" ])
+  in
+  let info =
+    Cmd.info "build"
+      ~doc:
+        "Solve and build layers for multiple packages into the local cache"
+  in
+  Cmd.v info
+    Term.(
+      const run $ log_term $ data_dir_term $ cache_dir_term $ dry_run
+      $ registry_term $ with_repos $ targets)
+
+let registry_cmd =
+  let info =
+    Cmd.info "registry" ~doc:"Manage the remote layer registry"
+  in
+  Cmd.group info [ registry_export_cmd; registry_build_cmd ]
+
 (* -- main ---------------------------------------------------------------- *)
 
 let () =
@@ -1152,6 +1507,7 @@ let () =
         show_cmd;
         index_cmd;
         repo_cmd;
+        registry_cmd;
         clean_cmd;
       ]
   in

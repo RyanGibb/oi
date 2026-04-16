@@ -118,3 +118,188 @@ let restore (c : Config.t) ~hash ~prefix =
   let fs_dir = fs_path c ~hash in
   if Sysops.file_exists fs_dir then
     Sysops.link_tree c.sys ~src:fs_dir ~dst:Eio.Path.(c.fs / prefix)
+
+(* -- Remote registry ----------------------------------------------------- *)
+
+type remote = [ `Http_remote of string ]
+
+(* -- Index --------------------------------------------------------------- *)
+
+(* OINDEX.txt format: one line per layer, sha256sum-compatible.
+   <sha256>  <hash>.tar.zst  <size_bytes>
+   The size field is informational (for future progress display). *)
+
+type index_entry = { sha256 : string; size : int64 }
+type remote_index = (string, index_entry) Hashtbl.t
+
+let parse_index contents =
+  let idx = Hashtbl.create 64 in
+  String.split_on_char '\n' contents
+  |> List.iter (fun line ->
+         let parts =
+           String.split_on_char ' ' line
+           |> List.filter (fun s -> s <> "")
+         in
+         match parts with
+         | [ sha; filename; size_s ] | [ sha; filename; size_s; _ ] ->
+             if Filename.check_suffix filename ".tar.zst" then begin
+               let hash = Filename.chop_suffix filename ".tar.zst" in
+               let size =
+                 try Int64.of_string size_s with Failure _ -> 0L
+               in
+               Hashtbl.replace idx hash { sha256 = sha; size }
+             end
+         | [ sha; filename ] ->
+             if Filename.check_suffix filename ".tar.zst" then begin
+               let hash = Filename.chop_suffix filename ".tar.zst" in
+               Hashtbl.replace idx hash { sha256 = sha; size = 0L }
+             end
+         | _ -> ());
+  idx
+
+let write_index ~dst os_key =
+  let os_dir = Eio.Path.(dst / os_key) in
+  let files =
+    try Eio.Path.read_dir os_dir with Eio.Exn.Io _ -> []
+  in
+  let entries =
+    List.filter_map
+      (fun f ->
+        if Filename.check_suffix f ".tar.zst" then
+          let path = Eio.Path.native_exn Eio.Path.(os_dir / f) in
+          let sha256 =
+            OpamHash.contents (OpamHash.compute ~kind:`SHA256 path)
+          in
+          let size = (Unix.stat path).Unix.st_size |> Int64.of_int in
+          Some (sha256, f, size)
+        else None)
+      (List.sort String.compare files)
+  in
+  let content =
+    String.concat ""
+      (List.map
+         (fun (sha, f, size) -> Fmt.str "%s  %s  %Ld\n" sha f size)
+         entries)
+  in
+  Eio.Path.save ~create:(`Or_truncate 0o644)
+    Eio.Path.(os_dir / "OINDEX.txt")
+    content
+
+let fetch_remote_index (c : Config.t) ~remote =
+  let url =
+    match remote with
+    | `Http_remote base -> Fmt.str "%s/%s/OINDEX.txt" base c.os_key
+  in
+  let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
+  let tmp = Eio.Path.(os_layer_dir / "OINDEX.txt.tmp") in
+  let idx = Hashtbl.create 64 in
+  if Sysops.Curl.fetch c.sys ~url ~dst:tmp then begin
+    let contents = Eio.Path.load tmp in
+    let parsed = parse_index contents in
+    Hashtbl.iter (Hashtbl.replace idx) parsed;
+    (try Eio.Path.unlink tmp with _ -> ())
+  end;
+  idx
+
+(* -- Remote pull --------------------------------------------------------- *)
+
+let pull_remote (c : Config.t) ~remote ~hash ?sha256 () =
+  if succeeded c ~hash then true
+  else begin
+    let url =
+      match remote with
+      | `Http_remote base_url ->
+          Fmt.str "%s/%s/%s.tar.zst" base_url c.os_key hash
+    in
+    let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
+    let layer_dir = dir c ~hash in
+    let tmp_file = Eio.Path.(os_layer_dir / (hash ^ ".tar.zst.tmp")) in
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
+    let ok = Sysops.Curl.fetch c.sys ~url ~dst:tmp_file in
+    let cleanup_tmp () =
+      try Eio.Path.unlink tmp_file with _ -> ()
+    in
+    if ok then begin
+      (* Verify sha256 if provided *)
+      let checksum_ok =
+        match sha256 with
+        | None -> true
+        | Some expected ->
+            let actual =
+              OpamHash.contents
+                (OpamHash.compute ~kind:`SHA256
+                   (Eio.Path.native_exn tmp_file))
+            in
+            if actual = expected then true
+            else begin
+              Logs.warn (fun m ->
+                  m "Checksum mismatch for %s: expected %s, got %s" hash
+                    expected actual);
+              false
+            end
+      in
+      if checksum_ok then begin
+        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 layer_dir;
+        (try Sysops.Tar.extract c.sys ~archive:tmp_file ~dst:layer_dir ()
+         with Failure msg ->
+           Logs.warn (fun m -> m "Failed to extract %s: %s" hash msg);
+           (try Eio.Path.rmtree ~missing_ok:true layer_dir with _ -> ()));
+        cleanup_tmp ();
+        succeeded c ~hash
+      end
+      else begin
+        cleanup_tmp ();
+        false
+      end
+    end
+    else begin
+      cleanup_tmp ();
+      false
+    end
+  end
+
+(* -- Export -------------------------------------------------------------- *)
+
+let export (c : Config.t) ~hash ~dst =
+  if not (exists c ~hash) then false
+  else
+    let os_dir = Eio.Path.(dst / c.os_key) in
+    let dst_file = Eio.Path.(os_dir / (hash ^ ".tar.zst")) in
+    if Sysops.file_exists dst_file then false
+    else begin
+      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_dir;
+      Sysops.Tar.create_zstd c.sys ~src:(dir c ~hash) ~dst:dst_file;
+      true
+    end
+
+let export_all (c : Config.t) ~dst =
+  let layers_dir = Eio.Path.(c.root / "layers") in
+  if not (Sysops.file_exists layers_dir) then 0
+  else
+    let os_keys = Eio.Path.read_dir layers_dir in
+    let count =
+      List.fold_left
+        (fun count os_key ->
+          let os_layer_dir = Eio.Path.(layers_dir / os_key) in
+          let hashes =
+            try Eio.Path.read_dir os_layer_dir with Eio.Exn.Io _ -> []
+          in
+          List.fold_left
+            (fun count hash ->
+              if String.contains hash '.' then count
+              else
+                let c = { c with os_key } in
+                if succeeded c ~hash then
+                  if export c ~hash ~dst then count + 1 else count
+                else count)
+            count hashes)
+        0 os_keys
+    in
+    (* Write OINDEX.txt for each os_key that has exported layers *)
+    List.iter
+      (fun os_key ->
+        let os_dir = Eio.Path.(dst / os_key) in
+        if Sysops.file_exists os_dir then write_index ~dst os_key)
+      os_keys;
+    count
