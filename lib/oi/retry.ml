@@ -8,9 +8,7 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 
 let append_to_log path line =
   try
-    let oc =
-      open_out_gen [ Open_append; Open_creat; Open_wronly ] 0o644 path
-    in
+    let oc = open_out_gen [ Open_append; Open_creat; Open_wronly ] 0o644 path in
     output_string oc line;
     output_char oc '\n';
     close_out oc
@@ -33,8 +31,7 @@ let with_attempts ~label ?(max_attempts = 3) ?(initial_delay_s = 1.0)
     | result ->
         if attempt > 1 then
           note ~level:`App
-            (Fmt.str "%s succeeded on attempt %d/%d" label attempt
-               max_attempts);
+            (Fmt.str "%s succeeded on attempt %d/%d" label attempt max_attempts);
         result
     | exception exn when attempt < max_attempts ->
         note ~level:`Warn

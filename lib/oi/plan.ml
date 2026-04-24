@@ -50,7 +50,8 @@ let overlay_of_packages_dir pkgs_dir =
   let prefix = "overlay-" in
   if not (String.starts_with ~prefix base) then (None, None)
   else
-    let rest = String.sub base (String.length prefix)
+    let rest =
+      String.sub base (String.length prefix)
         (String.length base - String.length prefix)
     in
     match String.rindex_opt rest '-' with

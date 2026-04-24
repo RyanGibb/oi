@@ -21,14 +21,12 @@ val solve :
   constraints:OpamFormula.version_constraint OpamTypes.name_map ->
   OpamPackage.Name.t list ->
   (OpamPackage.t list, string) result
-(** [solve ~fs ~cache_root ctx ~packages_dirs ~constraints names]
-    resolves the dependency closure for [names]. Returns packages in
-    topological order.
+(** [solve ~fs ~cache_root ctx ~packages_dirs ~constraints names] resolves the
+    dependency closure for [names]. Returns packages in topological order.
 
-    Successful solves are persisted to
-    [<cache_root>/solve-cache/] and re-used when an identical input
-    is presented again (see {!Solve_cache}). Failed solves are not
-    cached. *)
+    Successful solves are persisted to [<cache_root>/solve-cache/] and re-used
+    when an identical input is presented again (see {!Solve_cache}). Failed
+    solves are not cached. *)
 
 val dep_names :
   packages_dirs:string list ->
@@ -45,13 +43,12 @@ val load_opam : string list -> OpamPackage.t -> OpamFile.OPAM.t option
     file of [pkg]. *)
 
 val filter_env : Opam_ctx.conf -> OpamFilter.env
-(** [filter_env conf] builds an opam filter environment from a
-    synthetic platform configuration. The returned function answers
-    [arch], [os], [os-distribution], [os-version], [os-family] from
-    [conf], yields the current opam version for [opam-version], and
-    returns empty strings for [sys-ocaml-*] (no host compiler is
-    assumed at plan time). Suitable for evaluating any filter that
-    reads only platform variables, such as those in [depexts:]. *)
+(** [filter_env conf] builds an opam filter environment from a synthetic
+    platform configuration. The returned function answers [arch], [os],
+    [os-distribution], [os-version], [os-family] from [conf], yields the current
+    opam version for [opam-version], and returns empty strings for [sys-ocaml-*]
+    (no host compiler is assumed at plan time). Suitable for evaluating any
+    filter that reads only platform variables, such as those in [depexts:]. *)
 
 val topo_sort :
   packages_dirs:string list ->

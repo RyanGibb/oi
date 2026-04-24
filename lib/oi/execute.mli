@@ -21,14 +21,13 @@ type pkg_event =
   | Install_failed of { pkg : string; log : string }
 
 type reporter = { pkg_event : pkg_event -> unit }
-(** Typed progress reporter. [Execute.run] calls [pkg_event] exactly
-    once per package for each terminal event (Cached / Built /
-    Build_failed / Dep_failed / Install_failed), plus one [Started]
-    event before each source-package build attempt. A caller who
-    owns the display (e.g. [oi registry build]) supplies a reporter
-    that keeps counters and drives a cross-invocation progress bar;
-    callers who don't specify a reporter get a sane default that
-    drives a local per-invocation bar. *)
+(** Typed progress reporter. [Execute.run] calls [pkg_event] exactly once per
+    package for each terminal event (Cached / Built / Build_failed / Dep_failed
+    / Install_failed), plus one [Started] event before each source-package build
+    attempt. A caller who owns the display (e.g. [oi registry build]) supplies a
+    reporter that keeps counters and drives a cross-invocation progress bar;
+    callers who don't specify a reporter get a sane default that drives a local
+    per-invocation bar. *)
 
 val run :
   ?cache_urls:OpamUrl.t list ->
@@ -42,10 +41,10 @@ val run :
   os_key:string ->
   Plan.t ->
   unit
-(** [run ~proc_mgr ~fs ~clock ~sys ~os_key plan] executes the build plan.
-    Writes per-package failure output to [<cache_root>/build/logs/<pkg>-<short_hash>.log]
-    and prints a single pointer line to stderr per failure so the live
-    progress bar / summary stay readable.
+(** [run ~proc_mgr ~fs ~clock ~sys ~os_key plan] executes the build plan. Writes
+    per-package failure output to
+    [<cache_root>/build/logs/<pkg>-<short_hash>.log] and prints a single pointer
+    line to stderr per failure so the live progress bar / summary stay readable.
 
     [cache_urls] are passed through to [OpamRepository.pull_tree] / [pull_file]
     for every fetch so that opam probes local and/or remote source mirrors (e.g.
@@ -58,11 +57,11 @@ val run :
     Resolution order: explicit [jobs] argument wins, then [OI_BUILD_PARALLELISM]
     env var, then [min (cpu_count) 4].
 
-    [failed_layers] threads a layer-hash failure tracker through multiple
-    [run] invocations. The key is the failing layer's hash; the value is
-    the path to the build-failure log (empty for cascaded failures that
-    inherit a dep's log). Any package whose [layer_hash] is in this table
-    (or whose deps' layer hashes are) is skipped — useful for [oi
-    registry build --all] where each solve group is a separate [run] and
-    a failure in one group should prevent identical retries in later
-    groups. When omitted, a fresh tracker is used for this call only. *)
+    [failed_layers] threads a layer-hash failure tracker through multiple [run]
+    invocations. The key is the failing layer's hash; the value is the path to
+    the build-failure log (empty for cascaded failures that inherit a dep's
+    log). Any package whose [layer_hash] is in this table (or whose deps' layer
+    hashes are) is skipped — useful for [oi registry build --all] where each
+    solve group is a separate [run] and a failure in one group should prevent
+    identical retries in later groups. When omitted, a fresh tracker is used for
+    this call only. *)

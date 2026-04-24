@@ -25,18 +25,17 @@ type entry = {
           version. *)
   root_packages : string list list;
       (** Package sets to pre-build when priming this overlay into a registry.
-          Each outer entry is a $(i,solve group): a list of package specs fed
-          to the solver together, so the resulting layers are cached as a
-          unit. Singleton groups (one package) just pin that one package;
+          Each outer entry is a $(i,solve group): a list of package specs fed to
+          the solver together, so the resulting layers are cached as a unit.
+          Singleton groups (one package) just pin that one package;
           multi-package groups pin compiler variants like
-          [["ocaml-option-flambda" "ocaml-option-static" "ocaml"]] which
-          forces the solver to pick an [ocaml] version compatible with both
-          options.
+          [["ocaml-option-flambda" "ocaml-option-static" "ocaml"]] which forces
+          the solver to pick an [ocaml] version compatible with both options.
 
-          Stored as [x-root-packages: [...]] in the overlay's opam file.
-          Each top-level entry is either a bare string (singleton group) or
-          a nested list of strings (multi-package group). All package specs
-          are fed to the solver as [@handle/pkg]. *)
+          Stored as [x-root-packages: [...]] in the overlay's opam file. Each
+          top-level entry is either a bare string (singleton group) or a nested
+          list of strings (multi-package group). All package specs are fed to
+          the solver as [@handle/pkg]. *)
   opam_path : string;  (** Absolute path to the source opam file. *)
 }
 
@@ -123,10 +122,10 @@ val ensure_clone :
   unit
 (** Ensure a git working copy of [url] exists at [path]. Errors when [path]
     exists but isn't empty and isn't a git clone. An existing clone is left
-    alone by default (the user owns the working copy); pass [~refresh:true]
-    to [git pull --ff-only] it — a dirty tree or non-ff divergence causes
-    git to abort with a clear message, and [ensure_clone] logs a warning
-    and continues with the existing state. *)
+    alone by default (the user owns the working copy); pass [~refresh:true] to
+    [git pull --ff-only] it — a dirty tree or non-ff divergence causes git to
+    abort with a clear message, and [ensure_clone] logs a warning and continues
+    with the existing state. *)
 
 val set_push_url : sys:D10.Sysops.t -> path:string -> string -> unit
 (** [set_push_url ~sys ~path url] persistently sets the push URL of the [origin]
@@ -190,8 +189,8 @@ val add :
     a specific base set. Pass [~depends:[]] to produce an entry with no deps.
 
     Raises if [handle] already has entries in the reporepo, unless [force] is
-    [true] — in which case a new [YYYYMMDD.N] version is written alongside
-    the existing entries (useful for deliberately switching an overlay to a
+    [true] — in which case a new [YYYYMMDD.N] version is written alongside the
+    existing entries (useful for deliberately switching an overlay to a
     different upstream URL without clobbering history). *)
 
 val bump :

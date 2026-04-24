@@ -303,9 +303,9 @@ let search_package db ~pattern ~os_key =
   ignore
     (Sqlite3.exec_not_null_no_headers db ~cb
        (Fmt.str
-          "SELECT package_name, package_ver, hash, \
-           COALESCE(overlay_handle, ''), COALESCE(overlay_version, '') FROM \
-           layers WHERE package_name %s %s AND os_key = %s AND exit_status = 0"
+          "SELECT package_name, package_ver, hash, COALESCE(overlay_handle, \
+           ''), COALESCE(overlay_version, '') FROM layers WHERE package_name \
+           %s %s AND os_key = %s AND exit_status = 0"
           op (quote sql_pattern) (quote os_key)));
   List.sort
     (fun (n1, v1, _, _) (n2, v2, _, _) ->

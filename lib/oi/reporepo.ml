@@ -69,14 +69,13 @@ let write_file ~fs path content =
    edits or local divergence cause git to abort with a clear error. *)
 let ensure_clone ~fs ~sys ~refresh ~path ~url =
   let dot_git = path / ".git" in
-  if Sys.file_exists dot_git then begin
-    if refresh then begin
+  if Sys.file_exists dot_git then
+    begin if refresh then begin
       Log.info (fun m -> m "Refreshing reporepo at %s" path);
       try
-        Retry.with_attempts
-          ~label:(Fmt.str "git pull reporepo at %s" path) (fun () ->
-            D10.Sysops.Cmd.run sys
-              [ "git"; "-C"; path; "pull"; "--ff-only" ])
+        Retry.with_attempts ~label:(Fmt.str "git pull reporepo at %s" path)
+          (fun () ->
+            D10.Sysops.Cmd.run sys [ "git"; "-C"; path; "pull"; "--ff-only" ])
       with _ ->
         Log.warn (fun m ->
             m
@@ -84,7 +83,7 @@ let ensure_clone ~fs ~sys ~refresh ~path ~url =
                state. Resolve local changes and retry if this matters."
               path)
     end
-  end
+    end
   else if
     Sys.file_exists path && Sys.is_directory path
     && Array.length (Sys.readdir path) > 0
@@ -251,8 +250,7 @@ let read_root_packages_extension ~path extensions name =
   let as_string_item (v : OpamParserTypes.FullPos.value) =
     match v.pelem with
     | OpamParserTypes.FullPos.String s -> s
-    | _ ->
-        Error.config_error "%s: %s nested item must be a string" path name
+    | _ -> Error.config_error "%s: %s nested item must be a string" path name
   in
   match OpamStd.String.Map.find_opt name extensions with
   | None -> []
@@ -268,8 +266,8 @@ let read_root_packages_extension ~path extensions name =
                   List.map as_string_item sub
               | _ ->
                   Error.config_error
-                    "%s: %s item must be a string or a list of strings"
-                    path name)
+                    "%s: %s item must be a string or a list of strings" path
+                    name)
             items
       | _ ->
           Error.config_error
@@ -720,7 +718,9 @@ let auto_base_depends entries ~handle =
 let add ~fs ~sys ~path ~handle ~url ?ref_ ?depends ?(root_packages = [])
     ?synopsis ?display_name ?(force = false) ?origin_url () =
   let entries = load ~path in
-  let handle_exists = List.exists (fun (e : entry) -> e.handle = handle) entries in
+  let handle_exists =
+    List.exists (fun (e : entry) -> e.handle = handle) entries
+  in
   if handle_exists && not force then
     Error.config_error
       "overlay %s already exists in reporepo; use 'oi repo bump' to add a new \
@@ -802,16 +802,7 @@ let bump ~fs ~sys ~path ~handle ?url ?ref_ ?depends ?root_packages () =
     in
     let opam_path = write_entry ~fs ~path ~handle ~version content in
     `Bumped
-      {
-        handle;
-        version;
-        url;
-        commit;
-        ref_;
-        depends;
-        root_packages;
-        opam_path;
-      }
+      { handle; version; url; commit; ref_; depends; root_packages; opam_path }
 
 let remove ~fs ~path ~handle ?version () =
   let entries = load ~path in

@@ -50,9 +50,7 @@ let status pkgs =
        which sets the root dir; we don't need that here. *)
     let config = OpamFile.Config.empty in
     match
-      try
-        Some (OpamSysInteract.packages_status config pkgs)
-      with _ -> None
+      try Some (OpamSysInteract.packages_status config pkgs) with _ -> None
     with
     | None ->
         (* Package manager unreachable (Windows without Cygwin,

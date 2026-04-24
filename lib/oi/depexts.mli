@@ -23,10 +23,10 @@ val compute_for_conf :
   OpamPackage.t list ->
   entry list
 (** [compute_for_conf ~conf ~packages_dirs solved] is like {!compute} but
-    evaluates depext filters against a synthetic [conf] rather than the
-    platform the host opam state picked up. Intended for cross-platform
-    queries such as "what would the depexts be on alpine?" without
-    rebuilding an {!Opam_ctx.t}. *)
+    evaluates depext filters against a synthetic [conf] rather than the platform
+    the host opam state picked up. Intended for cross-platform queries such as
+    "what would the depexts be on alpine?" without rebuilding an {!Opam_ctx.t}.
+*)
 
 (** {1 Host installation status} *)
 

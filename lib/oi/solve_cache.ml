@@ -1,5 +1,4 @@
-(** Persistent memoisation of {!Solve.solve} — see the [.mli] for the
-    design. *)
+(** Persistent memoisation of {!Solve.solve} — see the [.mli] for the design. *)
 
 let log_src = Logs.Src.create "oi.solve_cache"
 
@@ -22,11 +21,12 @@ let head_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
    [$PATH]. *)
 let compute_git_head repo =
   let cmd =
-    Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
-      (Filename.quote repo)
+    Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null" (Filename.quote repo)
   in
   let ic = Unix.open_process_in cmd in
-  let line = try Some (String.trim (input_line ic)) with End_of_file -> None in
+  let line =
+    try Some (String.trim (input_line ic)) with End_of_file -> None
+  in
   match (Unix.close_process_in ic, line) with
   | Unix.WEXITED 0, Some h when h <> "" -> Some h
   | _ -> None
@@ -74,18 +74,17 @@ let key ~(conf : Opam_ctx.conf) ~packages_dirs ~constraints ~names =
     List.iteri
       (fun i (d, head) ->
         add (Fmt.str "dir%d_path" i) d;
-        add
-          (Fmt.str "dir%d_head" i)
+        add (Fmt.str "dir%d_head" i)
           (match head with Some h -> h | None -> assert false))
       heads;
     let cs =
       OpamPackage.Name.Map.bindings constraints
       |> List.map (fun (name, (relop, version)) ->
-             OpamPackage.Name.to_string name
-             ^ " "
-             ^ OpamFormula.string_of_relop relop
-             ^ " "
-             ^ OpamPackage.Version.to_string version)
+          OpamPackage.Name.to_string name
+          ^ " "
+          ^ OpamFormula.string_of_relop relop
+          ^ " "
+          ^ OpamPackage.Version.to_string version)
       |> List.sort String.compare
     in
     List.iter (add "constraint") cs;
@@ -139,7 +138,9 @@ let write_marshal ~fs ~label path v =
   with _ -> Log.debug (fun m -> m "%s store failed for %s" label path)
 
 let lookup ~cache_root ~key =
-  match read_marshal ~label:"solve-cache" (key_path ~cache_root ~sub:"pkgs" key) with
+  match
+    read_marshal ~label:"solve-cache" (key_path ~cache_root ~sub:"pkgs" key)
+  with
   | Some v -> Some (v : OpamPackage.t list)
   | None -> None
 
@@ -160,5 +161,4 @@ let store_layers ~fs ~cache_root ~key hashes =
   let path = key_path ~cache_root ~sub:"layers" key in
   write_marshal ~fs ~label:"layer-cache" path (hashes : string list);
   Log.debug (fun m ->
-      m "layer-cache stored %s (%d layers)" (short_key key)
-        (List.length hashes))
+      m "layer-cache stored %s (%d layers)" (short_key key) (List.length hashes))

@@ -58,10 +58,10 @@ val find_binary :
   (string * string * string * (string * string) option) list
 (** [find_binary db ~binary ~os_key] returns all layers that provide
     [bin/<binary>] or [sbin/<binary>], as
-    [(package_name, package_version, layer_hash, overlay)], sorted by
-    opam version descending (latest version first). [overlay] is
-    [Some (handle, version)] when the layer was tagged with a reporepo
-    overlay, and [None] otherwise (pin-depends, pre-tagging layers). *)
+    [(package_name, package_version, layer_hash, overlay)], sorted by opam
+    version descending (latest version first). [overlay] is
+    [Some (handle, version)] when the layer was tagged with a reporepo overlay,
+    and [None] otherwise (pin-depends, pre-tagging layers). *)
 
 val search_binary :
   db ->
@@ -82,11 +82,11 @@ val search_package :
   pattern:string ->
   os_key:string ->
   (string * string * string * (string * string) option) list
-(** [search_package db ~pattern ~os_key] searches for built packages whose
-    name matches [pattern], returning
-    [(package_name, package_version, layer_hash, overlay)]. Pattern matching
-    and the [overlay] field have the same semantics as {!search_binary}.
-    Results are sorted by package name then opam version descending. *)
+(** [search_package db ~pattern ~os_key] searches for built packages whose name
+    matches [pattern], returning
+    [(package_name, package_version, layer_hash, overlay)]. Pattern matching and
+    the [overlay] field have the same semantics as {!search_binary}. Results are
+    sorted by package name then opam version descending. *)
 
 val deps : db -> hash:string -> (string * string * string) list
 (** [deps db ~hash] returns the direct dependencies of a layer as
