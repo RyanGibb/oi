@@ -52,11 +52,16 @@ val find_layer :
     layer matching the given package, or [None]. *)
 
 val find_binary :
-  db -> binary:string -> os_key:string -> (string * string * string) list
+  db ->
+  binary:string ->
+  os_key:string ->
+  (string * string * string * (string * string) option) list
 (** [find_binary db ~binary ~os_key] returns all layers that provide
     [bin/<binary>] or [sbin/<binary>], as
-    [(package_name, package_version, layer_hash)], sorted by opam version
-    descending (latest version first). *)
+    [(package_name, package_version, layer_hash, overlay)], sorted by
+    opam version descending (latest version first). [overlay] is
+    [Some (handle, version)] when the layer was tagged with a reporepo
+    overlay, and [None] otherwise (pin-depends, pre-tagging layers). *)
 
 val search_binary :
   db ->

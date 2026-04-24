@@ -4,7 +4,7 @@ Top-level help mentions the tool description.
 
 Every top-level subcommand has its own help page.
 
-  $ for c in run add exec search plan sync env config clean registry; do
+  $ for c in run add exec search show sync env config clean registry; do
   >   oi "$c" --help=plain >/dev/null || echo "FAIL: $c"
   > done
 

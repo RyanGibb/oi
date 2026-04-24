@@ -32,7 +32,7 @@ reaches the solver and widget.0.0.0 appears in the plan, or oi bails out
 while cloning/refreshing the default repo. Either outcome proves the
 pin pipeline ran.
 
-  $ oi plan widget 2>&1 | grep -E 'widget\.0\.0\.0|Failed|Cloning' > /dev/null && echo ok
+  $ oi show --tree widget 2>&1 | grep -E 'widget\.0\.0\.0|Failed|Cloning' > /dev/null && echo ok
   ok
 
 The pin fetch cache now contains the widget source — a filesystem-local

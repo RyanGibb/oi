@@ -561,6 +561,97 @@ let ensure_local_index ~sys ~fs ~clock ~cache ~os_key =
   end;
   index_path
 
+(* If [name] is the name of a binary that at least one cached layer
+   provides (via the merged local+remote layer index), return the
+   package name that ships it and the overlay handle it came from
+   (if any). [None] when the index has no row for [name]. The same
+   binary can be shipped by different packages across overlays; we
+   pick the first result, matching [oi run]'s lookup.
+
+   The overlay handle is load-bearing: a binary like [pipeline] may
+   only be provided by a package that lives in [@mtelvers]'s overlay,
+   and solving for [pipeline] without the overlay in [with_repos]
+   fails with "no known implementations". Callers should add
+   [Some handle] to their repo set before solving. *)
+let binary_to_package ~sys ~fs ~clock ~cache ~os_key ~registry name =
+  let clk = (clock :> D10.Config.clk) in
+  let index_path = ensure_local_index ~sys ~fs ~clock:clk ~cache ~os_key in
+  (match ensure_remote_index ~sys ~fs ~cache ~os_key ~registry with
+  | Some remote_path -> merge_remote_into_local ~index_path ~remote_path
+  | None -> ());
+  if not (Sys.file_exists index_path) then None
+  else
+    let db = D10.Index.open_ ~path:index_path in
+    let results = D10.Index.find_binary db ~binary:name ~os_key in
+    D10.Index.close db;
+    match results with
+    | (pkg, _, _, overlay) :: _ ->
+        let handle =
+          match overlay with Some (h, _) -> Some h | None -> None
+        in
+        Some (pkg, handle)
+    | [] -> None
+
+(* Resolve the string passed to [oi show --os] into an
+   [Oi.Opam_ctx.conf]. The parser is
+   {!Dockerfile_opam.Distro.distro_of_tag}, which knows every tag
+   dockerfile-opam supports ([alpine-3.23], [ubuntu-22.04],
+   [debian-13], [fedora-43], [centos-9], [debian-stable],
+   [archlinux], ...), plus bare forms ([alpine], [ubuntu], [fedora],
+   [opensuse], ...) that map to each distro's [Latest] variant. A
+   bare distro just picks up whatever dockerfile-opam considers the
+   latest release of that distribution; a tagged form pins to the
+   given version.
+
+   (os-family, os-distribution, os-version) is read off the parsed
+   {!Dockerfile_opam.Distro.t} via
+   {!Registry_docker.opam_vars_of_distro}, the same mapping the
+   registry-docker generator uses. [os] comes from
+   {!Dockerfile_opam.Distro.os_family_of_distro}, mapped to opam's
+   three values: Linux -> [linux], Cygwin -> [cygwin], Windows ->
+   [win32].
+
+   Inputs dockerfile-opam doesn't recognise fall through to the
+   legacy "just rewrite [os]" behaviour with a warning. That covers
+   bare opam os values ([linux], [macos], [freebsd], [win32],
+   [cygwin]) and anything truly unknown. *)
+let resolve_os_override (conf_host : Oi.Opam_ctx.conf) os_str =
+  let known_os_values =
+    [ "linux"; "macos"; "freebsd"; "openbsd"; "netbsd"; "win32"; "cygwin" ]
+  in
+  let opam_os_of_docker_family = function
+    | `Linux -> "linux"
+    | `Cygwin -> "cygwin"
+    | `Windows -> "win32"
+  in
+  match
+    try Dockerfile_opam.Distro.distro_of_tag os_str with _ -> None
+  with
+  | Some d ->
+      let vars = Registry_docker.opam_vars_of_distro d in
+      let os =
+        opam_os_of_docker_family
+          (Dockerfile_opam.Distro.os_family_of_distro d)
+      in
+      {
+        conf_host with
+        os;
+        os_family = vars.os_family;
+        os_distribution = vars.os_distribution;
+        os_version = vars.os_version;
+      }
+  | None ->
+      if not (List.mem os_str known_os_values) then
+        Logs.warn (fun m ->
+            m
+              "--os=%s is not a known dockerfile-opam distro tag or \
+               opam os value; only the 'os' variable was changed so \
+               depext filters keyed on os-family or os-distribution \
+               will not reflect this override. Try a tagged form such \
+               as debian-13, centos-9, or alpine-3.23."
+              os_str);
+      { conf_host with os = os_str }
+
 (* -- Helpers ------------------------------------------------------------- *)
 
 let init_opam_root ~fs ~data_dir =
@@ -1054,6 +1145,28 @@ let run_cmd =
     let conf = make_conf ~platform in
     let remote = remote_of_registry registry in
     let dune_cache_root = Oi.Cache.dune_root cache in
+    (* Rewrite a plain [TARGET] to its [@handle/pkg] form when the
+       layer index knows it as a binary shipped by an overlay
+       package. [oi run pipeline] ought to work the same way
+       [oi run ocluster-admin] does: consult the index, pick up
+       the provider package, and route the overlay through the
+       existing [split_handle_prefix] machinery so the subsequent
+       solve sees the overlay in [with_repos]. A bare
+       [@handle/pkg] target is left alone. *)
+    let clock_cap = (Eio.Stdenv.clock env :> D10.Config.clk) in
+    let target =
+      if String.length target > 0 && target.[0] = '@' then target
+      else
+        match
+          binary_to_package ~sys ~fs ~clock:clock_cap ~cache ~os_key ~registry
+            target
+        with
+        | Some (pkg, Some handle) ->
+            Logs.info (fun m ->
+                m "Index: bin/%s provided by @%s/%s" target handle pkg);
+            Fmt.str "@%s/%s" handle pkg
+        | _ -> target
+    in
     (* [TARGET] and every [--with] token accept the
        [@handle/pkg[constraint]] shortcut. The handle is routed into
        [with_repos] so the overlay joins the solve; the stripped
@@ -1271,10 +1384,29 @@ let run_cmd =
             let results = D10.Index.find_binary db ~binary:target ~os_key in
             D10.Index.close db;
             match results with
-            | (pkg_name, _pkg_ver, _hash) :: _ -> (
-                Logs.info (fun m ->
-                    m "Index: bin/%s provided by package %s" target pkg_name);
-                try solve_assemble_run_with [ pkg_name ] with _ -> false)
+            | (pkg_name, _pkg_ver, _hash, overlay) :: _ ->
+                (* Route the overlay (if any) through the same
+                   [@handle/pkg] shortcut the rest of [oi run]
+                   accepts, so the solver sees the overlay in its
+                   [with_repos] set and [pkg_name] resolves. Without
+                   this, a binary like [pipeline] (provided by
+                   package [pipeline] in @mtelvers's overlay) would
+                   fail with "no known implementations" when
+                   @mtelvers isn't already in [with_repos]. *)
+                let spec =
+                  match overlay with
+                  | Some (handle, _) ->
+                      Logs.info (fun m ->
+                          m "Index: bin/%s provided by @%s/%s" target handle
+                            pkg_name);
+                      Fmt.str "@%s/%s" handle pkg_name
+                  | None ->
+                      Logs.info (fun m ->
+                          m "Index: bin/%s provided by package %s" target
+                            pkg_name);
+                      pkg_name
+                in
+                (try solve_assemble_run_with [ spec ] with _ -> false)
             | [] -> false
           end
           else false
@@ -1460,22 +1592,369 @@ let run_cmd =
 
 (* -- plan ---------------------------------------------------------------- *)
 
-let plan_cmd =
-  let run () data_dir cache_dir refresh targets with_repos with_deps =
+(* Rendering helpers for [oi show]'s default succinct page. *)
+
+(* Format the top-block "Target:" line. For a CLI-supplied target we
+   print it verbatim (e.g. "utop", "@avsm/tangled"); for the
+   local-project case we show the first declared package name plus a
+   count when there is more than one. *)
+let show_target_label ~targets ~project_deps =
+  match targets with
+  | [] -> (
+      match project_deps with
+      | [] -> "local project"
+      | [ p ] -> Fmt.str "local project (%s)" p
+      | many -> Fmt.str "local project (%d packages)" (List.length many))
+  | _ -> String.concat " " targets
+
+(* The overlay line is only printed when the solve actually pulled from
+   an overlay. CLI-supplied [@handle/pkg] shortcuts and project
+   [x-reporepo:] both feed into [with_repos], so we take the first
+   handle we see. *)
+let show_overlay_label ~with_repos =
+  match with_repos with
+  | [] -> None
+  | h :: _ when not (is_url_like h) -> Some ("@" ^ h)
+  | _ -> None
+
+(* Split the action plan's nodes into (cached, source) counts. *)
+let show_counts action_plan =
+  List.fold_left
+    (fun (c, s) (n : Oi.Action.node) ->
+      match n.method_ with
+      | Oi.Action.Binary -> (c + 1, s)
+      | Oi.Action.Source -> (c, s + 1))
+    (0, 0)
+    (Oi.Action.nodes action_plan)
+
+(* Compute the depexts declared by every package in the plan (both
+   cached and source), along with the host installation status. The
+   full closure is what the old [oi depexts] reported and is the right
+   answer for scripting use ("what would this need from apt if I were
+   building from scratch?"). When [--os] is set the host check isn't
+   meaningful and we return [None] for the status. *)
+let show_depexts ~ctx ~packages_dirs ~action_plan ~os_override =
+  let all_pkgs =
+    List.map (fun (n : Oi.Action.node) -> n.pkg) (Oi.Action.nodes action_plan)
+  in
+  let entries =
+    match os_override with
+    | None -> Oi.Depexts.compute ctx ~packages_dirs all_pkgs
+    | Some _ ->
+        let conf = Oi.Opam_ctx.conf ctx in
+        Oi.Depexts.compute_for_conf ~conf ~packages_dirs all_pkgs
+  in
+  let all =
+    List.fold_left
+      (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
+      OpamSysPkg.Set.empty entries
+  in
+  let status =
+    if os_override <> None then None else Some (Oi.Depexts.status all)
+  in
+  (all, status)
+
+(* Read the first *.opam file in [cwd] directly, for the no-target
+   case where we want to surface the project's own metadata rather
+   than a dependency's. Returns [(pkg, opam)] where the package name
+   is taken from the filename (minus the [.opam] suffix) and the
+   version is a placeholder since a project's own opam file is
+   typically versionless. *)
+let read_first_local_opam ~cwd =
+  let entries = try Sys.readdir cwd |> Array.to_list with _ -> [] in
+  let opams =
+    entries
+    |> List.filter (fun n -> Filename.check_suffix n ".opam")
+    |> List.sort String.compare
+  in
+  match opams with
+  | [] -> None
+  | first :: _ -> (
+      let path = Filename.concat cwd first in
+      let name = Filename.chop_suffix first ".opam" in
+      try
+        let opam =
+          OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path))
+        in
+        let pkg =
+          OpamPackage.create
+            (OpamPackage.Name.of_string name)
+            (OpamPackage.Version.of_string "dev")
+        in
+        Some (pkg, opam)
+      with _ -> None)
+
+(* Pick the package whose metadata we'll surface on the default info
+   page. A CLI target resolves to its action-plan node. For the
+   local-project case we read the project's own first *.opam file
+   directly (otherwise we'd show metadata for the first
+   dependency, which is misleading). Anything else falls through to
+   the first plan node as a last-ditch option. *)
+type show_meta_source = From_node of Oi.Action.node | From_project_opam of OpamPackage.t * OpamFile.OPAM.t
+
+let show_primary_meta ~action_plan ~targets ~project_deps ~cwd =
+  let find_name name =
+    try Some (Oi.Action.find action_plan (OpamPackage.Name.of_string name))
+    with _ -> None
+  in
+  match targets with
+  | first :: _ -> (
+      match find_name first with
+      | Some n -> Some (From_node n)
+      | None -> None)
+  | [] -> (
+      match read_first_local_opam ~cwd with
+      | Some (pkg, opam) -> Some (From_project_opam (pkg, opam))
+      | None -> (
+          match project_deps with
+          | first :: _ ->
+              Stdlib.Option.map (fun n -> From_node n) (find_name first)
+          | [] -> None))
+
+(* Collapse a multi-line synopsis to its first line so the info page
+   stays tidy. *)
+let first_line s =
+  match String.index_opt s '\n' with
+  | None -> s
+  | Some i -> String.sub s 0 i
+
+(* Print a single optional metadata field. Skipped silently when the
+   value is absent or empty. The label column is fixed at 11
+   characters so all rows on the info page line up. *)
+let show_meta_line label value =
+  match value with
+  | "" -> ()
+  | v ->
+      Fmt.pr "%a %s@,"
+        Fmt.(styled `Bold string)
+        (Fmt.str "%-11s" (label ^ ":"))
+        v
+
+(* Extract a compact, user-facing snapshot of an opam file's
+   descriptive metadata fields for the info page. *)
+let show_package_meta (_pkg : OpamPackage.t) (opam : OpamFile.OPAM.t) =
+  let synopsis =
+    Stdlib.Option.value (OpamFile.OPAM.synopsis opam) ~default:""
+    |> String.trim |> first_line
+  in
+  let license = String.concat ", " (OpamFile.OPAM.license opam) in
+  let homepage = String.concat ", " (OpamFile.OPAM.homepage opam) in
+  let dev_repo =
+    match OpamFile.OPAM.dev_repo opam with
+    | None -> ""
+    | Some u -> OpamUrl.to_string u
+  in
+  let maintainer = String.concat ", " (OpamFile.OPAM.maintainer opam) in
+  let tags = String.concat ", " (OpamFile.OPAM.tags opam) in
+  let description =
+    Stdlib.Option.value (OpamFile.OPAM.descr_body opam) ~default:""
+    |> String.trim
+  in
+  (synopsis, license, homepage, dev_repo, maintainer, tags, description)
+
+(* List the binaries that would end up on [$PATH] when this target's
+   layer is assembled into a prefix. When the layer is cached locally
+   we scan [layers/<os_key>/<hash>/fs/bin] and [fs/sbin] directly;
+   that's cheaper than a sqlite query and also works for layers the
+   index doesn't cover (fresh builds that haven't been re-indexed
+   yet). Returns [[]] for a layer that hasn't been built, for a
+   purely library package, or when the fs/ tree is missing. *)
+let show_package_binaries ~cache_root ~os_key ~layer_hash =
+  let layer_dir = cache_root / "layers" / os_key / layer_hash / "fs" in
+  let scan sub =
+    let dir = layer_dir / sub in
+    if not (Sys.file_exists dir) then []
+    else try Sys.readdir dir |> Array.to_list with _ -> []
+  in
+  let bins = scan "bin" @ scan "sbin" in
+  List.sort_uniq String.compare bins
+
+(* Collect the (handle, version, url) tuples the user would want to
+   see on the info page: the base overlays (default/relocatable)
+   plus any overlays named explicitly in [with_repos], in that
+   order, deduplicated by handle. Entries the reporepo doesn't know
+   about (e.g. a raw [--with-repo=URL] with a synthesised name) are
+   skipped so the list stays meaningful. *)
+let show_repositories ~with_repos =
+  let entries =
+    try Oi.Reporepo.load ~path:(reporepo_path ())
+    with Oi.Error.E _ -> []
+  in
+  let base_handles =
+    Oi.Reporepo.base_entries ()
+    |> List.map (fun (e : Oi.Reporepo.entry) -> e.handle)
+  in
+  let extra_handles =
+    List.filter (fun h -> not (is_url_like h)) with_repos
+  in
+  let all = base_handles @ extra_handles |> List.sort_uniq String.compare in
+  (* Preserve user-facing ordering: base overlays first, then
+     user-added handles in the order they appeared, deduplicated. *)
+  let ordered =
+    let seen = Hashtbl.create 4 in
+    let push acc h =
+      if List.mem h all && not (Hashtbl.mem seen h) then begin
+        Hashtbl.add seen h ();
+        h :: acc
+      end
+      else acc
+    in
+    let acc = List.fold_left push [] base_handles in
+    let acc = List.fold_left push acc extra_handles in
+    List.rev acc
+  in
+  List.filter_map
+    (fun h ->
+      match Oi.Reporepo.latest entries ~handle:h with
+      | None -> None
+      | Some (e : Oi.Reporepo.entry) ->
+          let url = if e.commit = "" then e.url else e.url ^ "#" ^ e.commit in
+          Some (h, e.version, url))
+    ordered
+
+(* Render the default succinct info page. *)
+let show_render_info ~target_label ~target_version ~target_opam ~overlay
+    ~os_key ~ocaml_version ~n_cached ~n_source ~all_depexts ~dep_status
+    ~repositories ~binaries =
+  let n_total = n_cached + n_source in
+  Fmt.pr "@[<v>";
+  let target_line =
+    match target_version with
+    | "" -> target_label
+    | v -> Fmt.str "%s %s" target_label v
+  in
+  show_meta_line "Target" target_line;
+  let description =
+    match target_opam with
+    | None -> ""
+    | Some (pkg, opam) ->
+        let synopsis, license, homepage, dev_repo, maintainer, tags, description =
+          show_package_meta pkg opam
+        in
+        show_meta_line "Synopsis" synopsis;
+        show_meta_line "License" license;
+        show_meta_line "Homepage" homepage;
+        (* Only surface dev-repo when it adds information beyond the
+           homepage. Many opam files repeat the same github URL for
+           both, which just makes the info page noisier. *)
+        if dev_repo <> homepage then show_meta_line "Source" dev_repo;
+        show_meta_line "Maintainer" maintainer;
+        show_meta_line "Tags" tags;
+        description
+  in
+  (match binaries with
+  | [] -> ()
+  | bs -> show_meta_line "Binaries" (String.concat ", " bs));
+  (match overlay with
+  | None -> ()
+  | Some tag ->
+      show_meta_line "Overlay" (Fmt.str "%a" Fmt.(styled `Cyan string) tag));
+  show_meta_line "Platform" os_key;
+  show_meta_line "OCaml" ocaml_version;
+  Fmt.pr "@,";
+  (if n_source = 0 then
+     show_meta_line "Packages" (Fmt.str "%d total, all cached locally." n_total)
+   else begin
+     show_meta_line "Packages" (Fmt.str "%d total" n_total);
+     Fmt.pr "              cached: %d@," n_cached;
+     Fmt.pr "              build:  %d  (from source)@," n_source
+   end);
+  Fmt.pr "@,";
+  (match (dep_status : Oi.Depexts.status option) with
+  | None when OpamSysPkg.Set.is_empty all_depexts ->
+      show_meta_line "Depexts" "(no depexts declared)"
+  | None ->
+      show_meta_line "Depexts"
+        (Fmt.str "%d declared (host check skipped because --os is set)"
+           (OpamSysPkg.Set.cardinal all_depexts))
+  | Some st when OpamSysPkg.Set.is_empty st.missing ->
+      show_meta_line "Depexts"
+        (Fmt.str "%a" Fmt.(styled `Green string) "all satisfied")
+  | Some st ->
+      let pkgs =
+        OpamSysPkg.Set.elements st.missing |> List.map OpamSysPkg.to_string
+      in
+      show_meta_line "Depexts"
+        (pkgs |> List.map (fun p -> Fmt.str "%s (missing)" p)
+         |> String.concat ", ");
+      Fmt.pr "            %a@," Fmt.(styled `Faint string)
+        (Fmt.str "Run: sudo apt install %s" (String.concat " " pkgs)));
+  (match repositories with
+  | [] -> ()
+  | rows ->
+      Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Repositories:";
+      (* Two columns: [@handle (version)] left-padded to the longest
+         token so URLs line up. *)
+      let left = List.map (fun (h, v, _) -> Fmt.str "@%s (%s)" h v) rows in
+      let col =
+        List.fold_left (fun m s -> max m (String.length s)) 0 left
+      in
+      List.iter2
+        (fun (_, _, url) l ->
+          Fmt.pr "  %a  %s@,"
+            Fmt.(styled `Cyan string)
+            (Fmt.str "%-*s" col l)
+            url)
+        rows left);
+  (match description with
+  | "" -> ()
+  | body ->
+      Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Description:";
+      String.split_on_char '\n' body
+      |> List.iter (fun line -> Fmt.pr "  %s@," line));
+  Fmt.pr "@]@."
+
+let show_cmd =
+  let run () data_dir cache_dir refresh registry targets with_repos with_deps
+      tree only_depexts show_all os_override =
     with_error_handling @@ fun () ->
     with_eio_root @@ fun env _sw ->
     let _proc_mgr, fs, clock, sys, platform, os_key, cache =
       bootstrap env cache_dir
     in
+    let _ = registry in
     init_opam_root ~fs ~data_dir;
     ignore (get_packages_dirs ~fs ~sys ~data_dir ~refresh ());
-    let conf = make_conf ~platform in
+    let conf_host = make_conf ~platform in
+    let conf =
+      match os_override with
+      | None -> conf_host
+      | Some os -> resolve_os_override conf_host os
+    in
     let cwd_s, _ = resolved_cwd fs in
-    (* Accept [@handle/pkg] in both positional targets and [--with]
-       tokens. The handle is routed into [with_repos]; the stripped
-       package spec replaces the original token; any bare [@handle/pkg]
-       without an explicit version is later pinned to the overlay's
-       latest via [handle_pin_constraints]. *)
+    (* Binary-name resolution: [oi run ocluster-admin] works because
+       [ocluster-admin] isn't an opam package but is a binary shipped
+       by the [ocluster] package. [oi show] should accept the same
+       spelling, AND pull the right overlay in. A plain target that
+       the index maps to an overlay is rewritten into the
+       [@handle/pkg] shortcut so the subsequent [extract_handle_pins]
+       pass routes the overlay into [with_repos]; without that the
+       solver sees the bare package name but never its overlay, and
+       fails with "no known implementations". *)
+    let targets =
+      List.map
+        (fun t ->
+          if String.length t > 0 && t.[0] = '@' then t
+          else
+            match
+              binary_to_package ~sys ~fs ~clock ~cache ~os_key ~registry t
+            with
+            | Some (pkg, Some handle) ->
+                Logs.info (fun m ->
+                    m "Index: bin/%s provided by @%s/%s" t handle pkg);
+                Fmt.str "@%s/%s" handle pkg
+            | Some (pkg, None) when pkg <> t ->
+                Logs.info (fun m ->
+                    m "Index: bin/%s provided by package %s" t pkg);
+                pkg
+            | _ -> t)
+        targets
+    in
+    (* One [extract_handle_pins] pass handles both user-typed
+       [@handle/pkg] and the rewrites we just introduced: the
+       handle is routed into [with_repos], the stripped package spec
+       replaces the original token, and a [handle_pin] is recorded
+       so the overlay version gets pinned later. *)
     let targets, with_repos, target_pins =
       extract_handle_pins ~with_repos targets
     in
@@ -1486,11 +1965,17 @@ let plan_cmd =
     let extra_deps, url_project =
       materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
     in
-    let project_extras, project_pins, project_overlays =
-      match Oi.Project.load ~fs cwd_s with
-      | exception Sys_error _ -> ([], [], [])
-      | exception Eio.Exn.Io _ -> ([], [], [])
-      | p -> (p.extra_repos, p.pins, p.overlays)
+    (* Only consult the local project's declarations when the user did
+       not name an explicit target; otherwise [oi show pkg] inside a
+       project would silently pull the project's own deps into the
+       solve and produce misleading output. *)
+    let project_extras, project_pins, project_overlays, project_deps =
+      if targets <> [] then ([], [], [], [])
+      else
+        match Oi.Project.load ~fs cwd_s with
+        | exception Sys_error _ -> ([], [], [], [])
+        | exception Eio.Exn.Io _ -> ([], [], [], [])
+        | p -> (p.extra_repos, p.pins, p.overlays, p.deps)
     in
     let project_extras = project_extras @ url_project.extra_repos in
     let project_pins = project_pins @ url_project.pins in
@@ -1526,9 +2011,18 @@ let plan_cmd =
         extra_deps
     in
     let url_names = List.map OpamPackage.Name.of_string url_project.roots in
-    let names =
-      List.map OpamPackage.Name.of_string targets @ extra_names @ url_names
+    let project_dep_names =
+      List.map OpamPackage.Name.of_string project_deps
     in
+    let names =
+      List.map OpamPackage.Name.of_string targets
+      @ project_dep_names @ extra_names @ url_names
+    in
+    if names = [] then
+      Oi.Error.config_error
+        "oi show: nothing to show (no TARGET, no --with, and no *.opam \
+         files in %s)"
+        cwd_s;
     let cache_root = Oi.Cache.root_s cache in
     let build_prefix = cache_root / "build" / "prefix" in
     let ctx = Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf in
@@ -1538,54 +2032,249 @@ let plan_cmd =
           ~constraints:extra_constraints names
       with
       | Ok pkgs -> pkgs
-      | Error msg -> Oi.Error.no_solution msg
+      | Error msg ->
+          (* "No known implementations at all" usually means the user
+             typed a name that isn't actually an opam package - a
+             common confusion when a project's display name differs
+             from its package name (e.g. "ocurrent" vs [current]).
+             Walk the packages_dirs for substring matches and include
+             them in the error so the fix is obvious. *)
+          let contains ~needle s =
+            let nl = String.length needle and sl = String.length s in
+            if nl = 0 || nl > sl then false
+            else
+              let rec loop i =
+                if i + nl > sl then false
+                else if String.sub s i nl = needle then true
+                else loop (i + 1)
+              in
+              loop 0
+          in
+          (* Bidirectional substring match: a package is a candidate if
+             either the typed target contains the package's name (e.g.
+             target="ocurrent" matches package "current") or the
+             package's name contains the typed target (e.g.
+             target="curr" matches "current"). Case-insensitive. Both
+             sides need at least four letters: shorter names (like
+             [re]) otherwise match as spurious fragments of unrelated
+             targets. *)
+          let suggest_for target =
+            let lower = String.lowercase_ascii target in
+            if String.length lower < 4 then []
+            else
+              List.concat_map
+                (fun dir ->
+                  try Sys.readdir dir |> Array.to_list with _ -> [])
+                packages_dirs
+              |> List.sort_uniq String.compare
+              |> List.filter (fun name ->
+                     let ln = String.lowercase_ascii name in
+                     String.length ln >= 4
+                     && ln <> lower
+                     && (contains ~needle:lower ln
+                        || contains ~needle:ln lower))
+          in
+          let extras =
+            targets
+            |> List.concat_map suggest_for
+            |> List.sort_uniq String.compare
+          in
+          let hint =
+            match extras with
+            | [] -> ""
+            | xs ->
+                let shown, rest =
+                  if List.length xs > 8 then
+                    (List.filteri (fun i _ -> i < 8) xs,
+                     List.length xs - 8)
+                  else (xs, 0)
+                in
+                Fmt.str
+                  "\n\nDid you mean one of these packages?\n  %s%s"
+                  (String.concat " " shown)
+                  (if rest > 0 then Fmt.str " (+%d more)" rest else "")
+          in
+          Oi.Error.no_solution (msg ^ hint)
     in
     let d10 =
       make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
     in
     let action_plan = Oi.Action.plan ctx ~d10 ~packages_dirs pkgs in
-    let plan =
-      Oi.Plan.create ctx ~packages_dirs ~cache_root ~os_key
-        ~ocaml_version:conf.ocaml_version action_plan
-    in
-    Fmt.pr "%a@." Oi.Plan.pp plan
+    if tree then begin
+      let plan =
+        Oi.Plan.create ctx ~packages_dirs ~cache_root ~os_key
+          ~ocaml_version:conf.ocaml_version action_plan
+      in
+      Fmt.pr "%a@." Oi.Plan.pp plan
+    end
+    else
+      let all_depexts, dep_status =
+        show_depexts ~ctx ~packages_dirs ~action_plan ~os_override
+      in
+      if only_depexts then
+        let to_print =
+          match dep_status with
+          | None -> all_depexts
+          | Some _ when show_all -> all_depexts
+          | Some st -> st.missing
+        in
+        OpamSysPkg.Set.iter
+          (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
+          to_print
+      else
+        let target_label = show_target_label ~targets ~project_deps in
+        let overlay = show_overlay_label ~with_repos in
+        let n_cached, n_source = show_counts action_plan in
+        let primary =
+          show_primary_meta ~action_plan ~targets ~project_deps ~cwd:cwd_s
+        in
+        let target_version, target_opam, target_layer_hash =
+          match primary with
+          | None -> ("", None, None)
+          | Some (From_node n) ->
+              ( OpamPackage.Version.to_string (OpamPackage.version n.pkg),
+                Some (n.pkg, n.opam),
+                Some n.layer_hash )
+          | Some (From_project_opam (pkg, opam)) ->
+              (* Project *.opam files rarely pin a real version;
+                 "dev" isn't useful on a user-facing line, so we
+                 suppress the version column here. *)
+              ("", Some (pkg, opam), None)
+        in
+        let repositories = show_repositories ~with_repos in
+        let binaries =
+          match target_layer_hash with
+          | None -> []
+          | Some h -> show_package_binaries ~cache_root ~os_key ~layer_hash:h
+        in
+        show_render_info ~target_label ~target_version ~target_opam ~overlay
+          ~os_key ~ocaml_version:conf.ocaml_version ~n_cached ~n_source
+          ~all_depexts ~dep_status ~repositories ~binaries
   in
   let targets =
     Arg.(
-      non_empty & pos_all string []
-      & info ~docv:"PKG" ~doc:"Package(s) to plan" [])
+      value & pos_all string []
+      & info ~docv:"TARGET"
+          ~doc:
+            "Opam package name, or $(b,@HANDLE/PKG) to pin a package to a \
+             specific overlay. When omitted, $(b,oi show) reads the \
+             $(b,*.opam) files in the current directory, the same way \
+             $(b,oi sync) does."
+          [])
+  in
+  let tree =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Print the full per-package build plan instead of the default \
+             succinct page. Every package is shown with its layer hash, \
+             source URL, resolved build and install commands, and the \
+             environment variables it will be built against."
+          [ "tree" ])
+  in
+  let only_depexts =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Print only the system packages needed to build this target, \
+             one per line, with no other formatting. Suitable for piping \
+             into the host package manager, e.g. $(b,sudo apt install \
+             \\$(oi show --only-depexts TARGET))."
+          [ "only-depexts" ])
+  in
+  let show_all =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "With $(b,--only-depexts), print every depext including those \
+             already installed. Ignored otherwise."
+          [ "all" ])
+  in
+  let os_override =
+    Arg.(
+      value
+      & opt (some string) None
+      & info ~docv:"OS"
+          ~doc:
+            "Compute depexts as if the current machine were running a \
+             different platform. Accepts a distribution name (e.g. \
+             $(b,alpine), $(b,debian), $(b,ubuntu), $(b,fedora), \
+             $(b,centos), $(b,rhel), $(b,opensuse), $(b,arch), \
+             $(b,nixos), $(b,macos)) with an optional version suffix \
+             separated by a dash ($(b,ubuntu-22.04), $(b,alpine-3.23), \
+             $(b,fedora-43)), or a bare opam $(b,os) value \
+             ($(b,linux), $(b,freebsd), $(b,win32)). The $(b,os-family), \
+             $(b,os-distribution), and $(b,os-version) variables are \
+             rewritten to match so that depext filters keyed on any of \
+             them pick up the override. The host installation check is \
+             skipped when this flag is set."
+          [ "os" ])
   in
   let info =
-    Cmd.info "plan" ~doc:"Show the build plan for these packages"
+    Cmd.info "show"
+      ~doc:"Show a build-plan summary, its depexts, or the full plan tree"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "$(b,oi plan) resolves the full dependency tree for the named \
-             packages and prints it as an indented list, without fetching \
-             any sources or running any builds. Use it to see what a \
-             subsequent $(b,oi run) or $(b,oi registry build) would do, to \
-             audit which versions the solver picks, or to check which \
-             packages are already in your local cache.";
-          `P "Every node in the printed tree carries a status tag:";
-          `I ("$(b,source)", "Would be compiled from source.");
-          `I ("$(b,binary)", "Already present in the local cache.");
-          `I ("$(b,remote)", "Available from the configured registry.");
-          `I
-            ( "$(b,virtual)",
-              "A placeholder such as $(b,conf-pkg-config) with nothing to \
-               build." );
+            "$(b,oi show) solves for $(b,TARGET) and prints an overview of \
+             what would happen if you built or ran it: the package count, \
+             the split between locally-cached layers and packages that \
+             would be compiled from source, and any system packages the \
+             host is missing. It does not fetch any sources or run any \
+             builds.";
           `P
-            "The $(b,--with) and $(b,--with-repo) flags accept the same \
-             forms as in $(b,oi run), so you can preview the effect of \
-             adding a package or pulling in an overlay before committing to \
-             the build.";
+            "When no $(b,TARGET) is given, $(b,oi show) reads the \
+             $(b,*.opam) files in the current directory, so it works the \
+             same as $(b,oi sync) for inspecting a checked-out project.";
+          `S "MODES";
+          `P
+            "By default $(b,oi show) prints a succinct four-block page \
+             covering the target, its overlay (if any), the build platform, \
+             and package and depext counts. The default is the right view \
+             when you just want to know whether everything is in order.";
+          `P
+            "$(b,--tree) replaces the default view with the full per-package \
+             build plan: every package with its layer hash, its source URL, \
+             its resolved build and install commands, and an environment \
+             summary. Use this when auditing which versions the solver \
+             picked or when debugging a layer mismatch.";
+          `P
+            "$(b,--only-depexts) prints only the missing system packages, \
+             one per line, with no other formatting. It is the flag to \
+             reach for when piping into a system package manager.";
+          `Pre "  sudo apt install \\$(oi show --only-depexts @avsm/tangled)";
+          `S "OPTIONS";
+          `P
+            "$(b,--all) makes $(b,--only-depexts) print every depext, not \
+             just the ones missing on the host.";
+          `P
+            "$(b,--os=NAME) computes depexts for a different distribution. \
+             The host installation check is skipped in this mode.";
+          `P
+            "$(b,--with) and $(b,--with-repo) extend the solve exactly as \
+             they do in $(b,oi run).";
+          `S Manpage.s_examples;
+          `Pre
+            "  # Summarise what `oi run utop' would do\n\
+            \  oi show utop\n\n\
+            \  # The full per-package plan, with layer hashes\n\
+            \  oi show --tree utop\n\n\
+            \  # Pipe the missing depexts into apt\n\
+            \  sudo apt install \\$(oi show --only-depexts \
+             @avsm/tangled)\n\n\
+            \  # What would this project need on Fedora?\n\
+            \  oi show --only-depexts --os=fedora --all";
         ]
   in
   Cmd.v info
     Term.(
       const run $ log_term $ data_dir_term $ cache_dir_term $ refresh_term
-      $ targets $ with_repos_term $ with_deps_term)
+      $ registry_term $ targets $ with_repos_term $ with_deps_term $ tree
+      $ only_depexts $ show_all $ os_override)
 
 (* -- env ----------------------------------------------------------------- *)
 
@@ -4506,245 +5195,6 @@ let registry_build_cmd =
       $ dry_run $ all $ only $ skip $ registry_term $ with_repos_term
       $ with_deps_term $ jobs_term $ targets)
 
-(* -- depexts ------------------------------------------------------------- *)
-
-let depexts_cmd =
-  let run () data_dir cache_dir refresh with_repos with_deps by_package
-      show_all show_status show_not_found os_override =
-    with_error_handling @@ fun () ->
-    with_eio_root @@ fun env _sw ->
-    let _proc_mgr, fs, _clock, sys, platform, _os_key, cache =
-      bootstrap env cache_dir
-    in
-    let cwd_s, _ = resolved_cwd fs in
-    init_opam_root ~fs ~data_dir;
-    ignore (get_packages_dirs ~fs ~sys ~data_dir ~refresh ());
-    let proj = Oi.Project.load ~fs cwd_s in
-    let extra_cli, url_project =
-      materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
-    in
-    if proj.deps = [] && extra_cli = [] && url_project.roots = [] then
-      Oi.Error.config_error
-        "No dependencies declared in %s (need at least one *.opam with \
-         non-local depends, or use --with)"
-        cwd_s;
-    let with_repos = proj.overlays @ url_project.overlays @ with_repos in
-    let pin_dir =
-      Oi.Pin.materialize ~fs ~sys ~cache ~refresh (proj.pins @ url_project.pins)
-    in
-    let all_extras =
-      merge_extras
-        ~cli:(cli_extra_repos ~fs ~sys with_repos)
-        ~project:(proj.extra_repos @ url_project.extra_repos)
-    in
-    let extras = Oi.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras in
-    let packages_dirs =
-      Stdlib.Option.to_list pin_dir
-      @ extras
-      @ get_packages_dirs ~fs ~sys ~data_dir ()
-    in
-    let conf =
-      let c = make_conf ~platform in
-      match os_override with None -> c | Some os -> { c with os }
-    in
-    let cache_root = Oi.Cache.root_s cache in
-    let build_prefix = cache_root / "build" / "prefix" in
-    let ctx = Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf in
-    let extra_constraints = Oi.Script.constraints extra_cli in
-    let extra_names =
-      List.filter_map
-        (fun (d : Oi.Script.dep) ->
-          if OpamPackage.Name.to_string d.name = "ocaml" then None
-          else Some d.name)
-        extra_cli
-      @ List.map OpamPackage.Name.of_string url_project.roots
-    in
-    let names = List.map OpamPackage.Name.of_string proj.deps @ extra_names in
-    let solved =
-      match
-        Oi.Solve.solve ~fs ~cache_root ctx ~packages_dirs
-          ~constraints:extra_constraints names
-      with
-      | Ok pkgs -> pkgs
-      | Error msg -> Oi.Error.no_solution msg
-    in
-    let entries = Oi.Depexts.compute ctx ~packages_dirs solved in
-    let all =
-      List.fold_left
-        (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
-        OpamSysPkg.Set.empty entries
-    in
-    (* The installed-check runs through the host's package manager, so it
-       only makes sense when [--os] hasn't been overridden to some other
-       distro. With [--os], fall back to printing every depext. *)
-    let show, status =
-      if os_override <> None || show_all then (all, None)
-      else
-        let st = Oi.Depexts.status all in
-        if show_not_found then (st.not_found, Some st)
-        else if show_status then (all, Some st)
-        else (st.missing, Some st)
-    in
-    if by_package then
-      let keep_pkg s =
-        OpamSysPkg.Set.inter s show |> fun s ->
-        if OpamSysPkg.Set.is_empty s then None else Some s
-      in
-      List.iter
-        (fun { Oi.Depexts.pkg; sys_pkgs } ->
-          match keep_pkg sys_pkgs with
-          | None -> ()
-          | Some s ->
-              OpamSysPkg.Set.iter
-                (fun p ->
-                  let tag =
-                    match status with
-                    | None -> ""
-                    | Some st ->
-                        if OpamSysPkg.Set.mem p st.installed then "\tinstalled"
-                        else if OpamSysPkg.Set.mem p st.not_found then
-                          "\tnot-found"
-                        else "\tmissing"
-                  in
-                  Fmt.pr "%s\t%s%s@."
-                    (OpamPackage.to_string pkg)
-                    (OpamSysPkg.to_string p) tag)
-                s)
-        entries
-    else if show_status then
-      (* Grouped view: three blocks. Keeps the flat-list ordering within
-         each group so [grep missing] still gives usable output. *)
-      let block label pkgs =
-        if not (OpamSysPkg.Set.is_empty pkgs) then begin
-          Fmt.pr "%s:@." label;
-          OpamSysPkg.Set.iter
-            (fun p -> Fmt.pr "  %s@." (OpamSysPkg.to_string p))
-            pkgs
-        end
-      in
-      match status with
-      | None -> OpamSysPkg.Set.iter (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p)) show
-      | Some st ->
-          block "missing" st.missing;
-          block "not-found" st.not_found;
-          block "installed" st.installed
-    else
-      OpamSysPkg.Set.iter (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p)) show
-  in
-  let by_package =
-    Arg.(
-      value & flag
-      & info
-          ~doc:
-            "Group the output by the opam package that requires each \
-             system dependency, instead of printing a de-duplicated flat \
-             list."
-          [ "by-package" ])
-  in
-  let show_all =
-    Arg.(
-      value & flag
-      & info
-          ~doc:
-            "Print every depext declared by the solve, including those \
-             already installed on the host. By default the command hides \
-             already-installed packages, so piping the result to the \
-             system package manager installs only what is actually \
-             missing."
-          [ "all" ])
-  in
-  let show_status =
-    Arg.(
-      value & flag
-      & info
-          ~doc:
-            "Print every depext grouped by host installation status: \
-             $(b,missing) (available from the package manager but not \
-             installed), $(b,not-found) (not in the package manager's \
-             index), and $(b,installed). Useful for eyeballing the \
-             current state of a machine."
-          [ "status" ])
-  in
-  let show_not_found =
-    Arg.(
-      value & flag
-      & info
-          ~doc:
-            "Print only depexts that the host package manager does not \
-             recognise. These require manual attention (third-party \
-             repository, renamed package, or unsupported platform)."
-          [ "not-found" ])
-  in
-  let os_override =
-    Arg.(
-      value
-      & opt (some string) None
-      & info ~docv:"OS"
-          ~doc:
-            "Report depexts as if the current machine were running \
-             $(b,OS) (for example $(b,linux) or $(b,macos)). Useful for \
-             previewing what a different distribution would need. \
-             Implies $(b,--all), because the host installation check \
-             is meaningless when the output is computed for a different \
-             platform."
-          [ "os" ])
-  in
-  let info =
-    Cmd.info "depexts"
-      ~doc:"List missing system packages required by the dependency closure"
-      ~man:
-        [
-          `S Manpage.s_description;
-          `P
-            "$(b,oi depexts) solves the project's dependency tree and \
-             prints the system packages that the resulting OCaml \
-             packages need at build time: C libraries, headers, build \
-             tools, and the like. By default only depexts that are not \
-             yet installed on the host are printed, so the output can \
-             be piped directly into the system package manager:";
-          `Pre "  sudo apt install \\$(oi depexts)";
-          `P
-            "On a fully-provisioned machine the default output is \
-             empty. Pass $(b,--all) to print every depext regardless of \
-             installation state, $(b,--status) for a grouped view that \
-             shows installed, missing, and unknown packages separately, \
-             or $(b,--not-found) to surface depexts that the package \
-             manager does not recognise.";
-          `S "OPTIONS";
-          `P
-            "$(b,--all) prints every depext, ignoring installation \
-             state. This is the behaviour to use when regenerating \
-             Dockerfiles or other non-interactive consumers.";
-          `P
-            "$(b,--status) prints depexts grouped by $(b,missing), \
-             $(b,not-found), and $(b,installed). Intended for \
-             eyeballing the current state of a machine.";
-          `P
-            "$(b,--not-found) prints only depexts that the package \
-             manager does not recognise. These typically require a \
-             third-party repository or a rename.";
-          `P
-            "$(b,--by-package) groups the output by the opam package \
-             that needs each system dependency, which is helpful when \
-             tracking down why a particular library is being requested. \
-             Works with $(b,--status), which then annotates each row \
-             with its installation state.";
-          `P
-            "$(b,--os=NAME) pretends the current machine is running a \
-             different distribution and prints the depexts that distro \
-             would need. Implies $(b,--all) because the host-install \
-             check cannot answer questions about a different platform.";
-          `P
-            "$(b,--with) and $(b,--with-repo) extend the solve in the \
-             same way as in $(b,oi run).";
-        ]
-  in
-  Cmd.v info
-    Term.(
-      const run $ log_term $ data_dir_term $ cache_dir_term $ refresh_term
-      $ with_repos_term $ with_deps_term $ by_package $ show_all $ show_status
-      $ show_not_found $ os_override)
-
 (* -- registry docker ---------------------------------------------------- *)
 
 (* Walk the reporepo and return the list of [(handle, root_groups)]
@@ -6119,7 +6569,10 @@ let () =
             \  oi search 'ocaml*'\n\
             \  oi search @avsm/irmin";
           `P "Preview without actually doing anything:";
-          `Pre "  oi plan utop\n  oi run -n utop";
+          `Pre
+            "  oi show utop\n\
+            \  oi show --tree utop\n\
+            \  oi run -n utop";
           `S "COMMAND CATEGORIES";
           `I
             ( "$(b,Getting started)",
@@ -6132,15 +6585,17 @@ let () =
                tools. $(b,exec) runs a command in the project \
                environment. $(b,env) prints that environment for \
                use with $(b,eval). $(b,add) records a new \
-               dependency in $(b,dune-project). $(b,depexts) \
-               lists system packages that the project's closure \
-               needs." );
+               dependency in $(b,dune-project)." );
           `I
             ( "$(b,Checking what's going on)",
-              "$(b,plan) shows the build plan. $(b,search) finds \
-               a binary or package across caches and overlays. \
-               $(b,config) reports the platform, cache directories, \
-               project state, and dev-tool probes." );
+              "$(b,show) summarises the build plan and lists any \
+               missing system packages; pass $(b,--tree) for the \
+               full per-package plan or $(b,--only-depexts) for a \
+               list suitable for piping into a package manager. \
+               $(b,search) finds a binary or package across caches \
+               and overlays. $(b,config) reports the platform, \
+               cache directories, project state, and dev-tool \
+               probes." );
           `I
             ( "$(b,Sharing builds and managing disk)",
               "$(b,registry) manages the pre-built package cache \
@@ -6207,11 +6662,10 @@ let () =
         add_cmd;
         exec_cmd;
         search_cmd;
-        plan_cmd;
+        show_cmd;
         sync_cmd;
         env_cmd;
         config_cmd;
-        depexts_cmd;
         registry_cmd;
         repo_cmd;
         clean_cmd;

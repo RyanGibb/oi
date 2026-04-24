@@ -256,21 +256,29 @@ let find_layer db ~name ~version ~os_key =
 
 let find_binary db ~binary ~os_key =
   let results = ref [] in
+  let some_if_set s = if s = "" then None else Some s in
   let cb row =
     match row with
-    | [| name; version; hash |] -> results := (name, version, hash) :: !results
+    | [| name; version; hash; oh; ov |] ->
+        let overlay =
+          match (some_if_set oh, some_if_set ov) with
+          | Some h, Some v -> Some (h, v)
+          | _ -> None
+        in
+        results := (name, version, hash, overlay) :: !results
     | _ -> ()
   in
   ignore
     (Sqlite3.exec_not_null_no_headers db ~cb
        (Fmt.str
-          "SELECT l.package_name, l.package_ver, l.hash FROM layer_binaries b \
-           JOIN layers l ON b.layer_hash = l.hash WHERE b.binary_name = %s AND \
-           l.os_key = %s AND l.exit_status = 0"
+          "SELECT l.package_name, l.package_ver, l.hash, \
+           COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') \
+           FROM layer_binaries b JOIN layers l ON b.layer_hash = l.hash WHERE \
+           b.binary_name = %s AND l.os_key = %s AND l.exit_status = 0"
           (quote binary) (quote os_key)));
   (* Sort by opam version descending — latest version first *)
   List.sort
-    (fun (_, v1, _) (_, v2, _) ->
+    (fun (_, v1, _, _) (_, v2, _, _) ->
       OpamPackage.Version.compare
         (OpamPackage.Version.of_string v2)
         (OpamPackage.Version.of_string v1))

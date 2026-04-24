@@ -1,7 +1,7 @@
 Git pin revision tracking: a pin against a local git repo picks up
 upstream commits when [--refresh] is passed. We exercise this by
-creating a local bare repo, pinning against it, running [oi plan] once,
-pushing a new commit, and verifying that [oi plan --refresh] produces a
+creating a local bare repo, pinning against it, running [oi show] once,
+pushing a new commit, and verifying that [oi show --tree --refresh] produces a
 different layer hash than the first run.
 
   $ mkdir -p upstream
@@ -40,7 +40,7 @@ the resolved revision. We don't need the whole plan to succeed (the
 default opam-repository may be offline); we just need [pins/sets/<h>]
 to have been written.
 
-  $ oi plan widget > /dev/null 2>&1 || true
+  $ oi show --tree widget > /dev/null 2>&1 || true
   $ ls "${OI_CACHE_DIR:-$HOME/.cache/oi}/pins/sets" | sort > /tmp/first_sets
 
 Now push an upstream commit. The symbolic URL is unchanged, but HEAD
@@ -51,7 +51,7 @@ moves forward.
 Without --refresh, the pin cache age gate keeps us on the old revision
 (freshly touched sentinel), so no new set directory appears:
 
-  $ oi plan widget > /dev/null 2>&1 || true
+  $ oi show --tree widget > /dev/null 2>&1 || true
   $ ls "${OI_CACHE_DIR:-$HOME/.cache/oi}/pins/sets" | sort > /tmp/same_sets
   $ diff /tmp/first_sets /tmp/same_sets && echo "same without --refresh"
   same without --refresh
@@ -59,7 +59,7 @@ Without --refresh, the pin cache age gate keeps us on the old revision
 With --refresh, the fetch re-runs, the new revision is resolved, the
 set hash changes, and a new directory materializes:
 
-  $ oi plan --refresh widget > /dev/null 2>&1 || true
+  $ oi show --tree --refresh widget > /dev/null 2>&1 || true
   $ ls "${OI_CACHE_DIR:-$HOME/.cache/oi}/pins/sets" | sort > /tmp/after_refresh
   $ [ "$(wc -l < /tmp/after_refresh)" -gt "$(wc -l < /tmp/first_sets)" ] && echo "new set after --refresh"
   new set after --refresh
