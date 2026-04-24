@@ -1861,24 +1861,41 @@ let show_render_info ~target_label ~target_version ~target_opam ~overlay
    end);
   Fmt.pr "@,";
   (match (dep_status : Oi.Depexts.status option) with
-  | None when OpamSysPkg.Set.is_empty all_depexts ->
+  | _ when OpamSysPkg.Set.is_empty all_depexts ->
       show_meta_line "Depexts" "(no depexts declared)"
   | None ->
-      show_meta_line "Depexts"
-        (Fmt.str "%d declared (host check skipped because --os is set)"
-           (OpamSysPkg.Set.cardinal all_depexts))
-  | Some st when OpamSysPkg.Set.is_empty st.missing ->
-      show_meta_line "Depexts"
-        (Fmt.str "%a" Fmt.(styled `Green string) "all satisfied")
-  | Some st ->
-      let pkgs =
-        OpamSysPkg.Set.elements st.missing |> List.map OpamSysPkg.to_string
+      (* [--os] set: can't tell what's installed on this host, so
+         just list them all plain. *)
+      let names =
+        OpamSysPkg.Set.elements all_depexts |> List.map OpamSysPkg.to_string
       in
-      show_meta_line "Depexts"
-        (pkgs |> List.map (fun p -> Fmt.str "%s (missing)" p)
-         |> String.concat ", ");
-      Fmt.pr "            %a@," Fmt.(styled `Faint string)
-        (Fmt.str "Run: sudo apt install %s" (String.concat " " pkgs)));
+      show_meta_line "Depexts" (String.concat ", " names);
+      Fmt.pr "            %a@,"
+        Fmt.(styled `Faint string)
+        "(host check skipped because --os is set)"
+  | Some st ->
+      (* Every depext declared, with the uninstalled ones marked.
+         Missing tokens are styled in yellow so they stand out even
+         when "(missing)" is the only textual marker. *)
+      let render p =
+        let name = OpamSysPkg.to_string p in
+        if OpamSysPkg.Set.mem p st.missing then
+          Fmt.str "%a" Fmt.(styled `Yellow string) (name ^ " (missing)")
+        else name
+      in
+      let rendered =
+        OpamSysPkg.Set.elements all_depexts
+        |> List.map render |> String.concat ", "
+      in
+      show_meta_line "Depexts" rendered;
+      if not (OpamSysPkg.Set.is_empty st.missing) then
+        let missing_names =
+          OpamSysPkg.Set.elements st.missing
+          |> List.map OpamSysPkg.to_string
+        in
+        Fmt.pr "            %a@," Fmt.(styled `Faint string)
+          (Fmt.str "Run: sudo apt install %s"
+             (String.concat " " missing_names)));
   (match repositories with
   | [] -> ()
   | rows ->
@@ -1906,7 +1923,7 @@ let show_render_info ~target_label ~target_version ~target_opam ~overlay
 
 let show_cmd =
   let run () data_dir cache_dir refresh registry targets with_repos with_deps
-      tree only_depexts show_all os_override =
+      tree only_depexts os_override =
     with_error_handling @@ fun () ->
     with_eio_root @@ fun env _sw ->
     let _proc_mgr, fs, clock, sys, platform, os_key, cache =
@@ -2112,15 +2129,13 @@ let show_cmd =
         show_depexts ~ctx ~packages_dirs ~action_plan ~os_override
       in
       if only_depexts then
-        let to_print =
-          match dep_status with
-          | None -> all_depexts
-          | Some _ when show_all -> all_depexts
-          | Some st -> st.missing
-        in
+        (* Always print every depext, one per line, with no status
+           marking. Intended for piping into a package manager; the
+           caller handles which ones are already installed. *)
+        let _ = dep_status in
         OpamSysPkg.Set.iter
           (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
-          to_print
+          all_depexts
       else
         let target_label = show_target_label ~targets ~project_deps in
         let overlay = show_overlay_label ~with_repos in
@@ -2184,15 +2199,6 @@ let show_cmd =
              \\$(oi show --only-depexts TARGET))."
           [ "only-depexts" ])
   in
-  let show_all =
-    Arg.(
-      value & flag
-      & info
-          ~doc:
-            "With $(b,--only-depexts), print every depext including those \
-             already installed. Ignored otherwise."
-          [ "all" ])
-  in
   let os_override =
     Arg.(
       value
@@ -2243,38 +2249,38 @@ let show_cmd =
              summary. Use this when auditing which versions the solver \
              picked or when debugging a layer mismatch.";
           `P
-            "$(b,--only-depexts) prints only the missing system packages, \
-             one per line, with no other formatting. It is the flag to \
-             reach for when piping into a system package manager.";
+            "$(b,--only-depexts) prints every declared system package \
+             (installed or not), one per line, with no other \
+             formatting. It is the flag to reach for when piping into \
+             a system package manager; the manager will skip what is \
+             already present.";
           `Pre "  sudo apt install \\$(oi show --only-depexts @avsm/tangled)";
           `S "OPTIONS";
           `P
-            "$(b,--all) makes $(b,--only-depexts) print every depext, not \
-             just the ones missing on the host.";
+            "$(b,--os=NAME) computes depexts for a different \
+             distribution. The host installation check is skipped in \
+             this mode.";
           `P
-            "$(b,--os=NAME) computes depexts for a different distribution. \
-             The host installation check is skipped in this mode.";
-          `P
-            "$(b,--with) and $(b,--with-repo) extend the solve exactly as \
-             they do in $(b,oi run).";
+            "$(b,--with) and $(b,--with-repo) extend the solve exactly \
+             as they do in $(b,oi run).";
           `S Manpage.s_examples;
           `Pre
             "  # Summarise what `oi run utop' would do\n\
             \  oi show utop\n\n\
             \  # The full per-package plan, with layer hashes\n\
             \  oi show --tree utop\n\n\
-            \  # Pipe the missing depexts into apt\n\
+            \  # Pipe every depext into apt\n\
             \  sudo apt install \\$(oi show --only-depexts \
              @avsm/tangled)\n\n\
             \  # What would this project need on Fedora?\n\
-            \  oi show --only-depexts --os=fedora --all";
+            \  oi show --only-depexts --os=fedora-43";
         ]
   in
   Cmd.v info
     Term.(
       const run $ log_term $ data_dir_term $ cache_dir_term $ refresh_term
       $ registry_term $ targets $ with_repos_term $ with_deps_term $ tree
-      $ only_depexts $ show_all $ os_override)
+      $ only_depexts $ os_override)
 
 (* -- env ----------------------------------------------------------------- *)
 

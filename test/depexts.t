@@ -1,4 +1,4 @@
-`oi show --only-depexts` prints the missing system packages declared by
+`oi show --only-depexts` prints every system package declared by
 a dependency's opam file, one per line, suitable for piping into the
 host package manager. We build a minimal local repo containing a
 [widget] package whose [depexts:] covers macos and linux, declare it
@@ -39,7 +39,7 @@ Be offline-robust: either the solver reaches the extra repo and prints
 a libwidget depext, or oi bails out refreshing the default repo. Either
 way the depexts pipeline ran.
 
-  $ oi show --only-depexts --all 2>&1 | grep -E 'libwidget|Failed|Cloning' > /dev/null && echo ok
+  $ oi show --only-depexts 2>&1 | grep -E 'libwidget|Failed|Cloning' > /dev/null && echo ok
   ok
 
 The --os override must influence filter evaluation. Either the solver
@@ -47,7 +47,7 @@ reached the extra repo and emitted [linux-libwidget] (and not
 [mac-libwidget]), or oi bailed out refreshing the default repo. If
 depexts ran, we assert the override took effect.
 
-  $ oi show --only-depexts --all --os=linux > os.out 2> os.err; cat os.out os.err | grep -qE 'Failed|Cloning' && echo offline-skip || ( grep -q 'linux-libwidget' os.out && ! grep -q 'mac-libwidget' os.out && echo os-override-ok )
+  $ oi show --only-depexts --os=linux > os.out 2> os.err; cat os.out os.err | grep -qE 'Failed|Cloning' && echo offline-skip || ( grep -q 'linux-libwidget' os.out && ! grep -q 'mac-libwidget' os.out && echo os-override-ok )
   os-override-ok
 
 Error path: running in a dir with no *.opam files should fail cleanly
