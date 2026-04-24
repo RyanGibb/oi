@@ -2171,32 +2171,22 @@ let show_cmd =
       value & pos_all string []
       & info ~docv:"TARGET"
           ~doc:
-            "Opam package name, or $(b,@HANDLE/PKG) to pin a package to a \
-             specific overlay. When omitted, $(b,oi show) reads the \
-             $(b,*.opam) files in the current directory, the same way \
-             $(b,oi sync) does."
+            "Opam package, binary name, or $(b,@HANDLE/PKG). Omitted: \
+             read $(b,*.opam) in the current directory."
           [])
   in
   let tree =
     Arg.(
       value & flag
-      & info
-          ~doc:
-            "Print the full per-package build plan instead of the default \
-             succinct page. Every package is shown with its layer hash, \
-             source URL, resolved build and install commands, and the \
-             environment variables it will be built against."
-          [ "tree" ])
+      & info ~doc:"Print the full per-package build plan." [ "tree" ])
   in
   let only_depexts =
     Arg.(
       value & flag
       & info
           ~doc:
-            "Print only the system packages needed to build this target, \
-             one per line, with no other formatting. Suitable for piping \
-             into the host package manager, e.g. $(b,sudo apt install \
-             \\$(oi show --only-depexts TARGET))."
+            "Print system packages, one per line, suitable for piping \
+             to $(b,apt), $(b,apk), or $(b,dnf)."
           [ "only-depexts" ])
   in
   let os_override =
@@ -2205,74 +2195,46 @@ let show_cmd =
       & opt (some string) None
       & info ~docv:"OS"
           ~doc:
-            "Compute depexts as if the current machine were running a \
-             different platform. Accepts a distribution name (e.g. \
-             $(b,alpine), $(b,debian), $(b,ubuntu), $(b,fedora), \
-             $(b,centos), $(b,rhel), $(b,opensuse), $(b,arch), \
-             $(b,nixos), $(b,macos)) with an optional version suffix \
-             separated by a dash ($(b,ubuntu-22.04), $(b,alpine-3.23), \
-             $(b,fedora-43)), or a bare opam $(b,os) value \
-             ($(b,linux), $(b,freebsd), $(b,win32)). The $(b,os-family), \
-             $(b,os-distribution), and $(b,os-version) variables are \
-             rewritten to match so that depext filters keyed on any of \
-             them pick up the override. The host installation check is \
-             skipped when this flag is set."
+            "Evaluate depexts for $(b,OS) instead of the host. Accepts \
+             any tag $(b,dockerfile-opam) recognises \
+             ($(b,alpine-3.23), $(b,ubuntu-22.04), $(b,fedora-43), \
+             $(b,alpine), $(b,ubuntu), ...). The host-installed check \
+             is skipped."
           [ "os" ])
   in
   let info =
     Cmd.info "show"
-      ~doc:"Show a build-plan summary, its depexts, or the full plan tree"
+      ~doc:"Summarise a package's build plan and depexts"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "$(b,oi show) solves for $(b,TARGET) and prints an overview of \
-             what would happen if you built or ran it: the package count, \
-             the split between locally-cached layers and packages that \
-             would be compiled from source, and any system packages the \
-             host is missing. It does not fetch any sources or run any \
-             builds.";
+            "Solve for $(b,TARGET) and print its metadata, package \
+             count, reporepo pins, and declared system dependencies. \
+             No sources are fetched and no builds run.";
           `P
-            "When no $(b,TARGET) is given, $(b,oi show) reads the \
-             $(b,*.opam) files in the current directory, so it works the \
-             same as $(b,oi sync) for inspecting a checked-out project.";
+            "With no $(b,TARGET), reads $(b,*.opam) in the current \
+             directory.";
           `S "MODES";
-          `P
-            "By default $(b,oi show) prints a succinct four-block page \
-             covering the target, its overlay (if any), the build platform, \
-             and package and depext counts. The default is the right view \
-             when you just want to know whether everything is in order.";
-          `P
-            "$(b,--tree) replaces the default view with the full per-package \
-             build plan: every package with its layer hash, its source URL, \
-             its resolved build and install commands, and an environment \
-             summary. Use this when auditing which versions the solver \
-             picked or when debugging a layer mismatch.";
-          `P
-            "$(b,--only-depexts) prints every declared system package \
-             (installed or not), one per line, with no other \
-             formatting. It is the flag to reach for when piping into \
-             a system package manager; the manager will skip what is \
-             already present.";
-          `Pre "  sudo apt install \\$(oi show --only-depexts @avsm/tangled)";
-          `S "OPTIONS";
-          `P
-            "$(b,--os=NAME) computes depexts for a different \
-             distribution. The host installation check is skipped in \
-             this mode.";
-          `P
-            "$(b,--with) and $(b,--with-repo) extend the solve exactly \
-             as they do in $(b,oi run).";
+          `I
+            ( "(default)",
+              "Summary page: opam metadata, overlay tag, package \
+               counts, binaries, depexts with uninstalled ones \
+               marked, and the pinned reporepo overlays." );
+          `I
+            ( "$(b,--tree)",
+              "Full per-package build plan: layer hashes, source \
+               URLs, resolved build and install commands." );
+          `I
+            ( "$(b,--only-depexts)",
+              "Every declared depext, one per line, no formatting. \
+               For piping into a system package manager." );
           `S Manpage.s_examples;
           `Pre
-            "  # Summarise what `oi run utop' would do\n\
-            \  oi show utop\n\n\
-            \  # The full per-package plan, with layer hashes\n\
-            \  oi show --tree utop\n\n\
-            \  # Pipe every depext into apt\n\
+            "  oi show utop\n\
+            \  oi show --tree utop\n\
             \  sudo apt install \\$(oi show --only-depexts \
-             @avsm/tangled)\n\n\
-            \  # What would this project need on Fedora?\n\
+             @avsm/tangled)\n\
             \  oi show --only-depexts --os=fedora-43";
         ]
   in
