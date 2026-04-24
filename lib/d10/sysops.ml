@@ -118,7 +118,11 @@ let copy_tree t ~src ~dst =
 let link_tree t ~src ~dst =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
   let src_s = native src and dst_s = native dst in
-  try run_quiet t [ "cp"; "-Rflv"; src_s ^ "/."; dst_s ^ "/" ]
+  (* No [-v]: [run_quiet] throws the output away and one layer-restore
+     can produce tens of thousands of lines that then have to be
+     drained through the Eio buffer_sink, which is slow at best and
+     has hung in the wild when stdout and stderr are merged. *)
+  try run_quiet t [ "cp"; "-Rfl"; src_s ^ "/."; dst_s ^ "/" ]
   with Failure _ -> ()
 
 (* -- Low-level command execution ----------------------------------------- *)
