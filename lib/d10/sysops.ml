@@ -121,9 +121,13 @@ let link_tree t ~src ~dst =
   (* No [-v]: [run_quiet] throws the output away and one layer-restore
      can produce tens of thousands of lines that then have to be
      drained through the Eio buffer_sink, which is slow at best and
-     has hung in the wild when stdout and stderr are merged. *)
-  try run_quiet t [ "cp"; "-Rfl"; src_s ^ "/."; dst_s ^ "/" ]
-  with Failure _ -> ()
+     has hung in the wild when stdout and stderr are merged.
+
+     Failures propagate. A partial hardlink pass leaves the build
+     prefix incomplete, which downstream turns into cryptic
+     "Unbound module X" errors at compile time; better to surface the
+     cp failure directly so callers can retry or abort cleanly. *)
+  run_quiet t [ "cp"; "-Rfl"; src_s ^ "/."; dst_s ^ "/" ]
 
 (* -- Low-level command execution ----------------------------------------- *)
 

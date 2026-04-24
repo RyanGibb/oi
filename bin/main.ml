@@ -3323,6 +3323,13 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       | Skipped of string * string  (* solver failure + log path *)
       | Ok of int * int * int
       | Failed of int * int * int * string * (string * string) list
+      | Depext_fail of
+          int
+          * int
+          * int
+          * OpamSysPkg.Set.t
+          * (string * OpamSysPkg.Set.t) list
+          * string
   end in
   let result_for t =
     match Hashtbl.find_opt solve_failures t with
@@ -3335,7 +3342,9 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
             | None -> R.Skipped ("group not built", "")
             | Some (`Ok (p, b, c)) -> R.Ok (p, b, c)
             | Some (`Fail (p, b, c, msg, failures)) ->
-                R.Failed (p, b, c, msg, failures)))
+                R.Failed (p, b, c, msg, failures)
+            | Some (`Depext_fail (p, b, c, missing, per_pkg, log)) ->
+                R.Depext_fail (p, b, c, missing, per_pkg, log)))
   in
   let handle_for t =
     match Hashtbl.find_opt target_handle t with
@@ -3343,19 +3352,22 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
     | None -> ""
   in
   let rows = List.map (fun t -> (t, handle_for t, result_for t)) targets in
-  let n_ok, n_failed, n_skipped =
+  let n_ok, n_failed, n_depext, n_skipped =
     List.fold_left
-      (fun (o, f, s) (_, _, r) ->
+      (fun (o, f, d, s) (_, _, r) ->
         match r with
-        | R.Ok _ -> (o + 1, f, s)
-        | R.Failed _ -> (o, f + 1, s)
-        | R.Skipped _ -> (o, f, s + 1))
-      (0, 0, 0) rows
+        | R.Ok _ -> (o + 1, f, d, s)
+        | R.Failed _ -> (o, f + 1, d, s)
+        | R.Depext_fail _ -> (o, f, d + 1, s)
+        | R.Skipped _ -> (o, f, d, s + 1))
+      (0, 0, 0, 0) rows
   in
   let status_col r =
     match r with
     | R.Ok _ -> Fmt.str "%a" Fmt.(styled `Green string) "ok"
     | R.Failed _ -> Fmt.str "%a" Fmt.(styled `Red string) "fail"
+    | R.Depext_fail _ ->
+        Fmt.str "%a" Fmt.(styled `Yellow string) "depext-fail"
     | R.Skipped _ -> Fmt.str "%a" Fmt.(styled `Yellow string) "skip"
   in
   (* Shorten multi-line solver diagnostics to the first line so the
@@ -3369,6 +3381,11 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
     | R.Ok (p, b, c) -> Fmt.str "%d pkg (%d built, %d cached)" p b c
     | R.Failed (p, b, c, _, _) ->
         Fmt.str "%d pkg (%d built, %d cached), build failed" p b c
+    | R.Depext_fail (p, b, c, missing, _, _) ->
+        Fmt.str "%d pkg (%d cached, %d need build), missing system pkgs: %s" p
+          c b
+          (missing |> OpamSysPkg.Set.elements
+           |> List.map OpamSysPkg.to_string |> String.concat " ")
     | R.Skipped (msg, _) -> Fmt.str "skipped (%s)" (first_line msg)
   in
   let target_width =
@@ -3402,13 +3419,27 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
                 Fmt.(styled `Faint string)
                 "↳ log" pkg log_path)
             failures
+      | R.Depext_fail (_, _, _, _, per_pkg, log_path) ->
+          List.iter
+            (fun (pkg, set) ->
+              Fmt.pr "         %a %s: %s@."
+                Fmt.(styled `Faint string)
+                "↳ needs" pkg
+                (set |> OpamSysPkg.Set.elements
+                 |> List.map OpamSysPkg.to_string
+                 |> String.concat " "))
+            per_pkg;
+          Fmt.pr "         %a %s@."
+            Fmt.(styled `Faint string)
+            "↳ depext log:" log_path
       | R.Skipped (_, log_path) when log_path <> "" ->
           Fmt.pr "         %a %s@."
             Fmt.(styled `Faint string)
             "↳ solver log:" log_path
       | _ -> ())
     rows;
-  Fmt.pr "@.%d ok, %d failed, %d skipped@." n_ok n_failed n_skipped;
+  Fmt.pr "@.%d ok, %d failed, %d depext-fail, %d skipped@." n_ok n_failed
+    n_depext n_skipped;
   (* Dump per-target build-failure output at debug level so `-v` still
      shows the reason, without dumping a compiler transcript by
      default. *)
@@ -3928,7 +3959,14 @@ let registry_build_cmd =
     let group_results :
         ( int,
           [ `Ok of int * int * int
-          | `Fail of int * int * int * string * (string * string) list ] )
+          | `Fail of int * int * int * string * (string * string) list
+          | `Depext_fail of
+            int
+            * int
+            * int
+            * OpamSysPkg.Set.t
+            * (string * OpamSysPkg.Set.t) list
+            * string ] )
         Hashtbl.t =
       Hashtbl.create 16
     in
@@ -4160,6 +4198,90 @@ let registry_build_cmd =
         end
         else begin
           Log.info (fun m -> m "%d to build, %d cached" n_build n_cached);
+          (* Depext pre-flight: classify a group as [depext-fail] when
+             its source-built packages need system packages the host is
+             missing. Cheaper and clearer than letting the build start
+             and fail mid-compile, and lets the user [apt install] the
+             listed packages and re-run. Only runs when there is at
+             least one source build in this group; pure restore groups
+             never need depexts. *)
+          let depext_classify () =
+            let source_pkgs =
+              Oi.Action.nodes build_plan
+              |> List.filter_map (fun (n : Oi.Action.node) ->
+                     match n.method_ with
+                     | Oi.Action.Source -> Some n.pkg
+                     | Oi.Action.Binary -> None)
+            in
+            if source_pkgs = [] then None
+            else
+              let entries =
+                Oi.Depexts.compute group_ctx ~packages_dirs:pkg_dirs source_pkgs
+              in
+              let all =
+                List.fold_left
+                  (fun acc e ->
+                    OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
+                  OpamSysPkg.Set.empty entries
+              in
+              if OpamSysPkg.Set.is_empty all then None
+              else
+                let st = Oi.Depexts.status all in
+                if OpamSysPkg.Set.is_empty st.missing then None
+                else
+                  let per_pkg =
+                    List.filter_map
+                      (fun (e : Oi.Depexts.entry) ->
+                        let m =
+                          OpamSysPkg.Set.inter e.sys_pkgs st.missing
+                        in
+                        if OpamSysPkg.Set.is_empty m then None
+                        else Some (OpamPackage.to_string e.pkg, m))
+                      entries
+                  in
+                  Some (st.missing, per_pkg)
+          in
+          match depext_classify () with
+          | Some (missing, per_pkg) ->
+              let log_path =
+                Oi.Build_logs.path ~cache_root ~kind:"depext"
+                  ~name:(List.hd group_targets_list)
+                  ~hash:(Digest.to_hex (Digest.string group_targets))
+              in
+              let body =
+                let buf = Buffer.create 512 in
+                Buffer.add_string buf "Group: ";
+                Buffer.add_string buf group_targets;
+                Buffer.add_string buf "\n\nMissing system packages:\n";
+                OpamSysPkg.Set.iter
+                  (fun p ->
+                    Buffer.add_string buf "  ";
+                    Buffer.add_string buf (OpamSysPkg.to_string p);
+                    Buffer.add_char buf '\n')
+                  missing;
+                Buffer.add_string buf "\nRequired by:\n";
+                List.iter
+                  (fun (pkg, set) ->
+                    Buffer.add_string buf "  ";
+                    Buffer.add_string buf pkg;
+                    Buffer.add_string buf ": ";
+                    Buffer.add_string buf
+                      (set |> OpamSysPkg.Set.elements
+                       |> List.map OpamSysPkg.to_string
+                       |> String.concat ", ");
+                    Buffer.add_char buf '\n')
+                  per_pkg;
+                Buffer.contents buf
+              in
+              Oi.Build_logs.write ~fs ~cache_root log_path body;
+              Log.info (fun m ->
+                  m "depext-fail: %d missing system package(s); see %s"
+                    (OpamSysPkg.Set.cardinal missing)
+                    log_path);
+              Hashtbl.replace group_results gi
+                (`Depext_fail
+                  (n_pkgs, n_build, n_cached, missing, per_pkg, log_path))
+          | None ->
           let exec_plan =
             Oi.Plan.create group_ctx ~packages_dirs:pkg_dirs ~cache_root ~os_key
               ~ocaml_version:conf.ocaml_version build_plan
