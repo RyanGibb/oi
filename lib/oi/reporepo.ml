@@ -180,10 +180,14 @@ let push ?(on_step_start = fun _ _ -> ()) ~sys ~path () =
         resolve) rather than dirty-tree-vs-stash conflicts. *)
   let porcelain = git_at_out ~sys ~path [ "status"; "--porcelain" ] in
   let dirty_paths =
+    (* [git status --porcelain] format is [XY <path>] where X and Y are
+       1-char status columns (space when empty). Trimming would strip
+       the leading space of an unstaged-only status (e.g. [" D path"]
+       for a tracked deletion) and shift the substring offset by one,
+       lopping the first character off [path]. *)
     porcelain |> String.split_on_char '\n'
     |> List.filter_map (fun line ->
-        let line = String.trim line in
-        if line = "" || String.length line < 4 then None
+        if String.length line < 4 then None
         else Some (String.sub line 3 (String.length line - 3)))
   in
   on_step_start 1 "commit local changes";
