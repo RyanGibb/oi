@@ -5344,8 +5344,9 @@ let registry_build_cmd =
 
 (* Walk the reporepo and return the list of [(handle, root_groups)]
    pairs that should drive depext computation for [oi registry docker].
-   Excludes the [default] handle (the full opam-repository) and any
-   overlay that does not declare [x-root-packages]. *)
+   Excludes the [default] handle (the full opam-repository), toolchain
+   definitions ([x-oi-toolchain-name] set — they're metadata views,
+   not buildable), and any overlay without [x-root-packages]. *)
 let overlay_root_targets reporepo_entries =
   reporepo_entries
   |> List.map (fun (e : Oi.Reporepo.entry) -> e.handle)
@@ -5354,7 +5355,9 @@ let overlay_root_targets reporepo_entries =
       if h = "default" then None
       else
         match Oi.Reporepo.latest reporepo_entries ~handle:h with
-        | Some e when e.root_packages <> [] -> Some (h, e.root_packages)
+        | Some e
+          when e.toolchain_name = None && e.root_packages <> [] ->
+            Some (h, e.root_packages)
         | _ -> None)
 
 (* Resolve the effective [packages_dirs] for a single overlay handle:
