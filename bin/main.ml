@@ -4245,6 +4245,9 @@ let registry_build_cmd =
        derive targets from each one:
        - skip [default] (ocaml/opam-repository) — its ~10k packages
          are never what [--all] should mean;
+       - skip toolchain-definition entries ([x-oi-toolchain-name]
+         set, url-less) — they're metadata views over other overlays,
+         not buildable themselves;
        - if the overlay has [x-root-packages], emit one [@handle/pkg]
          per entry;
        - otherwise fall back to [@handle], which expands to every
@@ -4289,6 +4292,10 @@ let registry_build_cmd =
               else
                 match Oi.Reporepo.latest entries ~handle:h with
                 | None -> []
+                | Some e when e.toolchain_name <> None ->
+                    Log.info (fun m ->
+                        m "--all: skipping toolchain definition %s" h);
+                    []
                 | Some e ->
                     if e.root_packages = [] then begin
                       Log.info (fun m ->
