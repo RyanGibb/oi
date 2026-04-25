@@ -42,8 +42,8 @@ let git_head_for_packages_dir packages_dir =
       Hashtbl.add head_memo packages_dir r;
       r
 
-let key ~(conf : Opam_ctx.conf) ~packages_dirs ~constraints ~names ?toolchain
-    () =
+let key ~(conf : Opam_ctx.conf) ~packages_dirs ~constraints ~names ?toolchain ()
+    =
   let heads =
     List.map (fun d -> (d, git_head_for_packages_dir d)) packages_dirs
   in

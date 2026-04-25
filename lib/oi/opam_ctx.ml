@@ -137,9 +137,8 @@ let switch_env ?toolchain ~prefix () =
       ("OCAMLLIB", prefix / "lib" / "ocaml");
       ( "CAML_LD_LIBRARY_PATH",
         String.concat ":"
-          [
-            prefix / "lib" / "stublibs"; prefix / "lib" / "ocaml" / "stublibs";
-          ] );
+          [ prefix / "lib" / "stublibs"; prefix / "lib" / "ocaml" / "stublibs" ]
+      );
       ("OCAMLFIND_CONF", prefix / "lib" / "findlib.conf");
       (* The relocatable ocamlfind installs findlib.conf with destdir=".",
          expecting OCAMLFIND_DESTDIR to be set at use-time. Without this,
@@ -239,7 +238,8 @@ let create ~prefix ~packages_dirs ~conf ?toolchain () =
       match toolchain with
       | None | Some { relocatable = true; _ } -> base_env
       | Some tc ->
-          OpamTypesBase.env_update_resolved "PATH" PlusEq (tc.install_prefix / "bin")
+          OpamTypesBase.env_update_resolved "PATH" PlusEq
+            (tc.install_prefix / "bin")
             ~comment:"toolchain bin"
           :: base_env
     in
@@ -502,8 +502,7 @@ let resolve_commands t ~test ~doc ~dev_setup ?build_dir opam =
     let with_build =
       match build_dir with
       | None -> base
-      | Some d ->
-          (OpamVariable.of_string "build", Some (OpamTypes.S d)) :: base
+      | Some d -> (OpamVariable.of_string "build", Some (OpamTypes.S d)) :: base
     in
     OpamVariable.Map.of_list with_build
   in

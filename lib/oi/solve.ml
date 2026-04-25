@@ -165,7 +165,7 @@ let augment_compiler_constraints ctx ~ocaml_version constraints =
           match
             OpamPackage.Set.elements tc.packages
             |> List.find_opt (fun p ->
-                   OpamPackage.Name.equal (OpamPackage.name p) name)
+                OpamPackage.Name.equal (OpamPackage.name p) name)
           with
           | None -> acc
           | Some pkg ->
@@ -181,7 +181,9 @@ let augment_compiler_constraints ctx ~ocaml_version constraints =
 
 let solve_with_dir_context ctx ~packages_dirs ~constraints ~ocaml_version names
     =
-  let constraints = augment_compiler_constraints ctx ~ocaml_version constraints in
+  let constraints =
+    augment_compiler_constraints ctx ~ocaml_version constraints
+  in
   Log.info (fun m ->
       m "Solving for %a (ocaml = %s)"
         Fmt.(list ~sep:comma string)
@@ -273,8 +275,13 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
     in
     let compiler_names =
       List.map OpamPackage.Name.of_string
-        [ "ocaml"; "ocaml-variants"; "ocaml-base-compiler"; "ocaml-compiler";
-          "oxcaml-compiler" ]
+        [
+          "ocaml";
+          "ocaml-variants";
+          "ocaml-base-compiler";
+          "ocaml-compiler";
+          "oxcaml-compiler";
+        ]
     in
     let interesting =
       List.filter_map render names
@@ -284,8 +291,7 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
              compiler_names)
     in
     if interesting <> [] then
-      Log.info (fun m ->
-          m "Selected: %s" (String.concat ", " interesting))
+      Log.info (fun m -> m "Selected: %s" (String.concat ", " interesting))
   in
   let run_solve () =
     match

@@ -26,17 +26,18 @@ type entry = {
           [oxcaml]-targeted overlay re-locks against the toolchain's own base
           set instead of the default [relocatable; default]. *)
   toolchain_name : string option;
-      (** [x-oi-toolchain-name]: when set, this entry DEFINES a toolchain
-          with the given CLI name (e.g. ["oxcaml"], ["ocaml-5.4"]). Distinct
-          from {!toolchain} above: that one says "uses toolchain X", this one
-          says "is the definition of toolchain X". The reporepo handle and
-          the toolchain CLI name live in separate namespaces so the handle
-          can stay opam-valid (e.g. [toolchain-ocaml-5-4] handle defines
-          toolchain CLI name [ocaml-5.4]). *)
+      (** [x-oi-toolchain-name]: when set, this entry DEFINES a toolchain with
+          the given CLI name (e.g. ["oxcaml"], ["ocaml-5.4"]). Distinct from
+          {!toolchain} above: that one says "uses toolchain X", this one says
+          "is the definition of toolchain X". The reporepo handle and the
+          toolchain CLI name live in separate namespaces so the handle can stay
+          opam-valid (e.g. [toolchain-ocaml-5-4] handle defines toolchain CLI
+          name [ocaml-5.4]). *)
   toolchain_compiler : string option;
       (** [x-oi-toolchain-compiler]: the primary compiler package spec, e.g.
           ["ocaml-variants.5.2.0+ox"]. Used by [Toolchain.resolve] to anchor
-          [pick_ocaml_version]. Only meaningful when {!toolchain_name} is set. *)
+          [pick_ocaml_version]. Only meaningful when {!toolchain_name} is set.
+      *)
   relocatable : bool option;
       (** [x-oi-relocatable]: build mode for the toolchain this entry defines.
           [Some true] means relocatable (no fixed-prefix install), [Some false]
@@ -106,9 +107,9 @@ val materialize_one :
   commit:string ->
   string
 (** Single-overlay variant of {!materialize} that takes the identity fields
-    directly rather than an [entry] record. Used for builtin toolchains where
-    a synthetic [entry] would be all placeholder fields. Pass [commit:""] to
-    track the URL's HEAD without pinning a specific sha. *)
+    directly rather than an [entry] record. Used for builtin toolchains where a
+    synthetic [entry] would be all placeholder fields. Pass [commit:""] to track
+    the URL's HEAD without pinning a specific sha. *)
 
 (** {1 Base overlay resolution}
 
@@ -227,17 +228,17 @@ val add :
     [~ref_:"relocatable"] (for example) to pin a non-default branch. The version
     is [YYYYMMDD.0] for today's date.
 
-    [~toolchain] persists the targeted builtin toolchain handle in the new
-    opam file's [x-oi-toolchain] field. [~base_handles] overrides the
-    default [["relocatable"; "default"]] base set — typically supplied by
-    the CLI from {!Toolchain.depends_of} when [~toolchain] is set so
-    auto-injected deps match the toolchain's own base set.
+    [~toolchain] persists the targeted builtin toolchain handle in the new opam
+    file's [x-oi-toolchain] field. [~base_handles] overrides the default
+    [["relocatable"; "default"]] base set — typically supplied by the CLI from
+    {!Toolchain.depends_of} when [~toolchain] is set so auto-injected deps match
+    the toolchain's own base set.
 
     When [depends] is omitted and [handle] is not itself a base overlay, the new
     entry auto-depends on the latest versions of each handle in [base_handles]
-    (default [relocatable; default]) currently in the reporepo — that's how
-    user overlays lock themselves against a specific base set. Pass
-    [~depends:[]] to produce an entry with no deps.
+    (default [relocatable; default]) currently in the reporepo — that's how user
+    overlays lock themselves against a specific base set. Pass [~depends:[]] to
+    produce an entry with no deps.
 
     Raises if [handle] already has entries in the reporepo, unless [force] is
     [true] — in which case a new [YYYYMMDD.N] version is written alongside the
@@ -262,17 +263,17 @@ val bump :
     [~ref_] targets a specific branch or ref (defaults to the one the previous
     version tracked, or [HEAD]).
 
-    [~toolchain] overrides the previous entry's [x-oi-toolchain]; absent, it
-    is inherited unchanged. [~base_handles] selects which handles auto-deps
-    are pinned against (defaulting to [["relocatable"; "default"]]) — the CLI
+    [~toolchain] overrides the previous entry's [x-oi-toolchain]; absent, it is
+    inherited unchanged. [~base_handles] selects which handles auto-deps are
+    pinned against (defaulting to [["relocatable"; "default"]]) — the CLI
     typically passes the targeted toolchain's own base set here so a bump
     re-locks against the right family.
 
     When [depends] is omitted and [handle] is a non-base overlay, the
-    auto-injected base pins are refreshed to the latest versions of each
-    handle in [base_handles] (re-locking the user overlay against the current
-    base set). Base overlays and overlays without any auto-injected base pin
-    preserve their previous [depends] list.
+    auto-injected base pins are refreshed to the latest versions of each handle
+    in [base_handles] (re-locking the user overlay against the current base
+    set). Base overlays and overlays without any auto-injected base pin preserve
+    their previous [depends] list.
 
     When [root_packages] is omitted, the previous version's list is preserved.
     Pass [~root_packages:[]] to explicitly clear it.

@@ -30,8 +30,8 @@ type package_plan = {
       (** Opam [extra-files:] entries: pairs of [(basename, src_path)] where
           [src_path] is the absolute path to the file in
           [<packages_dir>/<name>/<name.version>/files/<basename>]. Copied into
-          [build_dir] before patches are applied, so inline patches the
-          recipe references actually exist when [patch -i] runs. *)
+          [build_dir] before patches are applied, so inline patches the recipe
+          references actually exist when [patch -i] runs. *)
   patches : patch list;
   substs : subst list;
   subst_vars : (string * string) list;

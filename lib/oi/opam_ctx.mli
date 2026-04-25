@@ -35,16 +35,15 @@ type toolchain = {
   relocatable : bool;
       (** [true] when the compiler can be installed into the consumer prefix
           rather than at [install_prefix]. {!create} skips the [mark_installed]
-          pre-population in that case so the consumer solve actually builds
-          the compiler, and {!switch_env} skips the toolchain PATH/lib
-          layering — the binary cache then matches what no-toolchain mode
-          would produce. The version pinning via [packages]/[root_names]
-          still applies. *)
+          pre-population in that case so the consumer solve actually builds the
+          compiler, and {!switch_env} skips the toolchain PATH/lib layering —
+          the binary cache then matches what no-toolchain mode would produce.
+          The version pinning via [packages]/[root_names] still applies. *)
   packages : OpamPackage.Set.t;
   root_names : OpamPackage.Name.Set.t;
       (** Solver-root subset of [packages]. The consumer solve uses this to
-          force the originally-specified toolchain roots into the solution
-          (via [conflict-class] those then exclude the wrong compiler) without
+          force the originally-specified toolchain roots into the solution (via
+          [conflict-class] those then exclude the wrong compiler) without
           dragging in every transitive dep — adding the full [packages] set as
           roots pulls in oxcaml meta packages that conflict with each other. *)
 }
@@ -62,8 +61,8 @@ val create :
 (** [?toolchain] pins a fixed-prefix OCaml toolchain (compiler, ocamlfind,
     ocamlbuild, ...) to this context. When set:
     - the switch env prepends toolchain [bin], [lib], and [lib/stublibs] to
-      [PATH], [OCAMLPATH], and [CAML_LD_LIBRARY_PATH] so consumer builds
-      resolve the compiler from the toolchain prefix;
+      [PATH], [OCAMLPATH], and [CAML_LD_LIBRARY_PATH] so consumer builds resolve
+      the compiler from the toolchain prefix;
     - toolchain packages are recorded so downstream code (solver constraints,
       execute-skip) can special-case them. *)
 
@@ -91,11 +90,11 @@ val resolve_commands :
   ?build_dir:string ->
   OpamFile.OPAM.t ->
   string list list
-(** [resolve_commands t ~test ~doc ~dev_setup ?build_dir opam] returns the
-    fully resolved build commands with all opam variables expanded and filters
-    evaluated. When [?build_dir] is given, it overrides [%{build}%] to that
-    path — needed for packages whose build commands reference [%{build}%]
-    expecting it to equal the command's cwd. *)
+(** [resolve_commands t ~test ~doc ~dev_setup ?build_dir opam] returns the fully
+    resolved build commands with all opam variables expanded and filters
+    evaluated. When [?build_dir] is given, it overrides [%{build}%] to that path
+    — needed for packages whose build commands reference [%{build}%] expecting
+    it to equal the command's cwd. *)
 
 val compilation_env : t -> OpamFile.OPAM.t -> string array
 (** [compilation_env t opam] returns the full build environment for a package,
@@ -133,8 +132,8 @@ val switch_env :
     variables for [prefix] (OCAMLLIB, CAML_LD_LIBRARY_PATH, OCAMLFIND_CONF,
     OCAMLPATH, OCAMLTOP_INCLUDE_PATH, OPAM_SWITCH_PREFIX). When [?toolchain] is
     set the toolchain's [bin]/[lib]/[lib/stublibs] are prepended to PATH,
-    OCAMLPATH, CAML_LD_LIBRARY_PATH and OCAMLLIB / OCAMLFIND_CONF are dropped
-    so the non-relocatable compiler picks up stdlib via its baked-in path. *)
+    OCAMLPATH, CAML_LD_LIBRARY_PATH and OCAMLLIB / OCAMLFIND_CONF are dropped so
+    the non-relocatable compiler picks up stdlib via its baked-in path. *)
 
 val init_opam : root:string -> unit
 (** [init_opam ~root] initialises opam's global config with an isolated root

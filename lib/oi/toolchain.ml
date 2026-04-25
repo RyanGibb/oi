@@ -13,13 +13,12 @@ type info = {
   install_prefix : string;
   hash : string;
   relocatable : bool;
-      (** [true] when the toolchain's compiler can be installed into a
-          per-solve consumer prefix. Skips the fixed-prefix install and
-          the PATH/OCAMLPATH layering, so the binary cache pipeline works
-          end-to-end the same way it does in the no-toolchain flow. The
-          version pin in {!opam_ctx_of_info} still drives compiler
-          selection. [false] (e.g. oxcaml) keeps the legacy fixed-prefix
-          behaviour. *)
+      (** [true] when the toolchain's compiler can be installed into a per-solve
+          consumer prefix. Skips the fixed-prefix install and the PATH/OCAMLPATH
+          layering, so the binary cache pipeline works end-to-end the same way
+          it does in the no-toolchain flow. The version pin in
+          {!opam_ctx_of_info} still drives compiler selection. [false] (e.g.
+          oxcaml) keeps the legacy fixed-prefix behaviour. *)
   packages : OpamPackage.Set.t;
   root_names : OpamPackage.Name.Set.t;
   packages_dirs : string list;
@@ -97,7 +96,8 @@ let find_entry_by_toolchain_name ~name =
       Error.config_error
         "multiple reporepo handles define toolchain %S: %s — fix by removing \
          the duplicate definitions"
-        name (String.concat ", " handles)
+        name
+        (String.concat ", " handles)
 
 (* For [oi show] / man-page rendering: surface the URL of the FIRST
    depends overlay as the toolchain's "primary source". Toolchain
@@ -223,8 +223,12 @@ let compute_hash ~packages_dirs ~(conf : Opam_ctx.conf) pkgs =
   let material =
     String.concat "\n"
       [
-        conf.arch; conf.os; conf.os_distribution; conf.os_version;
-        conf.os_family; layer_hash;
+        conf.arch;
+        conf.os;
+        conf.os_distribution;
+        conf.os_version;
+        conf.os_family;
+        layer_hash;
       ]
   in
   Digest.string material |> Digest.to_hex
@@ -259,8 +263,7 @@ let resolve ~fs ~sys ~data_dir ~(conf : Opam_ctx.conf) ~handle =
      works on a fresh machine — the toolchain definitions live there
      now, not in oi's binary. *)
   let path = Reporepo.env_path () in
-  Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path
-    ~url:(Reporepo.env_url ());
+  Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path ~url:(Reporepo.env_url ());
   let entry =
     match find_entry_by_toolchain_name ~name:handle with
     | Some e -> e
@@ -298,9 +301,8 @@ let resolve ~fs ~sys ~data_dir ~(conf : Opam_ctx.conf) ~handle =
   in
   let root_specs = List.flatten entry.toolchain_roots in
   if root_specs = [] then
-    Error.config_error
-      "toolchain %s: %s.%s declares no x-oi-toolchain-roots" handle entry.handle
-      entry.version;
+    Error.config_error "toolchain %s: %s.%s declares no x-oi-toolchain-roots"
+      handle entry.handle entry.version;
   let constraints =
     List.fold_left
       (fun m spec ->
@@ -341,9 +343,7 @@ let resolve ~fs ~sys ~data_dir ~(conf : Opam_ctx.conf) ~handle =
         Error.config_error
           "toolchain %s: solved set contains no ocaml compiler package" handle
   in
-  let relocatable_flag =
-    Stdlib.Option.value entry.relocatable ~default:true
-  in
+  let relocatable_flag = Stdlib.Option.value entry.relocatable ~default:true in
   let hash = compute_hash ~packages_dirs ~conf pkgs in
   let short = if String.length hash >= 8 then String.sub hash 0 8 else hash in
   let dir_name = Fmt.str "%s-%s-%s" handle ocaml_version short in
@@ -421,11 +421,9 @@ let ensure_opam_root ~fs root =
    anything by itself, but restoring keeps the ambient state
    honest. *)
 let with_opam_root ~root_dir f =
-  let saved = OpamStateConfig.((!r).root_dir) in
+  let saved = OpamStateConfig.(!r.root_dir) in
   OpamStateConfig.update ~root_dir ();
-  Fun.protect
-    ~finally:(fun () -> OpamStateConfig.update ~root_dir:saved ())
-    f
+  Fun.protect ~finally:(fun () -> OpamStateConfig.update ~root_dir:saved ()) f
 
 let ensure_installed ~fs (info : info) =
   if info.relocatable then
@@ -476,73 +474,77 @@ let ensure_installed ~fs (info : info) =
     Log.info (fun m ->
         m "Creating opam switch at %s with compiler %s and repositories: %s"
           switch_dir info.ocaml_version
-          (String.concat ","
-             (List.map OpamRepositoryName.to_string repo_names)));
+          (String.concat "," (List.map OpamRepositoryName.to_string repo_names)));
     with_opam_root ~root_dir (fun () ->
-      OpamGlobalState.with_ `Lock_write @@ fun gt ->
-      OpamRepositoryState.with_ `Lock_write gt @@ fun rt ->
-      (* Register each overlay's [packages/] dir as an opam repository
+        OpamGlobalState.with_ `Lock_write @@ fun gt ->
+        OpamRepositoryState.with_ `Lock_write gt @@ fun rt ->
+        (* Register each overlay's [packages/] dir as an opam repository
          and fetch its metadata into the opam root. Equivalent to
          [opam repository add NAME URL --root ROOT]. *)
-      let rt =
-        List.fold_left
-          (fun rt (name, url) ->
-            if OpamRepositoryName.Map.mem name rt.OpamStateTypes.repositories
-            then rt
-            else OpamRepositoryCommand.add rt name url None)
-          rt repos
-      in
-      let _failed, rt =
-        OpamRepositoryCommand.update_with_auto_upgrade rt repo_names
-      in
-      let switch = OpamSwitch.of_string switch_dir in
-      let invariant =
-        OpamSwitchCommand.guess_compiler_invariant ~repos:repo_names rt
-          [ info.ocaml_version ]
-      in
-      (* Equivalent to [opam switch create <switch_dir> <ocaml_version>
+        let rt =
+          List.fold_left
+            (fun rt (name, url) ->
+              if OpamRepositoryName.Map.mem name rt.OpamStateTypes.repositories
+              then rt
+              else OpamRepositoryCommand.add rt name url None)
+            rt repos
+        in
+        let _failed, rt =
+          OpamRepositoryCommand.update_with_auto_upgrade rt repo_names
+        in
+        let switch = OpamSwitch.of_string switch_dir in
+        let invariant =
+          OpamSwitchCommand.guess_compiler_invariant ~repos:repo_names rt
+            [ info.ocaml_version ]
+        in
+        (* Equivalent to [opam switch create <switch_dir> <ocaml_version>
          --repos ...]: opam resolves the compiler package (e.g.
          [ocaml-variants.5.2.0+ox]) and pulls in its transitive deps.
          External / local switch: passing an absolute path makes opam
          create the switch in-place at that path. The callback runs
          once the switch exists; [install_compiler] applies the
          invariant — i.e. installs the compiler family. *)
-      let (), st =
-        OpamSwitchCommand.create gt ~rt ~repos:repo_names
-          ~update_config:false ~invariant switch
-          (fun st -> ((), OpamSwitchCommand.install_compiler st ~ask:false))
-      in
-      (* Toolchain roots beyond the compiler (e.g. [ocamlfind],
+        let (), st =
+          OpamSwitchCommand.create gt ~rt ~repos:repo_names ~update_config:false
+            ~invariant switch (fun st ->
+              ((), OpamSwitchCommand.install_compiler st ~ask:false))
+        in
+        (* Toolchain roots beyond the compiler (e.g. [ocamlfind],
          [ocamlbuild], [dune]) aren't pulled in by the [invariant]
          alone — that's a compiler-only selector. Install them
          explicitly so the toolchain prefix carries the full set of
          binaries consumer builds expect on PATH. *)
-      let compiler_names =
-        [ "ocaml-variants"; "ocaml-base-compiler"; "ocaml-compiler"; "ocaml";
-          "oxcaml-compiler" ]
-      in
-      let extra_atoms =
-        OpamPackage.Name.Set.fold
-          (fun n acc ->
-            if List.mem (OpamPackage.Name.to_string n) compiler_names then acc
-            else (n, None) :: acc)
-          info.root_names []
-      in
-      let st =
-        if extra_atoms = [] then st
-        else begin
-          Log.info (fun m ->
-              m "Installing %d extra toolchain packages: %s"
-                (List.length extra_atoms)
-                (String.concat ", "
-                   (List.map (fun (n, _) -> OpamPackage.Name.to_string n)
-                      extra_atoms)));
-          OpamClient.install st extra_atoms
-        end
-      in
-      OpamSwitchState.drop st);
-    Eio.Path.save
-      ~create:(`Or_truncate 0o644)
+        let compiler_names =
+          [
+            "ocaml-variants";
+            "ocaml-base-compiler";
+            "ocaml-compiler";
+            "ocaml";
+            "oxcaml-compiler";
+          ]
+        in
+        let extra_atoms =
+          OpamPackage.Name.Set.fold
+            (fun n acc ->
+              if List.mem (OpamPackage.Name.to_string n) compiler_names then acc
+              else (n, None) :: acc)
+            info.root_names []
+        in
+        let st =
+          if extra_atoms = [] then st
+          else begin
+            Log.info (fun m ->
+                m "Installing %d extra toolchain packages: %s"
+                  (List.length extra_atoms)
+                  (String.concat ", "
+                     (List.map
+                        (fun (n, _) -> OpamPackage.Name.to_string n)
+                        extra_atoms)));
+            OpamClient.install st extra_atoms
+          end
+        in
+        OpamSwitchState.drop st);
+    Eio.Path.save ~create:(`Or_truncate 0o644)
       Eio.Path.(fs / ready_marker info)
       (Fmt.str "handle: %s\nocaml: %s\nhash: %s\n" info.handle
          info.ocaml_version info.hash);

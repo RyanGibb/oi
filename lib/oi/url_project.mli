@@ -26,8 +26,8 @@ type t = {
   extra_repos : Project.extra_repo list;
       (** URL entries from the URL project's [x-repos:] field. *)
   overlays : string list;
-      (** Reporepo handles from the URL project's [x-repos:] field
-          ([@HANDLE] form). *)
+      (** Reporepo handles from the URL project's [x-repos:] field ([@HANDLE]
+          form). *)
 }
 
 (** A single [--with=…] CLI token, classified. URLs are always tested first;

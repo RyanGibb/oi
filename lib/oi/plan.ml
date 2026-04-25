@@ -178,9 +178,7 @@ let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix
               match OpamFile.OPAM.extra_files opam with
               | None -> []
               | Some xs ->
-                  let pkg_source_dir =
-                    find_pkg_source_dir ~packages_dirs pkg
-                  in
+                  let pkg_source_dir = find_pkg_source_dir ~packages_dirs pkg in
                   List.filter_map
                     (fun (base, _hash) ->
                       let basename = OpamFilename.Base.to_string base in

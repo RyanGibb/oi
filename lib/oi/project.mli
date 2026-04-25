@@ -16,8 +16,8 @@ type t = {
   local_packages : string list;
       (** Names of *.opam files in the dir (without the [.opam] suffix). *)
   extra_repos : extra_repo list;
-      (** URL-form entries from [x-repos:] across all *.opam. Each is keyed
-          by a synthetic name derived from the URL's MD5, so duplicates dedup
+      (** URL-form entries from [x-repos:] across all *.opam. Each is keyed by a
+          synthetic name derived from the URL's MD5, so duplicates dedup
           naturally. Declared-order preserved. *)
   pins : pin list;
       (** Union of [pin-depends:] entries across all *.opam, in declared order.
@@ -33,5 +33,5 @@ val load : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> t
 (** [load ~fs dir] scans every [*.opam] file in [dir]. Raises
     {!Error.config_error} on malformed [x-repos:] values, on conflicting
     [extra_repos] (same URL synthetic-named, different URL — only possible on
-    hash collision), or on conflicting [pins] (same package name, different
-    URL or version). *)
+    hash collision), or on conflicting [pins] (same package name, different URL
+    or version). *)

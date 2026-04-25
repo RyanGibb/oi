@@ -23,8 +23,8 @@ val key :
   unit ->
   string option
 (** [key ~conf ~packages_dirs ~constraints ~names ?toolchain ()] is the MD5 hex
-    digest used as the cache key, or [None] if any [packages_dir] is not under
-    a git working tree (in which case the caller should skip both {!lookup} and
+    digest used as the cache key, or [None] if any [packages_dir] is not under a
+    git working tree (in which case the caller should skip both {!lookup} and
     {!store}).
 
     [?toolchain] folds the toolchain's full pinned set into the key — its pins
@@ -32,9 +32,9 @@ val key :
     consumer solves with the same names/constraints/packages_dirs but different
     toolchains would otherwise share an entry.
 
-    [git rev-parse HEAD] results are memoised process-wide by directory path,
-    so a run that solves many groups over the same set of overlays invokes git
-    once per directory. *)
+    [git rev-parse HEAD] results are memoised process-wide by directory path, so
+    a run that solves many groups over the same set of overlays invokes git once
+    per directory. *)
 
 val lookup : cache_root:string -> key:string -> OpamPackage.t list option
 (** [lookup ~cache_root ~key] returns the cached solution, or [None] on miss,

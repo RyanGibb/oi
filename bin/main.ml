@@ -188,8 +188,7 @@ let filter_compatible_overlays ~toolchain handles =
   | None -> handles
   | Some info ->
       let entries =
-        try Oi.Reporepo.load ~path:(reporepo_path ())
-        with Oi.Error.E _ -> []
+        try Oi.Reporepo.load ~path:(reporepo_path ()) with Oi.Error.E _ -> []
       in
       List.filter
         (fun h ->
@@ -1191,7 +1190,9 @@ let run_script ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
     if dep_names <> [] then begin
       let cache_root = Oi.Cache.root_s cache in
       let build_prefix = cache_root / "build" / "prefix" in
-      let ctx = Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf () in
+      let ctx =
+        Oi.Opam_ctx.create ~prefix:build_prefix ~packages_dirs ~conf ()
+      in
       let pkgs =
         match
           Oi.Solve.solve ~fs ~cache_root ctx ~packages_dirs ~constraints
@@ -1375,7 +1376,8 @@ let run_cmd =
         in
         match tc_bin with
         | Some p ->
-            Logs.info (fun m -> m "Found %s in toolchain prefix: %s" binary_name p);
+            Logs.info (fun m ->
+                m "Found %s in toolchain prefix: %s" binary_name p);
             exit (run_exec proc_mgr ~env:(env_vars ()) (p :: args))
         | None ->
             (* List what binaries are available in the prefix *)
@@ -1527,9 +1529,8 @@ let run_cmd =
                  lying through an unparsed [@handle/...] string. *)
               Logs.info (fun m ->
                   m "Index: bin/%s provided by package %s" binary_name pkg_name);
-              try_step
-                (Fmt.str "solve %s" pkg_name)
-                (fun () -> solve_assemble_run_with [ pkg_name ])
+              try_step (Fmt.str "solve %s" pkg_name) (fun () ->
+                  solve_assemble_run_with [ pkg_name ])
           | _ -> false
         in
         if not from_index then begin
@@ -1563,9 +1564,8 @@ let run_cmd =
             let found =
               List.exists
                 (fun name ->
-                  try_step
-                    (Fmt.str "solve %s (dash-prefix)" name)
-                    (fun () -> solve_assemble_run_with [ name ]))
+                  try_step (Fmt.str "solve %s (dash-prefix)" name) (fun () ->
+                      solve_assemble_run_with [ name ]))
                 prefixes
             in
             if not found then
@@ -1671,9 +1671,8 @@ let run_cmd =
           `P
             "Add $(b,x-repos: [\"@HANDLE\"]) inside an opam file to make the \
              overlay apply automatically to every $(b,oi) command run in that \
-             project. The same field also accepts plain repository URLs as \
-             an unpinned escape hatch; a leading $(b,@) marks reporepo \
-             handles.";
+             project. The same field also accepts plain repository URLs as an \
+             unpinned escape hatch; a leading $(b,@) marks reporepo handles.";
           `S "GIT URLS";
           `P
             "Passing $(b,--with=URL) clones the repository and treats every \
@@ -1925,11 +1924,11 @@ let show_repositories ?toolchain ~with_repos () =
       | Some (e : Oi.Reporepo.entry) ->
           let url = if e.commit = "" then e.url else e.url ^ "#" ^ e.commit in
           Some (h, e.version, url)
-      | None ->
+      | None -> (
           (* Toolchain overlay: not in reporepo, but we know its URL. *)
           match Oi.Toolchain.url_of ~handle:h with
           | Some url -> Some (h, "builtin", url)
-          | None -> None)
+          | None -> None))
     ordered
 
 (* Render the default succinct info page. *)
@@ -2405,7 +2404,9 @@ let env_cmd =
         assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
       end
     in
-    let vars = Oi.Prefix.env_vars ?toolchain:tc_ctx ~prefix ~dune_cache_root () in
+    let vars =
+      Oi.Prefix.env_vars ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
+    in
     let current_path =
       try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin"
     in
@@ -2434,8 +2435,8 @@ let env_cmd =
           `Pre "  eval \"\\$(oi env)\"";
           `P
             "Implicitly syncs first if $(b,_oi/prefix/) is missing or stale. \
-             Passing $(b,--with), $(b,--with-repo), or $(b,--toolchain) \
-             forces a re-sync with those extras folded in.";
+             Passing $(b,--with), $(b,--with-repo), or $(b,--toolchain) forces \
+             a re-sync with those extras folded in.";
         ]
   in
   Cmd.v info
@@ -2834,25 +2835,25 @@ let search_cmd =
           `S Manpage.s_description;
           `P
             "Look up $(b,PATTERN) across the local layer cache, the remote \
-             registry, and every reporepo overlay's package list. One row \
-             per match.";
+             registry, and every reporepo overlay's package list. One row per \
+             match.";
           `S "COLUMNS";
           `I
             ( "$(b,KIND)",
-              "$(b,bin) (binary in some layer's $(b,fs/bin/)) or \
-               $(b,pkg) (opam metadata)." );
+              "$(b,bin) (binary in some layer's $(b,fs/bin/)) or $(b,pkg) \
+               (opam metadata)." );
           `I
             ( "$(b,OVERLAY)",
-              "$(b,@handle) the match came from, or $(b,-) for \
-               pin-depends / untagged layers." );
+              "$(b,@handle) the match came from, or $(b,-) for pin-depends / \
+               untagged layers." );
           `I
             ( "$(b,NAME.VERSION)",
               "Package, with the binary name prefixed for $(b,bin) rows." );
           `I ("$(b,HASH)", "Short layer hash.");
           `I
             ( "$(b,STATE)",
-              "$(b,local) (cached), $(b,remote) (fetchable), or \
-               $(b,declared) (metadata only, no build)." );
+              "$(b,local) (cached), $(b,remote) (fetchable), or $(b,declared) \
+               (metadata only, no build)." );
           `S "OPTIONS";
           `I
             ( "$(b,--all-versions)",
@@ -3106,14 +3107,14 @@ let sync_cmd =
         [
           `S Manpage.s_description;
           `P
-            "Solve the $(b,*.opam) files in the current directory, install \
-             the resulting packages into $(b,_oi/prefix/), and write \
-             $(b,.envrc) for $(b,direnv).";
+            "Solve the $(b,*.opam) files in the current directory, install the \
+             resulting packages into $(b,_oi/prefix/), and write $(b,.envrc) \
+             for $(b,direnv).";
           `P
             "Activate by running $(b,direnv allow), sourcing $(b,.envrc), or \
              $(b,eval \"\\$(oi env)\"). $(b,oi exec) auto-syncs when the \
-             prefix is missing or older than any $(b,*.opam); explicit \
-             $(b,oi sync) is for after a manifest edit.";
+             prefix is missing or older than any $(b,*.opam); explicit $(b,oi \
+             sync) is for after a manifest edit.";
           `S "DEV TOOLS";
           `P
             "Sync also installs editor tooling into $(b,_oi/tools/bin/), \
@@ -3140,8 +3141,8 @@ let sync_cmd =
           `I ("$(b,-j N)", "Cap parallel builds (default 4).");
           `I
             ( "$(b,--refresh)",
-              "Force-refetch repos, pins, and URL clones. Caches refresh \
-               on their own after 24h." );
+              "Force-refetch repos, pins, and URL clones. Caches refresh on \
+               their own after 24h." );
         ]
   in
   Cmd.v info
@@ -3266,17 +3267,17 @@ let add_cmd =
         [
           `S Manpage.s_description;
           `P
-            "Bring $(b,PKG) into the current project in four steps: solve \
-             with $(b,PKG) added; if the solve succeeds, edit \
-             $(b,dune-project); run $(b,dune build) so dune regenerates \
-             $(b,*.opam); re-sync to reconcile the prefix.";
+            "Bring $(b,PKG) into the current project in four steps: solve with \
+             $(b,PKG) added; if the solve succeeds, edit $(b,dune-project); \
+             run $(b,dune build) so dune regenerates $(b,*.opam); re-sync to \
+             reconcile the prefix.";
           `P
-            "Failed solves leave the tree untouched, so $(b,oi add) doubles \
-             as a compatibility probe.";
+            "Failed solves leave the tree untouched, so $(b,oi add) doubles as \
+             a compatibility probe.";
           `P
             "Requires $(b,\\(generate_opam_files\\)) in $(b,dune-project). \
-             Pass $(b,-p NAME) to pick a stanza when the project declares \
-             more than one package.";
+             Pass $(b,-p NAME) to pick a stanza when the project declares more \
+             than one package.";
         ]
   in
   Cmd.v info
@@ -3299,15 +3300,13 @@ let exec_cmd =
     (* Any --with-repo / --with / --toolchain flag forces a re-sync
        even if the prefix is fresh, so the extras and toolchain make
        it into the build. *)
-    let forced =
-      with_repos <> [] || with_deps <> [] || toolchain <> None
-    in
+    let forced = with_repos <> [] || with_deps <> [] || toolchain <> None in
     if forced || needs_sync ~cwd ~prefix then begin
       Logs.info (fun m -> m "Syncing %s before exec" cwd);
       ignore
         (do_sync ~quiet:true ~refresh ~with_repos ~with_deps ?jobs ?toolchain
-           ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
-           ~cwd ())
+           ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
+           ~registry ~cwd ())
     end;
     let tools = tools_dir_for ~cwd in
     let conf = make_conf ~platform in
@@ -3344,12 +3343,13 @@ let exec_cmd =
           `P
             "Run $(b,CMD) in the same environment $(b,oi sync) sets up: \
              $(b,_oi/prefix/bin) first on $(b,PATH), OCaml env vars pointing \
-             at the prefix, dev tools ($(b,ocamlformat), $(b,ocaml-lsp-server), \
-             $(b,odoc), $(b,merlin), $(b,mdx)) on $(b,PATH).";
+             at the prefix, dev tools ($(b,ocamlformat), \
+             $(b,ocaml-lsp-server), $(b,odoc), $(b,merlin), $(b,mdx)) on \
+             $(b,PATH).";
           `P
             "Auto-syncs first when the prefix is missing or older than any \
-             $(b,*.opam). $(b,--with), $(b,--with-repo), and \
-             $(b,--toolchain) force a re-sync.";
+             $(b,*.opam). $(b,--with), $(b,--with-repo), and $(b,--toolchain) \
+             force a re-sync.";
           `Pre
             "  oi exec dune build\n\
             \  oi exec -- ocamlformat --check .\n\
@@ -3385,15 +3385,12 @@ let config_cmd =
     List.iter
       (fun (s : Oi.Toolchain.summary) ->
         let url_with_ref =
-          match s.ref_ with
-          | Some r -> Fmt.str "%s#%s" s.url r
-          | None -> s.url
+          match s.ref_ with Some r -> Fmt.str "%s#%s" s.url r | None -> s.url
         in
         let mode_tag =
           if s.relocatable then
             Fmt.str "[%a]" Fmt.(styled `Green string) "relocatable"
-          else
-            Fmt.str "[%a]" Fmt.(styled `Yellow string) "fixed-prefix"
+          else Fmt.str "[%a]" Fmt.(styled `Yellow string) "fixed-prefix"
         in
         Fmt.pr "  %a  %s  %s@,"
           Fmt.(styled `Bold string)
@@ -3403,22 +3400,21 @@ let config_cmd =
         Fmt.pr "    roots:      %s@," (String.concat ", " s.roots);
         if s.relocatable then ()
         else
-        match s.installs with
-        | [] ->
-            Fmt.pr "    status:     %a@,"
-              Fmt.(styled `Faint string)
-              "not installed"
-        | xs ->
-            List.iter
-              (fun (path, ready) ->
-                let status =
-                  if ready then
-                    Fmt.str "%a" Fmt.(styled `Green string) "ready"
-                  else
-                    Fmt.str "%a" Fmt.(styled `Yellow string) "partial"
-                in
-                Fmt.pr "    install:    %s  %s@," status path)
-              xs)
+          match s.installs with
+          | [] ->
+              Fmt.pr "    status:     %a@,"
+                Fmt.(styled `Faint string)
+                "not installed"
+          | xs ->
+              List.iter
+                (fun (path, ready) ->
+                  let status =
+                    if ready then
+                      Fmt.str "%a" Fmt.(styled `Green string) "ready"
+                    else Fmt.str "%a" Fmt.(styled `Yellow string) "partial"
+                  in
+                  Fmt.pr "    install:    %s  %s@," status path)
+                xs)
       (Oi.Toolchain.available ());
     Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Base overlays (from reporepo)";
     let base = Oi.Reporepo.base_entries () in
@@ -3502,8 +3498,8 @@ let config_cmd =
              stop when a solve behaves unexpectedly.";
           `I
             ( "$(b,Platform)",
-              "OS, arch, distribution. The solve picks different packages \
-               per platform — check here first when the result surprises." );
+              "OS, arch, distribution. The solve picks different packages per \
+               platform — check here first when the result surprises." );
           `I
             ( "$(b,Directories)",
               "Cache and data directories in use. $(b,OI_CACHE_DIR) and \
@@ -3520,9 +3516,9 @@ let config_cmd =
                existing installs under \\$XDG_CACHE_HOME/oi/toolchains." );
           `I
             ( "$(b,Project extras)",
-              "Any $(b,x-repos:) and $(b,pin-depends:) entries declared in \
-               the current directory's $(b,*.opam) files. Only shown when at \
-               least one is present." );
+              "Any $(b,x-repos:) and $(b,pin-depends:) entries declared in the \
+               current directory's $(b,*.opam) files. Only shown when at least \
+               one is present." );
           `I
             ( "$(b,Dev tools)",
               "The editor and documentation tools that the next $(b,oi sync) \
@@ -3661,26 +3657,26 @@ let clean_cmd =
           `S Manpage.s_description;
           `P
             "Remove rebuildable cache data. With no flags, lists each \
-             category, its disk usage, and the flag that deletes it. Flags \
-             are additive — $(b,oi clean --sources --layers) is fine. \
-             Nothing under a project's $(b,_oi/) is touched.";
+             category, its disk usage, and the flag that deletes it. Flags are \
+             additive — $(b,oi clean --sources --layers) is fine. Nothing \
+             under a project's $(b,_oi/) is touched.";
           `I
             ( "$(b,--toolchains)",
-              "Fixed-prefix toolchain installs (oxcaml). Rebuilt on next \
-               use." );
+              "Fixed-prefix toolchain installs (oxcaml). Rebuilt on next use."
+            );
           `I
             ( "$(b,--sources)",
-              "Cached source tarballs and pin source clones. Re-fetched \
-               from upstream on next solve." );
+              "Cached source tarballs and pin source clones. Re-fetched from \
+               upstream on next solve." );
           `I
             ( "$(b,--layers)",
-              "Pre-built binary layer cache and per-script build dirs. \
-               Forces source rebuilds on next $(b,oi run)." );
+              "Pre-built binary layer cache and per-script build dirs. Forces \
+               source rebuilds on next $(b,oi run)." );
           `I ("$(b,--dune)", "Dune's shared build cache.");
           `I
             ( "$(b,--repos)",
-              "Reporepo overlay clones and $(b,--with-repo) extras. \
-               Re-cloned on next solve." );
+              "Reporepo overlay clones and $(b,--with-repo) extras. Re-cloned \
+               on next solve." );
           `I
             ( "$(b,--all)",
               "Every category above, plus the assembled-prefix cache and \
@@ -4652,9 +4648,7 @@ let registry_build_cmd =
       match Hashtbl.find_opt resolved_toolchains handle with
       | Some i -> i
       | None ->
-          let info =
-            Oi.Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle
-          in
+          let info = Oi.Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle in
           Oi.Toolchain.ensure_installed ~fs info;
           Hashtbl.add resolved_toolchains handle info;
           info
@@ -4662,7 +4656,7 @@ let registry_build_cmd =
     let toolchain_for_handles handles =
       match toolchain_override with
       | Some h -> Some (resolve_toolchain h)
-      | None ->
+      | None -> (
           let names =
             List.filter_map
               (fun h ->
@@ -4672,7 +4666,7 @@ let registry_build_cmd =
               handles
             |> List.sort_uniq String.compare
           in
-          (match names with
+          match names with
           | [] -> None
           | [ n ] -> Some (resolve_toolchain n)
           | many ->
@@ -4995,7 +4989,8 @@ let registry_build_cmd =
         in
         let sorted_pkgs =
           Oi.Solve.topo_sort ~packages_dirs:pkg_dirs
-            ~conf:(Oi.Opam_ctx.conf group_ctx) merged_pkgs
+            ~conf:(Oi.Opam_ctx.conf group_ctx)
+            merged_pkgs
         in
         if n_groups > 1 then
           Log.info (fun m ->
@@ -5296,8 +5291,8 @@ let registry_build_cmd =
           `S Manpage.s_description;
           `P
             "Solve, compile, and cache every target. Use to prime a cache \
-             before $(b,oi registry export). Multiple targets share solves \
-             and dedup work — cheaper than a loop.";
+             before $(b,oi registry export). Multiple targets share solves and \
+             dedup work — cheaper than a loop.";
           `P
             "Per-group toolchain auto-derives from each overlay's \
              $(b,x-oi-toolchain) tag. $(b,--toolchain=NAME) overrides for \
@@ -5917,14 +5912,16 @@ let pp_toolchain_target ppf (e : Oi.Reporepo.entry) =
 
 let pp_commit ppf commit =
   let short =
-    if commit = "" then "" else String.sub commit 0 (min 7 (String.length commit))
+    if commit = "" then ""
+    else String.sub commit 0 (min 7 (String.length commit))
   in
   Fmt.(styled `Faint string) ppf short
 
 let print_entry_oneline ~tc_w (e : Oi.Reporepo.entry) =
   pp_padded_to ~width:24 ~visible:(String.length e.handle) pp_handle e;
   Fmt.pr "  %-16s  " e.version;
-  pp_padded_to ~width:8 ~visible:(min 7 (String.length e.commit))
+  pp_padded_to ~width:8
+    ~visible:(min 7 (String.length e.commit))
     pp_commit e.commit;
   Fmt.pr "  ";
   pp_padded_to ~width:tc_w ~visible:(toolchain_width e) pp_toolchain_target e;
@@ -5937,8 +5934,8 @@ type upstream_status =
   | Stale of string  (** Upstream tip differs; carries its 40-char sha. *)
   | Unknown  (** [git ls-remote] failed (offline, auth, moved URL…). *)
   | Definition_only
-      (** Entry has no [url:] (toolchain definition / metadata-only): nothing
-          to check upstream. *)
+      (** Entry has no [url:] (toolchain definition / metadata-only): nothing to
+          check upstream. *)
 
 let short_sha s = String.sub s 0 (min 7 (String.length s))
 
@@ -5974,12 +5971,14 @@ let status_visible_width = function
 let print_entry_with_upstream ~tc_w (e : Oi.Reporepo.entry) status =
   pp_padded_to ~width:24 ~visible:(String.length e.handle) pp_handle e;
   Fmt.pr "  %-16s  " e.version;
-  pp_padded_to ~width:8 ~visible:(min 7 (String.length e.commit))
+  pp_padded_to ~width:8
+    ~visible:(min 7 (String.length e.commit))
     pp_commit e.commit;
   Fmt.pr "  ";
   pp_padded_to ~width:tc_w ~visible:(toolchain_width e) pp_toolchain_target e;
   Fmt.pr "  ";
-  pp_padded_to ~width:28 ~visible:(status_visible_width status)
+  pp_padded_to ~width:28
+    ~visible:(status_visible_width status)
     pp_status_tag status;
   Fmt.pr "  %a@." Fmt.(styled `Faint string) e.url
 
@@ -6008,7 +6007,8 @@ let repo_list_cmd =
         let tc_w =
           List.fold_left
             (fun w e -> max w (toolchain_width e))
-            (String.length "toolchain") latest_entries
+            (String.length "toolchain")
+            latest_entries
         in
         if no_check then List.iter (print_entry_oneline ~tc_w) latest_entries
         else begin
@@ -6043,16 +6043,14 @@ let repo_list_cmd =
           `P
             "One line per overlay handle: pinned commit, toolchain target \
              (from $(b,x-oi-toolchain)), upstream-status tag, source URL.";
-          `P
-            "Status is computed by $(b,git ls-remote) (four in parallel):";
-          `I
-            ("$(b,up-to-date)", "Pinned commit matches the upstream branch.");
+          `P "Status is computed by $(b,git ls-remote) (four in parallel):";
+          `I ("$(b,up-to-date)", "Pinned commit matches the upstream branch.");
           `I ("$(b,stale)", "Upstream has moved past the pin.");
           `I ("$(b,unreachable)", "Remote could not be contacted.");
           `I
             ( "$(b,toolchain)",
-              "Definition-only entry (no own URL); composes other overlays \
-               via $(b,depends:)." );
+              "Definition-only entry (no own URL); composes other overlays via \
+               $(b,depends:)." );
           `P
             "$(b,oi repo bump HANDLE) fast-forwards a stale entry. \
              $(b,--no-check) skips the network round trip.";
@@ -6162,11 +6160,11 @@ let toolchain_repo_term =
           "Tag this overlay with a builtin toolchain (e.g. $(b,oxcaml), \
            $(b,ocaml-5.4), $(b,ocaml-5.5)). The choice is recorded as \
            $(b,x-oi-toolchain) in the overlay's opam file and changes how \
-           $(b,oi repo bump) computes the auto-injected base depends: \
-           instead of pinning the default $(b,relocatable)/$(b,default) \
-           pair, it pins whatever overlays the named toolchain itself \
-           layers under. Pass $(b,--toolchain=oxcaml) to mark an overlay \
-           as oxcaml-targeted and lock it against $(b,default) only."
+           $(b,oi repo bump) computes the auto-injected base depends: instead \
+           of pinning the default $(b,relocatable)/$(b,default) pair, it pins \
+           whatever overlays the named toolchain itself layers under. Pass \
+           $(b,--toolchain=oxcaml) to mark an overlay as oxcaml-targeted and \
+           lock it against $(b,default) only."
         [ "toolchain" ])
 
 (* Look up a builtin toolchain's [depends] for use as [~base_handles]
@@ -6258,16 +6256,18 @@ let repo_add_cmd =
             "Register $(b,HANDLE) in the reporepo, pinned to the current \
              commit on $(b,URL)'s default branch (or $(b,--ref BRANCH)).";
           `P
-            "Non-base overlays auto-record dependencies on the current \
-             latest $(b,default) and $(b,relocatable) versions, so the new \
-             overlay travels with the base set it was built against. \
-             $(b,--toolchain=NAME) instead pins the toolchain's own base \
-             set (e.g. $(b,oxcaml) → just $(b,default)).";
+            "Non-base overlays auto-record dependencies on the current latest \
+             $(b,default) and $(b,relocatable) versions, so the new overlay \
+             travels with the base set it was built against. \
+             $(b,--toolchain=NAME) instead pins the toolchain's own base set \
+             (e.g. $(b,oxcaml) → just $(b,default)).";
           `S Manpage.s_examples;
           `Pre
             "  oi repo add default https://github.com/ocaml/opam-repository.git\n\
-            \  oi repo add relocatable https://github.com/dra27/opam-repository.git --ref relocatable\n\
-            \  oi repo add avsm https://tangled.org/anil.recoil.org/aoah-opam-repo.git";
+            \  oi repo add relocatable \
+             https://github.com/dra27/opam-repository.git --ref relocatable\n\
+            \  oi repo add avsm \
+             https://tangled.org/anil.recoil.org/aoah-opam-repo.git";
         ]
   in
   Cmd.v info
@@ -6301,8 +6301,7 @@ let repo_bump_cmd =
       | Some _ -> toolchain
       | None ->
           let entries = Oi.Reporepo.load ~path:reporepo in
-          Stdlib.Option.bind
-            (Oi.Reporepo.latest entries ~handle)
+          Stdlib.Option.bind (Oi.Reporepo.latest entries ~handle)
             (fun (e : Oi.Reporepo.entry) -> e.toolchain)
     in
     let base_handles = base_handles_of_toolchain effective_toolchain in
@@ -6340,19 +6339,19 @@ let repo_bump_cmd =
         [
           `S Manpage.s_description;
           `P
-            "Re-fetch the upstream commit on $(b,HANDLE)'s tracked branch \
-             and record it as a new $(b,YYYYMMDD.N) entry. Old entries stay \
-             in place — the reporepo keeps a git-like timeline you can \
-             roll back to.";
+            "Re-fetch the upstream commit on $(b,HANDLE)'s tracked branch and \
+             record it as a new $(b,YYYYMMDD.N) entry. Old entries stay in \
+             place — the reporepo keeps a git-like timeline you can roll back \
+             to.";
           `P
-            "Idempotent: prints $(b,No change) when the upstream commit, \
-             URL, branch, toolchain tag, and deps still match the previous \
-             entry. Safe to run from cron or a pre-commit hook.";
+            "Idempotent: prints $(b,No change) when the upstream commit, URL, \
+             branch, toolchain tag, and deps still match the previous entry. \
+             Safe to run from cron or a pre-commit hook.";
           `P
             "Non-base overlays also re-lock against the current latest \
-             $(b,default)/$(b,relocatable) on each bump (or, when the \
-             overlay declares $(b,x-oi-toolchain), against that toolchain's \
-             own base set). $(b,--depend) overrides the auto-injected pins.";
+             $(b,default)/$(b,relocatable) on each bump (or, when the overlay \
+             declares $(b,x-oi-toolchain), against that toolchain's own base \
+             set). $(b,--depend) overrides the auto-injected pins.";
         ]
   in
   Cmd.v info
@@ -6613,32 +6612,32 @@ let repo_cmd =
         [
           `S Manpage.s_description;
           `P
-            "A $(i,reporepo) is a directory of pinned opam-repository \
-             commits. Each entry ($(i,handle)) names somebody's package set \
-             and pins it to a git commit. The reporepo also defines the \
-             toolchains $(b,--toolchain=NAME) accepts (entries with \
+            "A $(i,reporepo) is a directory of pinned opam-repository commits. \
+             Each entry ($(i,handle)) names somebody's package set and pins it \
+             to a git commit. The reporepo also defines the toolchains \
+             $(b,--toolchain=NAME) accepts (entries with \
              $(b,x-oi-toolchain-name)).";
           `P
             "Handles are short aliases. $(b,oi run @avsm/irmin) takes \
              $(b,irmin) from avsm's overlay; $(b,oi run --with-repo=avsm) \
              pulls the whole overlay into the solve. In an opam file, \
-             $(b,x-repos: [\"@avsm\"]) does the same automatically; the \
-             field also accepts raw URLs as an unpinned escape hatch.";
+             $(b,x-repos: [\"@avsm\"]) does the same automatically; the field \
+             also accepts raw URLs as an unpinned escape hatch.";
           `P
-            "On a new machine, the first $(b,oi repo) command auto-clones \
-             the upstream reporepo. After that, the working copy is yours \
-             to edit, commit, and push. Typical workflow: $(b,oi repo bump) \
-             to pick up upstream commits, then $(b,oi repo push) to share.";
+            "On a new machine, the first $(b,oi repo) command auto-clones the \
+             upstream reporepo. After that, the working copy is yours to edit, \
+             commit, and push. Typical workflow: $(b,oi repo bump) to pick up \
+             upstream commits, then $(b,oi repo push) to share.";
           `P
-            "$(b,oi repo bump) is idempotent — prints $(b,No change) when \
-             the upstream commit already matches, so it's safe under cron \
-             or a pre-commit hook.";
+            "$(b,oi repo bump) is idempotent — prints $(b,No change) when the \
+             upstream commit already matches, so it's safe under cron or a \
+             pre-commit hook.";
           `S "FILES";
           `I
             ( "$(b,\\$OI_REPOREPO) (default: $(b,\\$OI_DATA_DIR/reporepo))",
               "Local git working copy. First $(b,oi repo) subcommand runs \
-               $(b,git clone \\$OI_REPOREPO_URL \\$OI_REPOREPO). $(b,cd) \
-               in to edit by hand." );
+               $(b,git clone \\$OI_REPOREPO_URL \\$OI_REPOREPO). $(b,cd) in to \
+               edit by hand." );
           `S "EXAMPLE WORKFLOW";
           `Pre
             "  oi repo list                 # auto-clones on first use\n\

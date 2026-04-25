@@ -46,7 +46,8 @@ type entry = {
   commit : string;  (** Empty when [url] is empty. *)
   ref_ : string option;
   toolchain : string option;
-      (** [x-oi-toolchain]: this overlay was built against the named toolchain. *)
+      (** [x-oi-toolchain]: this overlay was built against the named toolchain.
+      *)
   toolchain_name : string option;
       (** [x-oi-toolchain-name]: when set, this entry DEFINES a toolchain with
           the given CLI name (e.g. ["oxcaml"], ["ocaml-5.4"]). The reporepo
@@ -62,9 +63,9 @@ type entry = {
           fixed-prefix. [None] for non-toolchain entries. *)
   toolchain_roots : string list list;
       (** [x-oi-toolchain-roots]: solver root specs for the toolchain. Same
-          shape as [x-root-packages]: each top-level entry is one solve
-          group, either a bare string (singleton) or a nested list of
-          strings (multi-package group). *)
+          shape as [x-root-packages]: each top-level entry is one solve group,
+          either a bare string (singleton) or a nested list of strings
+          (multi-package group). *)
   depends : (string * string option) list;
   root_packages : string list list;
   opam_path : string;
@@ -349,8 +350,7 @@ let parse_entry_file path : entry option =
       in
       if url_bare = "" && toolchain_name = None then
         Error.config_error
-          "%s: entry needs either a [url:] block or [x-oi-toolchain-name]"
-          path;
+          "%s: entry needs either a [url:] block or [x-oi-toolchain-name]" path;
       let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
       let ref_ = read_string_extension extensions "x-oi-ref" in
       let toolchain = read_string_extension extensions "x-oi-toolchain" in
@@ -364,8 +364,8 @@ let parse_entry_file path : entry option =
             match v.OpamParserTypes.FullPos.pelem with
             | OpamParserTypes.FullPos.Bool b -> Some b
             | _ ->
-                Error.config_error
-                  "%s: x-oi-relocatable must be a boolean" path)
+                Error.config_error "%s: x-oi-relocatable must be a boolean" path
+            )
       in
       let toolchain_roots =
         read_root_packages_extension ~path extensions "x-oi-toolchain-roots"
@@ -618,8 +618,7 @@ let parse_ls_remote_output out =
 let try_ls_remote ~sys url args =
   try
     Retry.with_attempts ~label:(Fmt.str "git ls-remote %s" url) (fun () ->
-        D10.Sysops.Cmd.run_out_quiet sys
-          ("git" :: "ls-remote" :: url :: args))
+        D10.Sysops.Cmd.run_out_quiet sys ("git" :: "ls-remote" :: url :: args))
   with exn ->
     Error.config_error "git ls-remote %s failed: %s" url
       (Printexc.to_string exn)
@@ -796,7 +795,6 @@ let default_synopsis handle = "Overlay: " ^ handle ^ " — pinned opam repositor
    substitutes the toolchain's own base set instead, so e.g. an
    [oxcaml]-targeted overlay only depends on [default]. *)
 let is_base_handle h = h = "default" || h = "relocatable"
-
 let default_base_handles = [ "relocatable"; "default" ]
 
 let auto_base_depends entries ~handle ~base_handles =
@@ -899,7 +897,7 @@ let bump ~fs ~sys ~path ~handle ?url ?ref_ ?toolchain ?base_handles ?depends
   let depends =
     match depends with
     | Some d -> d
-    | None ->
+    | None -> (
         if is_base_handle handle then prev.depends
         else
           match base_handles with
@@ -909,7 +907,7 @@ let bump ~fs ~sys ~path ~handle ?url ?ref_ ?toolchain ?base_handles ?depends
                 auto_base_depends entries ~handle
                   ~base_handles:default_base_handles
               in
-              if auto = [] then prev.depends else auto
+              if auto = [] then prev.depends else auto)
   in
   (* When [--root-packages] wasn't passed, carry the previous list through
      untouched. Explicitly pass [~root_packages:[]] to clear it. *)
