@@ -57,16 +57,16 @@ type info = {
       *)
 }
 
-val opam_ctx_of_info : info -> Opam_ctx.toolchain
-(** Project a {!info} down to the {!Opam_ctx.toolchain} subset that
-    [Opam_ctx.create] / [Solve.solve] / [Prefix.make_env] need. Single source of
+val opam_ctx_of_info : info -> Solver.Ctx.toolchain
+(** Project a {!info} down to the {!Solver.Ctx.toolchain} subset that
+    [Solver.Ctx.create] / [Solver.solve] / [Prefix.make_env] need. Single source of
     truth for the conversion, used by all the CLI commands that thread a
     toolchain through. *)
 
-val apply_conf : info option -> Opam_ctx.conf -> Opam_ctx.conf
+val apply_conf : info option -> Solver.Ctx.conf -> Solver.Ctx.conf
 (** [apply_conf info conf] is [conf] with [ocaml_version] replaced by the
     toolchain's solved version when [info] is set, unchanged otherwise.
-    Consumers that thread an [Opam_ctx.conf] through to a solve / build need
+    Consumers that thread an [Solver.Ctx.conf] through to a solve / build need
     this so [ocaml:version] resolves to the toolchain's compiler. *)
 
 val default_root : unit -> string
@@ -77,7 +77,7 @@ val resolve :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   sys:D10.Sysops.t ->
   data_dir:string ->
-  conf:Opam_ctx.conf ->
+  conf:Solver.Ctx.conf ->
   handle:string ->
   info
 (** Look up [handle] (the CLI toolchain name) in the reporepo: find the latest

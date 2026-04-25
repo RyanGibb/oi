@@ -12,20 +12,20 @@
 type entry = { pkg : OpamPackage.t; sys_pkgs : OpamSysPkg.Set.t }
 
 val compute :
-  Opam_ctx.t -> packages_dirs:string list -> OpamPackage.t list -> entry list
+  Solver.Ctx.t -> packages_dirs:string list -> OpamPackage.t list -> entry list
 (** [compute ctx ~packages_dirs solved] returns one [entry] per opam package in
     [solved] that contributes at least one depext on the current platform. Order
     matches [solved]. Packages with no active depext are dropped. *)
 
 val compute_for_conf :
-  conf:Opam_ctx.conf ->
+  conf:Solver.Ctx.conf ->
   packages_dirs:string list ->
   OpamPackage.t list ->
   entry list
 (** [compute_for_conf ~conf ~packages_dirs solved] is like {!compute} but
     evaluates depext filters against a synthetic [conf] rather than the platform
     the host opam state picked up. Intended for cross-platform queries such as
-    "what would the depexts be on alpine?" without rebuilding an {!Opam_ctx.t}.
+    "what would the depexts be on alpine?" without rebuilding an {!Solver.Ctx.t}.
 *)
 
 (** {1 Host installation status} *)

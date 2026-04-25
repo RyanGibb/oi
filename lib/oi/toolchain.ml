@@ -28,7 +28,7 @@ type info = {
 let ready_marker info = info.install_prefix / ".oi-toolchain-ready"
 let is_ready info = info.relocatable || Sys.file_exists (ready_marker info)
 
-let opam_ctx_of_info (info : info) : Opam_ctx.toolchain =
+let opam_ctx_of_info (info : info) : Solver.Ctx.toolchain =
   {
     install_prefix = info.install_prefix;
     hash = info.hash;
@@ -37,7 +37,7 @@ let opam_ctx_of_info (info : info) : Opam_ctx.toolchain =
     root_names = info.root_names;
   }
 
-let apply_conf info (conf : Opam_ctx.conf) =
+let apply_conf info (conf : Solver.Ctx.conf) =
   match info with
   | None -> conf
   | Some (i : info) -> { conf with ocaml_version = i.ocaml_version }
@@ -47,16 +47,7 @@ let apply_conf info (conf : Opam_ctx.conf) =
 (* Toolchains live under $XDG_CACHE_HOME so they sit alongside the rest
    of oi's cache. User said explicitly: use XDG_CACHE_HOME, not
    /opt-style system paths. *)
-let default_root () =
-  let base =
-    match Sys.getenv_opt "XDG_CACHE_HOME" with
-    | Some v when v <> "" -> v
-    | _ -> (
-        match Sys.getenv_opt "HOME" with
-        | Some h -> h / ".cache"
-        | None -> "/tmp")
-  in
-  base / "oi" / "toolchains"
+let default_root = Cache.toolchains_root
 
 (* -- Reporepo-backed toolchain discovery ------------------------------ *)
 
@@ -72,9 +63,9 @@ let default_root () =
    list is a real possibility on a fresh machine where the reporepo
    hasn't been cloned yet — the caller decides whether that's fatal. *)
 let load_entries () =
-  let path = Reporepo.env_path () in
+  let path = Source.Reporepo.env_path () in
   if not (Sys.file_exists path) then []
-  else try Reporepo.load ~path with Error.E _ -> []
+  else try Source.Reporepo.load ~path with Error.E _ -> []
 
 (* Find the latest reporepo entry that defines a toolchain with CLI
    name [name]. Multiple reporepo handles defining the same CLI name
@@ -83,7 +74,7 @@ let find_entry_by_toolchain_name ~name =
   let entries = load_entries () in
   let handles =
     entries
-    |> List.filter_map (fun (e : Reporepo.entry) ->
+    |> List.filter_map (fun (e : Source.Reporepo.entry) ->
         match e.toolchain_name with
         | Some n when n = name -> Some e.handle
         | _ -> None)
@@ -91,7 +82,7 @@ let find_entry_by_toolchain_name ~name =
   in
   match handles with
   | [] -> None
-  | [ h ] -> Reporepo.latest entries ~handle:h
+  | [ h ] -> Source.Reporepo.latest entries ~handle:h
   | _ ->
       Error.config_error
         "multiple reporepo handles define toolchain %S: %s — fix by removing \
@@ -112,7 +103,7 @@ let url_of ~handle =
       | [] -> None
       | (h, _) :: _ -> (
           let entries = load_entries () in
-          match Reporepo.latest entries ~handle:h with
+          match Source.Reporepo.latest entries ~handle:h with
           | Some dep when dep.url <> "" -> Some dep.url
           | _ -> None))
 
@@ -156,11 +147,11 @@ let installs_for ~handle =
 
 (* For displaying the toolchain's "primary source" URL + ref in [oi
    config]. Same lookup as [url_of] but returns the ref too. *)
-let primary_source ~entries (e : Reporepo.entry) =
+let primary_source ~entries (e : Source.Reporepo.entry) =
   match e.depends with
   | [] -> ("", None)
   | (h, _) :: _ -> (
-      match Reporepo.latest entries ~handle:h with
+      match Source.Reporepo.latest entries ~handle:h with
       | Some dep -> (dep.url, dep.ref_)
       | None -> ("", None))
 
@@ -168,13 +159,13 @@ let available () =
   let entries = load_entries () in
   let handles =
     entries
-    |> List.filter_map (fun (e : Reporepo.entry) ->
+    |> List.filter_map (fun (e : Source.Reporepo.entry) ->
         match e.toolchain_name with Some _ -> Some e.handle | None -> None)
     |> List.sort_uniq String.compare
   in
   List.filter_map
     (fun h ->
-      match Reporepo.latest entries ~handle:h with
+      match Source.Reporepo.latest entries ~handle:h with
       | None -> None
       | Some e ->
           let cli_name =
@@ -218,7 +209,7 @@ let parse_spec s =
    platform fields. Same set of inputs that drive opam-0install's
    solve, so any change → fresh install_prefix → old prefix is left
    alone. *)
-let compute_hash ~packages_dirs ~(conf : Opam_ctx.conf) pkgs =
+let compute_hash ~packages_dirs ~(conf : Solver.Ctx.conf) pkgs =
   let layer_hash = D10.Layer.hash ~packages_dirs pkgs in
   let material =
     String.concat "\n"
@@ -258,19 +249,19 @@ let pick_ocaml_version ?explicit_compiler pkgs =
       | Some p -> Some (OpamPackage.Version.to_string (OpamPackage.version p)))
     candidate_names
 
-let resolve ~fs ~sys ~data_dir ~(conf : Opam_ctx.conf) ~handle =
+let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
   (* Auto-clone the reporepo if missing so [--toolchain=HANDLE] still
      works on a fresh machine — the toolchain definitions live there
      now, not in oi's binary. *)
-  let path = Reporepo.env_path () in
-  Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path ~url:(Reporepo.env_url ());
+  let path = Source.Reporepo.env_path () in
+  Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path ~url:(Source.Reporepo.env_url ());
   let entry =
     match find_entry_by_toolchain_name ~name:handle with
     | Some e -> e
     | None ->
         let known =
           load_entries ()
-          |> List.filter_map (fun (e : Reporepo.entry) -> e.toolchain_name)
+          |> List.filter_map (fun (e : Source.Reporepo.entry) -> e.toolchain_name)
           |> List.sort_uniq String.compare
         in
         Error.config_error
@@ -289,15 +280,15 @@ let resolve ~fs ~sys ~data_dir ~(conf : Opam_ctx.conf) ~handle =
      entry itself is url-less and contributes no clone of its own. *)
   let dep_roots =
     List.map
-      (fun (h, v) : Reporepo.root -> { handle = h; version = v })
+      (fun (h, v) : Source.Reporepo.root -> { handle = h; version = v })
       entry.depends
   in
   let resolved =
     if dep_roots = [] then []
-    else Reporepo.resolve entries ~roots:dep_roots |> List.rev
+    else Source.Reporepo.resolve entries ~roots:dep_roots |> List.rev
   in
   let packages_dirs =
-    Reporepo.materialize ~fs ~sys ~data_dir ~refresh:false resolved
+    Source.Reporepo.materialize ~fs ~sys ~data_dir ~refresh:false resolved
   in
   let root_specs = List.flatten entry.toolchain_roots in
   if root_specs = [] then
@@ -320,17 +311,17 @@ let resolve ~fs ~sys ~data_dir ~(conf : Opam_ctx.conf) ~handle =
       (fun spec -> OpamPackage.Name.of_string (fst (parse_spec spec)))
       root_specs
   in
-  (* {!Solve.solve_dir} runs opam-0install with exactly these
+  (* {!Solver.solve_dir} runs opam-0install with exactly these
      constraints — no auto-pinning of OCaml-family packages, so the
      overlay's [+ox] versions aren't fought against [conf.ocaml_version]. *)
-  let env v = Solve.filter_env conf (OpamVariable.Full.of_string v) in
+  let env v = Solver.filter_env conf (OpamVariable.Full.of_string v) in
   let pkgs =
-    match Solve.solve_dir ~env ~packages_dirs ~constraints names with
+    match Solver.solve_dir ~env ~packages_dirs ~constraints names with
     | Ok pkgs -> pkgs
     | Error msg ->
         Error.config_error "toolchain %s: solve failed: %s" handle msg
   in
-  let pkgs = Solve.topo_sort ~packages_dirs ~conf pkgs in
+  let pkgs = Solver.topo_sort ~packages_dirs ~conf pkgs in
   Log.info (fun m ->
       m "Toolchain %s solved packages: %s" handle
         (String.concat ", " (List.map OpamPackage.to_string pkgs)));
@@ -398,7 +389,7 @@ let repo_specs_of_packages_dirs packages_dirs =
 (* Ensure the dedicated toolchain opam root exists with a minimal
    [config] file. Idempotent — opam skips the rewrite if the file's
    already there. Mirrors the bare-bones init that
-   [Opam_ctx.init_opam] does for oi's own root. *)
+   [Solver.Ctx.init_opam] does for oi's own root. *)
 let ensure_opam_root ~fs root =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / root);
   let root_dir = OpamFilename.Dir.of_string root in
@@ -416,7 +407,7 @@ let ensure_opam_root ~fs root =
 
 (* Run [f] with [OpamStateConfig]'s [root_dir] pointed at the
    toolchain root, restoring whatever was there beforehand. oi's
-   [Opam_ctx.create] mutates [root_dir] for every consumer solve
+   [Solver.Ctx.create] mutates [root_dir] for every consumer solve
    anyway, so leaving the toolchain root active wouldn't break
    anything by itself, but restoring keeps the ambient state
    honest. *)

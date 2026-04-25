@@ -7,7 +7,7 @@ type entry = { pkg : OpamPackage.t; sys_pkgs : OpamSysPkg.Set.t }
 let compute_from_env ~env ~packages_dirs solved =
   List.filter_map
     (fun pkg ->
-      match Solve.load_opam packages_dirs pkg with
+      match Solver.load_opam packages_dirs pkg with
       | None -> None
       | Some opam ->
           let depexts = OpamFile.OPAM.depexts opam in
@@ -24,10 +24,10 @@ let compute_from_env ~env ~packages_dirs solved =
     solved
 
 let compute ctx ~packages_dirs solved =
-  compute_from_env ~env:(Opam_ctx.platform_env ctx) ~packages_dirs solved
+  compute_from_env ~env:(Solver.Ctx.platform_env ctx) ~packages_dirs solved
 
 let compute_for_conf ~conf ~packages_dirs solved =
-  compute_from_env ~env:(Solve.filter_env conf) ~packages_dirs solved
+  compute_from_env ~env:(Solver.filter_env conf) ~packages_dirs solved
 
 type status = {
   installed : OpamSysPkg.Set.t;
@@ -46,7 +46,7 @@ let status pkgs =
     (* [packages_status] needs an [OpamFile.Config.t]. An empty config
        is enough for the query: opam uses it only to pick up a few
        flags (Windows Cygwin/MSYS2, yum-cron hints). Any caller that
-       has already initialised an [Opam_ctx.t] has run [init_opam]
+       has already initialised an [Solver.Ctx.t] has run [init_opam]
        which sets the root dir; we don't need that here. *)
     let config = OpamFile.Config.empty in
     match

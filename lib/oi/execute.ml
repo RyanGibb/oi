@@ -10,6 +10,123 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 
 let ( / ) = Filename.concat
 
+(* -- .install file processor (was lib/oi/installer.ml) ------------------ *)
+
+(* Process an opam [.install] file without shelling out to
+   [opam-installer]. Parses the file via [OpamFile.Dot_install], resolves
+   each source relative to [build_dir] and copies it into the matching
+   subdirectory of [prefix], matching the destination and permission
+   rules that [opam-installer] applies with default flags. *)
+module Installer = struct
+  module S = OpamFile.Dot_install
+
+  let installer_log = Logs.Src.create "oi.installer"
+
+  module ILog = (val Logs.src_log installer_log : Logs.LOG)
+
+  let pkgname_of_install_file path =
+    let b = Filename.basename path in
+    if Filename.check_suffix b ".install" then Filename.chop_suffix b ".install"
+    else b
+
+  let is_under ~base p =
+    let canon p =
+      try Unix.realpath p
+      with Unix.Unix_error _ -> (
+        try Unix.realpath (Filename.dirname p) / Filename.basename p
+        with Unix.Unix_error _ -> p)
+    in
+    let base = canon base in
+    let p = canon p in
+    let n = String.length base in
+    String.length p = n
+    || String.length p > n
+       && String.sub p 0 n = base
+       && p.[n] = Filename.dir_sep.[0]
+
+  let copy_file ~fs ~pkg ~optional ~exec ~src:src_s ~dst:dst_s =
+    let perm = if exec then 0o755 else 0o644 in
+    let src_path = Eio.Path.(fs / src_s) in
+    let dst_path = Eio.Path.(fs / dst_s) in
+    match Eio.Path.stat ~follow:true src_path with
+    | exception Eio.Exn.Io _ ->
+        if optional then false
+        else
+          Error.build_failed ~pkg ~cmd:"install"
+            ~output:(Fmt.str "required source file not found: %s" src_s)
+    | _ ->
+        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+          Eio.Path.(fs / Filename.dirname dst_s);
+        (try
+           Eio.Path.with_open_in src_path @@ fun i ->
+           Eio.Path.with_open_out ~create:(`Or_truncate perm) dst_path
+           @@ fun o -> Eio.Flow.copy i o
+         with Eio.Exn.Io (e, _) ->
+           Error.build_failed ~pkg ~cmd:"install"
+             ~output:(Fmt.str "%s -> %s: %a" src_s dst_s Eio.Exn.pp_err e));
+        (try Unix.chmod dst_s perm with Unix.Unix_error _ -> ());
+        true
+
+  let install_entry ~fs ~pkg ~build_dir ~dst_dir ~exec (base, dst_opt) =
+    let base_s = OpamFilename.Base.to_string base.OpamTypes.c in
+    let src_s = build_dir / base_s in
+    let dst_name =
+      match dst_opt with
+      | Some d -> OpamFilename.Base.to_string d
+      | None -> Filename.basename base_s
+    in
+    let dst_s = dst_dir / dst_name in
+    let _ : bool =
+      copy_file ~fs ~pkg ~optional:base.OpamTypes.optional ~exec ~src:src_s
+        ~dst:dst_s
+    in
+    ()
+
+  let install ~fs ~prefix ~build_dir ~install_file =
+    let pkg = pkgname_of_install_file install_file in
+    let inst =
+      S.safe_read (OpamFile.make (OpamFilename.of_string install_file))
+    in
+    let pkg_dir sub = prefix / sub / pkg in
+    let global_dir sub = prefix / sub in
+    let sections =
+      [
+        (global_dir "bin", S.bin inst, true);
+        (global_dir "sbin", S.sbin inst, true);
+        (pkg_dir "lib", S.lib inst, false);
+        (pkg_dir "lib", S.libexec inst, true);
+        (global_dir "lib", S.lib_root inst, false);
+        (global_dir "lib", S.libexec_root inst, true);
+        (prefix / "lib" / "toplevel", S.toplevel inst, false);
+        (prefix / "lib" / "stublibs", S.stublibs inst, true);
+        (global_dir "man", S.man inst, false);
+        (pkg_dir "share", S.share inst, false);
+        (global_dir "share", S.share_root inst, false);
+        (pkg_dir "etc", S.etc inst, false);
+        (pkg_dir "doc", S.doc inst, false);
+      ]
+    in
+    List.iter
+      (fun (dst_dir, entries, exec) ->
+        List.iter (install_entry ~fs ~pkg ~build_dir ~dst_dir ~exec) entries)
+      sections;
+    List.iter
+      (fun (base, dst) ->
+        let dst_s = OpamFilename.to_string dst in
+        if is_under ~base:prefix dst_s then
+          let base_s = OpamFilename.Base.to_string base.OpamTypes.c in
+          let src_s = build_dir / base_s in
+          let _ : bool =
+            copy_file ~fs ~pkg ~optional:base.OpamTypes.optional ~exec:false
+              ~src:src_s ~dst:dst_s
+          in
+          ()
+        else
+          ILog.warn (fun m ->
+              m "%s: skipping misc file outside prefix: %s" pkg dst_s))
+      (S.misc inst)
+end
+
 (* Cap concurrent package builds. Each in-flight build spawns subprocess
    pipes (2 fds per capture) plus transient file descriptors for fetch
    and patch, and each build then recursively spawns compiler processes
@@ -34,7 +151,7 @@ let default_build_parallelism () =
    doesn't collide. *)
 let write_failure_log ~fs ~cache_root ~(p : Plan.package_plan) ~exn =
   let path =
-    Build_logs.path ~cache_root ~kind:"build" ~name:p.pkg ~hash:p.layer_hash
+    Cache.Logs.path ~cache_root ~kind:"build" ~name:p.pkg ~hash:p.layer_hash
   in
   let body =
     match exn with
@@ -42,7 +159,7 @@ let write_failure_log ~fs ~cache_root ~(p : Plan.package_plan) ~exn =
         Fmt.str "package: %s\ncommand: %s\n\n%s" pkg cmd output
     | _ -> Printexc.to_string exn
   in
-  Build_logs.write ~fs ~cache_root path body;
+  Cache.Logs.write ~fs ~cache_root path body;
   path
 
 (* -- Command execution --------------------------------------------------- *)
@@ -139,7 +256,7 @@ let run_cmd ~proc_mgr ~fs ~env ~cwd ~pkg cmd =
    the caller just has to supply the path and make sure the parent
    [logs/] directory exists. *)
 let fetch_log_path_of ~cache_root ~(p : Plan.package_plan) =
-  Build_logs.path ~cache_root ~kind:"fetch" ~name:p.pkg ~hash:p.layer_hash
+  Cache.Logs.path ~cache_root ~kind:"fetch" ~name:p.pkg ~hash:p.layer_hash
 
 let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
   match p.source with
@@ -154,7 +271,7 @@ let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
         in
         Log.info (fun m -> m "Fetching %s from %s" p.pkg src.url);
         let error_log_path = fetch_log_path_of ~cache_root ~p in
-        Build_logs.ensure ~fs ~cache_root;
+        Cache.Logs.ensure ~fs ~cache_root;
         Retry.with_attempts ~label:(Fmt.str "fetch %s (%s)" p.pkg src.url)
           ~error_log_path (fun () ->
             let result =
@@ -181,7 +298,7 @@ let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
           OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
         in
         let error_log_path = fetch_log_path_of ~cache_root ~p in
-        Build_logs.ensure ~fs ~cache_root;
+        Cache.Logs.ensure ~fs ~cache_root;
         try
           Retry.with_attempts
             ~label:(Fmt.str "fetch extra source %s (%s)" name src.url)
@@ -393,7 +510,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
      common dep fails early in [--all] and drags hundreds of groups
      with it. *)
   let is_pkg_doomed (p : Plan.package_plan) =
-    p.method_ <> `Source
+    p.method_ <> Plan.Source
     || Hashtbl.mem failed_layers p.layer_hash
     || List.exists is_dep_failed p.dep_layers
   in
@@ -419,8 +536,8 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
           List.iter
             (fun (p : Plan.package_plan) ->
               match p.method_ with
-              | `Binary -> reporter.pkg_event (Cached { pkg = p.pkg })
-              | `Source ->
+              | Plan.Binary -> reporter.pkg_event (Cached { pkg = p.pkg })
+              | Plan.Source ->
                   let upstream_log = cascade_log p in
                   mark_failed ~p ~log_path:upstream_log;
                   reporter.pkg_event (Dep_failed { pkg = p.pkg; upstream_log }))
@@ -435,7 +552,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
            that just finished. *)
           List.iter
             (fun (p : Plan.package_plan) ->
-              if p.method_ = `Binary then begin
+              if p.method_ = Plan.Binary then begin
                 reporter.pkg_event
                   (Started
                      {
@@ -458,12 +575,12 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
             List.filter
               (fun (p : Plan.package_plan) ->
                 if
-                  p.method_ = `Source
+                  p.method_ = Plan.Source
                   && (not (Hashtbl.mem failed_layers p.layer_hash))
                   && not (List.exists is_dep_failed p.dep_layers)
                 then true
                 else begin
-                  if p.method_ = `Source then (
+                  if p.method_ = Plan.Source then (
                     let upstream_log = cascade_log p in
                     mark_failed ~p ~log_path:upstream_log;
                     reporter.pkg_event
@@ -504,7 +621,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
           List.iter
             (fun (p : Plan.package_plan) ->
               if
-                p.method_ = `Source
+                p.method_ = Plan.Source
                 && not (Hashtbl.mem failed_layers p.layer_hash)
               then begin
                 reporter.pkg_event

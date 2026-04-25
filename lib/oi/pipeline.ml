@@ -1,0 +1,354 @@
+[@@@ai_disclosure "ai-assisted"]
+[@@@ai_model "claude-opus-4-7"]
+[@@@ai_provider "Anthropic"]
+
+let ( / ) = Filename.concat
+let log_src = Logs.Src.create "oi.pipeline"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
+(* -- Platform / d10 wiring ----------------------------------------------- *)
+
+let make_conf ~platform:(p : Osrel.t) ~ocaml_version : Solver.Ctx.conf =
+  {
+    arch = Osrel.Arch.to_string p.arch;
+    os = Osrel.OS.to_string p.os;
+    os_distribution = Osrel.OS.kind_to_string p.os.kind;
+    os_version = p.os.version;
+    os_family = p.os.family;
+    ocaml_version;
+    jobs = p.jobs;
+  }
+
+let make_d10 ~sys ~fs ~clock ~cache ~os_key : D10.Config.t =
+  { sys; fs; clock; root = Cache.root cache; os_key }
+
+let init_opam_root ~fs ~data_dir =
+  let opam_root = data_dir / "opam-root" in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / opam_root);
+  Solver.Ctx.init_opam ~root:opam_root
+
+(* -- Toolchain ----------------------------------------------------------- *)
+
+let toolchain_views info conf =
+  let conf = Toolchain.apply_conf info conf in
+  let ctx = Option.map Toolchain.opam_ctx_of_info info in
+  (conf, ctx)
+
+let resolve_toolchain ~fs ~sys ~data_dir ~conf ~install = function
+  | None -> None
+  | Some h ->
+      let info = Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle:h in
+      if install then Toolchain.ensure_installed ~fs info;
+      Some info
+
+(* -- Sources ------------------------------------------------------------- *)
+
+let materialize_with_deps ~fs ~sys ~cache ?refresh with_deps =
+  let urls, pkg_deps = Project.Url.classify_all with_deps in
+  let url_project = Project.Url.materialize ~fs ~sys ~cache ?refresh urls in
+  (pkg_deps, url_project)
+
+let filter_compatible_overlays ~reporepo_path ~toolchain handles =
+  match (toolchain : Toolchain.info option) with
+  | None -> handles
+  | Some info ->
+      let entries =
+        try Source.Reporepo.load ~path:reporepo_path
+        with Error.E _ -> []
+      in
+      List.filter
+        (fun h ->
+          match Source.Reporepo.latest entries ~handle:h with
+          | None -> true
+          | Some (e : Source.Reporepo.entry) -> (
+              match e.toolchain with
+              | None -> true
+              | Some t when t = info.handle -> true
+              | Some t ->
+                  Logs.info (fun m ->
+                      m
+                        "Dropping overlay @%s: built against toolchain %s, \
+                         incompatible with --toolchain=%s"
+                        h t info.handle);
+                  false))
+        handles
+
+(* -- Build helpers ------------------------------------------------------- *)
+
+let cache_urls ~cache ~remote =
+  let local = Source.Mirror.url ~cache in
+  match remote with
+  | Some (`Http_remote r) -> [ local; Source.Mirror.remote_url ~registry:r ]
+  | None | Some _ -> [ local ]
+
+let record_sources ~sys ~cache (exec_plan : Plan.t) =
+  try
+    List.iter
+      (fun (group : Plan.group) ->
+        List.iter
+          (fun (p : Plan.package_plan) ->
+            let package = OpamPackage.of_string p.pkg in
+            let overlay =
+              match (p.overlay_handle, p.overlay_version) with
+              | Some h, Some v -> Some (h, v)
+              | _ -> None
+            in
+            Stdlib.Option.iter
+              (fun (src : Plan.source_info) ->
+                let checksums = List.map OpamHash.of_string src.checksums in
+                let url = OpamUrl.parse ~handle_suffix:true src.url in
+                Source.Mirror.record ~sys ~cache ~package ?overlay
+                  ~kind:`Main ~url ~checksums ())
+              p.source;
+            List.iter
+              (fun (name, (src : Plan.source_info)) ->
+                let checksums = List.map OpamHash.of_string src.checksums in
+                let url = OpamUrl.parse ~handle_suffix:true src.url in
+                Source.Mirror.record ~sys ~cache ~package ?overlay
+                  ~kind:(`Extra name) ~url ~checksums ())
+              p.extra_sources)
+          group.packages)
+      exec_plan.groups
+  with Failure msg ->
+    Log.warn (fun m -> m "source mirror write failed: %s" msg)
+
+let fetch_parallelism ?jobs () =
+  match jobs with
+  | Some n when n > 0 -> n
+  | _ -> (
+      match Sys.getenv_opt "OI_BUILD_PARALLELISM" with
+      | Some s -> (
+          match int_of_string_opt s with Some n when n > 0 -> n | _ -> 4)
+      | None -> min (Domain.recommended_domain_count ()) 4)
+
+let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
+    =
+  match remote with
+  | None -> build_plan
+  | Some r ->
+      let source_hashes =
+        List.filter_map
+          (fun (node : Plan.node) ->
+            match node.method_ with
+            | Plan.Source -> Some node.layer_hash
+            | Binary -> None)
+          (Plan.nodes build_plan)
+      in
+      if source_hashes = [] then build_plan
+      else begin
+        let index = D10.Layer.fetch_remote_index d10 ~remote:r in
+        let available =
+          List.filter (fun h -> Hashtbl.mem index h) source_hashes
+        in
+        if available = [] then begin
+          Logs.info (fun m ->
+              m "Registry has none of the %d needed layer(s)"
+                (List.length source_hashes));
+          build_plan
+        end
+        else begin
+          Logs.info (fun m ->
+              m "Fetching %d layer(s) from registry (%d needed)..."
+                (List.length available)
+                (List.length source_hashes));
+          Eio.Fiber.List.iter
+            ~max_fibers:(fetch_parallelism ?jobs ())
+            (fun hash ->
+              let sha256 =
+                Option.map
+                  (fun (e : D10.Layer.index_entry) -> e.sha256)
+                  (Hashtbl.find_opt index hash)
+              in
+              if D10.Layer.pull_remote d10 ~remote:r ~hash ?sha256 () then
+                Logs.info (fun m -> m "Fetched %s from registry" hash))
+            available;
+          Plan.build ctx ~d10 ~packages_dirs pkgs
+        end
+      end
+
+(* -- Central build pipeline (was main.ml's solve_and_ensure_layers) ----- *)
+
+let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
+    ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
+    ?remote ?jobs ?toolchain
+    ?(constraints = OpamPackage.Name.Map.empty) names =
+  let extra_pkg_dirs =
+    Source.Repo.ensure_extra ~fs ~data_dir ~refresh extra_repos
+  in
+  let pin_dir = Source.Pin.materialize ~fs ~sys ~cache ~refresh pins in
+  (* When a toolchain is active, its [info.packages_dirs] replaces the
+     base set — stacking on top would re-add [relocatable], whose
+     [ocaml-base-compiler.5.5.0] competes with the toolchain-pinned
+     [ocaml-variants.5.2.0+ox] and the [conflict-class] chain rejects
+     both. *)
+  let base_pkg_dirs =
+    match toolchain with
+    | None -> Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
+    | Some (info : Toolchain.info) -> info.packages_dirs
+  in
+  let packages_dirs =
+    Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
+  in
+  let conf, toolchain_ctx = toolchain_views toolchain conf in
+  Log.debug (fun m ->
+      m "solver packages_dirs (first-wins, %d entries):%s"
+        (List.length packages_dirs)
+        (String.concat ""
+           (List.map (fun d -> Fmt.str "\n  %s" d) packages_dirs)));
+  let cache_root = Cache.root_s cache in
+  let d10 =
+    make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
+  in
+  (* Fast-path: if we've seen these exact inputs before AND every layer
+     hash we stored is still present in the d10 cache, skip
+     [Solver.Ctx.create] + [Solver.solve] + [Plan.build] entirely. The
+     ~900ms of opam-file parsing that [Solver.Ctx.create] does swamps
+     everything else in the happy-path [oi run] of an already-built
+     target, so cutting it out here is the main perf win. Disabled
+     when [dry_run] is set since that mode needs the full plan tree to
+     print. *)
+  let layer_cache_key =
+    if dry_run then None
+    else
+      Solver.Cache.key ~conf ~packages_dirs ~constraints ~names
+        ?toolchain:toolchain_ctx ()
+  in
+  let fast_hashes =
+    match layer_cache_key with
+    | None -> None
+    | Some k -> (
+        match Solver.Cache.lookup_layers ~cache_root ~key:k with
+        | None -> None
+        | Some hashes
+          when List.for_all (fun h -> D10.Layer.succeeded d10 ~hash:h) hashes
+          ->
+            Some hashes
+        | Some _ ->
+            Logs.info (fun m ->
+                m "layer cache entry stale (layers missing), falling through");
+            None)
+  in
+  match fast_hashes with
+  | Some hashes ->
+      Logs.info (fun m ->
+          m "layer cache hit %s (%d layers), skipping solve"
+            (String.sub (Stdlib.Option.get layer_cache_key) 0 12)
+            (List.length hashes));
+      hashes
+  | None ->
+      let build_prefix = cache_root / "build" / "prefix" in
+      let ctx =
+        Solver.Ctx.create ~prefix:build_prefix ~packages_dirs ~conf
+          ?toolchain:toolchain_ctx ()
+      in
+      let pkgs =
+        match
+          Solver.solve ~fs ~cache_root ctx ~packages_dirs ~constraints names
+        with
+        | Ok pkgs -> pkgs
+        | Error msg -> Error.no_solution msg
+      in
+      let build_plan = Plan.build ctx ~d10 ~packages_dirs pkgs in
+      if dry_run then begin
+        let remote_has =
+          match remote with
+          | Some r ->
+              let idx = D10.Layer.fetch_remote_index d10 ~remote:r in
+              fun h -> Hashtbl.mem idx h
+          | None -> fun _ -> false
+        in
+        Fmt.pr "%a@." (Plan.pp_tree ~remote_has) build_plan;
+        exit 0
+      end;
+      let build_plan =
+        fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
+          build_plan
+      in
+      let hashes = Plan.layer_hashes build_plan in
+      (* Every layer in the plan must be cached (Binary method) to skip
+         Execute.run. Checking only the top-level targets is unsafe: a
+         missing transitive dep's [fs/] tree means its installed files
+         are silently dropped from the assembled prefix, so we rebuild
+         anything that isn't Binary. *)
+      let all_layers_cached =
+        List.for_all
+          (fun (n : Plan.node) -> n.method_ = Plan.Binary)
+          (Plan.nodes build_plan)
+      in
+      let persist_layer_cache () =
+        match layer_cache_key with
+        | None -> ()
+        | Some k -> Solver.Cache.store_layers ~fs ~cache_root ~key:k hashes
+      in
+      if all_layers_cached then begin
+        Logs.info (fun m -> m "Layers cached, skipping build");
+        persist_layer_cache ();
+        hashes
+      end
+      else begin
+        (* Proactive depext check: build-from-source packages need their
+           system dependencies present before compile time. Skip the
+           check entirely when every node in the plan is [Binary]; the
+           restore path only extracts cached layer trees and needs no
+           depexts. Failures here are non-fatal warnings. *)
+        let source_pkgs =
+          Plan.nodes build_plan
+          |> List.filter_map (fun (n : Plan.node) ->
+              match n.method_ with
+              | Plan.Source -> Some n.pkg
+              | Plan.Binary -> None)
+        in
+        if source_pkgs <> [] then begin
+          let entries = Depexts.compute ctx ~packages_dirs source_pkgs in
+          let all =
+            List.fold_left
+              (fun acc e -> OpamSysPkg.Set.union acc e.Depexts.sys_pkgs)
+              OpamSysPkg.Set.empty entries
+          in
+          if not (OpamSysPkg.Set.is_empty all) then (
+            let st = Depexts.status all in
+            if not (OpamSysPkg.Set.is_empty st.missing) then begin
+              Fmt.epr
+                "%a system packages are not installed. The build may fail at \
+                 compile time. Install them with:@.  %s@."
+                Fmt.(styled `Yellow string)
+                "warning:"
+                (st.missing |> OpamSysPkg.Set.elements
+                |> List.map OpamSysPkg.to_string
+                |> String.concat " ")
+            end;
+            if not (OpamSysPkg.Set.is_empty st.not_found) then
+              Fmt.epr
+                "%a system packages are not known to the host package \
+                 manager: %s@."
+                Fmt.(styled `Yellow string)
+                "warning:"
+                (st.not_found |> OpamSysPkg.Set.elements
+                |> List.map OpamSysPkg.to_string
+                |> String.concat ", "))
+        end;
+        let exec_plan =
+          Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
+            ~ocaml_version:conf.ocaml_version build_plan
+        in
+        let urls = cache_urls ~cache ~remote in
+        Execute.run ~cache_urls:urls ~proc_mgr ~fs ?jobs
+          ~clock:(clock :> D10.Config.clk)
+          ~sys ~os_key exec_plan;
+        record_sources ~sys ~cache exec_plan;
+        let prefix_hash = D10.Prefix.solve_hash hashes in
+        let prefix_dir =
+          Eio.Path.native_exn Eio.Path.(d10.root / "prefixes" / prefix_hash)
+        in
+        (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix_dir)
+         with _ -> ());
+        persist_layer_cache ();
+        hashes
+      end
+
+let assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes =
+  let d10 =
+    make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
+  in
+  D10.Prefix.assemble_cached d10 ~layer_hashes

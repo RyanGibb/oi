@@ -26,6 +26,57 @@ let run_dir t ~hash =
 
 let pins_dir t = t.root / "pins"
 
+(* -- Toolchain install root ---------------------------------------------- *)
+
+(* XDG-derived path used by [Toolchain] for fixed-prefix installs and by
+   [cleanable_items] to nuke them. Lives here so [Cache] doesn't need
+   to depend on [Toolchain]. *)
+let toolchains_root () =
+  let base =
+    match Sys.getenv_opt "XDG_CACHE_HOME" with
+    | Some v when v <> "" -> v
+    | _ -> (
+        match Sys.getenv_opt "HOME" with
+        | Some h -> h / ".cache"
+        | None -> "/tmp")
+  in
+  base / "oi" / "toolchains"
+
+(* -- Sentinel-based freshness -------------------------------------------- *)
+
+let refresh_max_age = 86_400.0
+
+let fresh ~refresh ~sentinel ~max_age =
+  if refresh then false
+  else if not (Sys.file_exists sentinel) then false
+  else
+    try
+      let age = Unix.time () -. (Unix.stat sentinel).Unix.st_mtime in
+      age <= max_age
+    with Unix.Unix_error _ -> false
+
+(* -- Build logs ---------------------------------------------------------- *)
+
+module Logs = struct
+  let dir ~cache_root = cache_root / "build" / "logs"
+
+  let ensure ~fs ~cache_root =
+    try
+      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+        Eio.Path.(fs / dir ~cache_root)
+    with _ -> ()
+
+  let short_hash h = String.sub h 0 (min 12 (String.length h))
+
+  let path ~cache_root ~kind ~name ~hash =
+    dir ~cache_root / (kind ^ "-" ^ name ^ "-" ^ short_hash hash ^ ".log")
+
+  let write ~fs ~cache_root path content =
+    ensure ~fs ~cache_root;
+    try Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) content
+    with _ -> ()
+end
+
 (* -- Cleanup ------------------------------------------------------------- *)
 
 type item = {
@@ -62,12 +113,12 @@ let cleanable_items t ~data_dir =
       description = "Pin-depends sources and synthesized packages trees";
     };
     {
-      (* Resolved via [Toolchain.default_root] rather than [p
-         "toolchains"] because the toolchain path is XDG-derived
-         independently of [OI_CACHE_DIR], and we want clean to nuke
-         what's actually on disk regardless of any env mismatch. *)
+      (* Resolved via [toolchains_root] rather than [p "toolchains"]
+         because the toolchain path is XDG-derived independently of
+         [OI_CACHE_DIR], and we want clean to nuke what's actually on
+         disk regardless of any env mismatch. *)
       label = "toolchains";
-      path = Eio.Path.(t.fs / Toolchain.default_root ());
+      path = Eio.Path.(t.fs / toolchains_root ());
       description = "Built compiler toolchains (oxcaml, etc.)";
     };
   ]
