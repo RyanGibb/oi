@@ -21,51 +21,46 @@ type t = {
   overlays : string list;
 }
 
-(* -- x-opam-repositories parsing ----------------------------------------- *)
+(* -- x-repos parsing ---------------------------------------------------- *)
 
 (* Extract a literal string from a FullPos value. *)
 let string_of_value (v : OpamParserTypes.FullPos.value) : string option =
   match v.pelem with OpamParserTypes.FullPos.String s -> Some s | _ -> None
 
-(* Parse the value of [x-opam-repositories:] into a list of
-   [(name, url)] pairs. The expected shape is
-   [[ [name url] [name url] ... ]] — a list of two-element string
-   lists. Returns [None] on any deviation from that shape. *)
-let parse_extra_repos_value (v : OpamParserTypes.FullPos.value) :
-    (string * string) list option =
-  match v.pelem with
-  | OpamParserTypes.FullPos.List { pelem = items; _ } ->
-      let rec loop acc = function
-        | [] -> Some (List.rev acc)
-        | entry :: rest -> (
-            match entry.OpamParserTypes.FullPos.pelem with
-            | OpamParserTypes.FullPos.List { pelem = [ n; u ]; _ } -> (
-                match (string_of_value n, string_of_value u) with
-                | Some name, Some url -> loop ((name, url) :: acc) rest
-                | _ -> None)
-            | _ -> None)
-      in
-      loop [] items
-  | _ -> None
+(* Classify one [x-repos] entry: a leading [@] marks a reporepo handle
+   (the handle is the rest of the string), anything else is treated as
+   a raw repository URL. Same convention used by [oi run @avsm/...]
+   tokens, so users can reuse the discriminator they already know. *)
+let classify_repo_token s =
+  if String.length s > 0 && s.[0] = '@' then
+    `Handle (String.sub s 1 (String.length s - 1))
+  else `Url s
 
-(* Parse the value of [x-reporepo:] into a list of handle strings.
-   Accepts either a single string ([x-reporepo: "avsm"]) or a list of
-   strings ([x-reporepo: ["avsm" "samoht"]]). Returns [None] on any
-   deviation. *)
-let parse_reporepo_value (v : OpamParserTypes.FullPos.value) :
-    string list option =
+(* Parse the value of [x-repos:] into a list of [`Handle | `Url]
+   tokens. Accepts a single string or a list of strings. Returns
+   [None] on any deviation. *)
+let parse_repos_value (v : OpamParserTypes.FullPos.value) :
+    [ `Handle of string | `Url of string ] list option =
   match v.pelem with
-  | OpamParserTypes.FullPos.String s -> Some [ s ]
+  | OpamParserTypes.FullPos.String s -> Some [ classify_repo_token s ]
   | OpamParserTypes.FullPos.List { pelem = items; _ } ->
       let rec loop acc = function
         | [] -> Some (List.rev acc)
         | v :: rest -> (
             match string_of_value v with
-            | Some s -> loop (s :: acc) rest
+            | Some s -> loop (classify_repo_token s :: acc) rest
             | None -> None)
       in
       loop [] items
   | _ -> None
+
+(* Stable synthetic name for a URL-keyed extra repo: the first ten hex
+   chars of the URL's MD5 are unique enough, deterministic, and
+   filesystem-safe. Two projects declaring the same URL get the same
+   name so [merge_extra_repos] dedups them naturally. *)
+let synthetic_repo_name url =
+  let hash = Digest.string url |> Digest.to_hex in
+  "extra-" ^ String.sub hash 0 10
 
 (* -- Per-file loading ---------------------------------------------------- *)
 
@@ -93,41 +88,35 @@ let load_one ~filename (opam : OpamFile.OPAM.t) : raw =
       []
       (OpamFile.OPAM.depends opam)
   in
-  (* [x-opam-repositories:] from the extensions map. *)
-  let raw_extra_repos =
+  (* [x-repos:] — a flat list mixing [@HANDLE] reporepo handles and
+     raw repository URLs. [@HANDLE] entries land in [raw_overlays];
+     URLs land in [raw_extra_repos] under a synthetic name keyed by
+     the URL's MD5 so duplicate URLs across [*.opam] files dedup
+     naturally. *)
+  let raw_extra_repos, raw_overlays =
     match
-      OpamStd.String.Map.find_opt "x-opam-repositories"
-        (OpamFile.OPAM.extensions opam)
+      OpamStd.String.Map.find_opt "x-repos" (OpamFile.OPAM.extensions opam)
     with
-    | None -> []
+    | None -> ([], [])
     | Some v -> (
-        match parse_extra_repos_value v with
-        | Some pairs -> pairs
+        match parse_repos_value v with
         | None ->
             Error.config_error
-              "%s: x-opam-repositories must be a list of [name url] pairs"
-              filename)
+              "%s: x-repos must be a string or a list of strings (each entry \
+               is a [@HANDLE] reporepo handle or a repository URL)"
+              filename
+        | Some toks ->
+            List.fold_left
+              (fun (urls, handles) -> function
+                | `Handle h -> (urls, h :: handles)
+                | `Url u -> ((synthetic_repo_name u, u) :: urls, handles))
+              ([], []) toks
+            |> fun (urls, handles) -> (List.rev urls, List.rev handles))
   in
   (* [pin-depends:] — already typed as [(package * url) list]. *)
   let raw_pins =
     OpamFile.OPAM.pin_depends opam
     |> List.map (fun (pkg, url) -> { pkg; url; declared_in = filename })
-  in
-  (* [x-reporepo:] — reporepo overlay handles this project wants pulled
-     into the solver set at sync/build time. *)
-  let raw_overlays =
-    match
-      OpamStd.String.Map.find_opt "x-reporepo" (OpamFile.OPAM.extensions opam)
-    with
-    | None -> []
-    | Some v -> (
-        match parse_reporepo_value v with
-        | Some hs -> hs
-        | None ->
-            Error.config_error
-              "%s: x-reporepo must be a handle string or a list of handle \
-               strings"
-              filename)
   in
   { raw_deps; raw_extra_repos; raw_pins; raw_overlays }
 
@@ -166,8 +155,8 @@ let merge_extra_repos entries =
       let prev_file, _, prev_url = prev in
       let declared_in, _, url = curr in
       Error.config_error
-        "package %s and %s disagree on x-opam-repositories entry %s: %s vs %s"
-        prev_file declared_in name prev_url url)
+        "package %s and %s disagree on x-repos entry %s: %s vs %s" prev_file
+        declared_in name prev_url url)
     entries
   |> List.map (fun (_, name, url) -> { name; url })
 

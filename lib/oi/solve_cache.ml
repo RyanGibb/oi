@@ -8,8 +8,11 @@ let ( / ) = Filename.concat
 
 (* Bumped whenever the cache key layout or the marshal value shape
    changes. Old entries are simply ignored on key mismatch and get
-   GC'd by [oi cache clean]. *)
-let schema_version = "v4"
+   GC'd by [oi cache clean]. v5 folds the toolchain identity into
+   the key — the toolchain pins added by [Solve.augment_compiler_constraints]
+   weren't in the key under v4, so consumer solves under different
+   toolchains aliased to the same entry. *)
+let schema_version = "v5"
 
 (* Process-wide memo: [oi registry build --all] asks for the same
    dir's HEAD across many solve groups. Without this, we'd fork a git
@@ -39,7 +42,8 @@ let git_head_for_packages_dir packages_dir =
       Hashtbl.add head_memo packages_dir r;
       r
 
-let key ~(conf : Opam_ctx.conf) ~packages_dirs ~constraints ~names =
+let key ~(conf : Opam_ctx.conf) ~packages_dirs ~constraints ~names ?toolchain
+    () =
   let heads =
     List.map (fun d -> (d, git_head_for_packages_dir d)) packages_dirs
   in
@@ -92,6 +96,9 @@ let key ~(conf : Opam_ctx.conf) ~packages_dirs ~constraints ~names =
       List.map OpamPackage.Name.to_string names |> List.sort String.compare
     in
     List.iter (add "name") ns;
+    (match toolchain with
+    | None -> ()
+    | Some (tc : Opam_ctx.toolchain) -> add "toolchain_hash" tc.hash);
     Some (Digest.to_hex (Digest.string (Buffer.contents buf)))
 
 (* ------------------------------------------------------------------ *)

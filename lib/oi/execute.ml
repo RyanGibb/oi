@@ -204,6 +204,32 @@ let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
 
 (* -- Patches and substitutions -------------------------------------------- *)
 
+(* Copy opam [extra-files:] from their location next to the opam file
+   into the package's build dir, where patches and other build steps
+   expect to find them. opam itself does this implicitly when the
+   recipe has [extra-files:]; oi has to wire it up because we don't
+   stage sources through opam. *)
+let copy_extra_files (p : Plan.package_plan) =
+  List.iter
+    (fun (basename, src) ->
+      let dst = p.build_dir / basename in
+      if Sys.file_exists src && not (Sys.file_exists dst) then begin
+        (* Use a portable read+write rather than [cp] so we don't
+           depend on shell tools mid-build. Patches are small text
+           files; [Eio.Path.load] / [Eio.Path.save] handle them. *)
+        let ic = open_in_bin src in
+        Fun.protect
+          ~finally:(fun () -> close_in_noerr ic)
+          (fun () ->
+            let len = in_channel_length ic in
+            let bytes = really_input_string ic len in
+            let oc = open_out_bin dst in
+            Fun.protect
+              ~finally:(fun () -> close_out_noerr oc)
+              (fun () -> output_string oc bytes))
+      end)
+    p.extra_files
+
 let apply_patches ~proc_mgr ~fs (p : Plan.package_plan) =
   List.iter
     (fun (patch : Plan.patch) ->
@@ -243,6 +269,7 @@ let build_package ?(cache_urls = []) ~cache_root ~proc_mgr ~fs
      extra-source files can be written into it. *)
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / p.build_dir);
   fetch_extra_sources ~cache_urls ~fs ~cache_root p;
+  copy_extra_files p;
   apply_patches ~proc_mgr ~fs p;
   apply_substs p;
   List.iter
@@ -325,7 +352,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
   let d10 : D10.Config.t =
     { sys; fs; clock; root = Eio.Path.(fs / plan.Plan.cache_root); os_key }
   in
-  let prefix = plan.cache_root / "build" / "prefix" in
+  let prefix = plan.Plan.build_prefix in
   let n_stages = List.length plan.groups in
   (* Track failed layer-hashes rather than package names so
      cross-overlay builds of the same [name.version] (which resolve to

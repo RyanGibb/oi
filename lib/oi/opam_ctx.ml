@@ -32,10 +32,19 @@ let pp_conf fmt c =
     c.arch c.os c.os_distribution c.os_version c.os_family c.ocaml_version
     c.jobs
 
+type toolchain = {
+  install_prefix : string;
+  hash : string;
+  relocatable : bool;
+  packages : OpamPackage.Set.t;
+  root_names : OpamPackage.Name.Set.t;
+}
+
 type t = {
   mutable st : OpamStateTypes.rw OpamStateTypes.switch_state;
   conf : conf;
   prefix : string;
+  toolchain : toolchain option;
 }
 
 (* Scan a packages directory and load all opam files into a map *)
@@ -88,6 +97,7 @@ let init_opam ~root =
   OpamCoreConfig.init ~yes:(Some true) ~verbose_level:0 ~debug_level:0
     ~disp_status_line:`Never ();
   OpamFormatConfig.init ();
+  OpamSolverConfig.init ();
   OpamClientConfig.init ();
   let root_dir = OpamFilename.Dir.of_string root in
   OpamStateConfig.update ~no_depexts:true ~root_dir ();
@@ -111,6 +121,7 @@ let init_opam ~root =
 
 let conf t = t.conf
 let prefix t = t.prefix
+let toolchain t = t.toolchain
 
 (* TODO: These env vars are hardcoded because neither the relocatable
    compiler nor standard OCaml 5.x packages declare them via setenv:
@@ -119,27 +130,67 @@ let prefix t = t.prefix
    calling OpamEnv.compute_updates on the switch state after
    mark_installed — opam will derive the env from the installed
    packages' setenv: fields automatically. *)
-let switch_env ~prefix =
-  [
-    ("OPAM_SWITCH_PREFIX", prefix);
-    ("OCAMLLIB", prefix / "lib" / "ocaml");
-    ( "CAML_LD_LIBRARY_PATH",
-      String.concat ":"
-        [ prefix / "lib" / "stublibs"; prefix / "lib" / "ocaml" / "stublibs" ]
-    );
-    ("OCAMLFIND_CONF", prefix / "lib" / "findlib.conf");
-    (* The relocatable ocamlfind installs findlib.conf with destdir=".",
-       expecting OCAMLFIND_DESTDIR to be set at use-time. Without this,
-       "ocamlfind install" (e.g. zarith's `make install`) writes files
-       relative to the build cwd rather than into the prefix, and the
-       layer-diff captures nothing. *)
-    ("OCAMLFIND_DESTDIR", prefix / "lib");
-    ("OCAMLPATH", String.concat ":" [ prefix / "lib"; prefix / "lib" / "ocaml" ]);
-    ("OCAMLTOP_INCLUDE_PATH", prefix / "lib" / "toplevel");
-    ("OCAML_TOPLEVEL_PATH", prefix / "lib" / "toplevel");
-  ]
+let switch_env ?toolchain ~prefix () =
+  let no_toolchain_env () =
+    [
+      ("OPAM_SWITCH_PREFIX", prefix);
+      ("OCAMLLIB", prefix / "lib" / "ocaml");
+      ( "CAML_LD_LIBRARY_PATH",
+        String.concat ":"
+          [
+            prefix / "lib" / "stublibs"; prefix / "lib" / "ocaml" / "stublibs";
+          ] );
+      ("OCAMLFIND_CONF", prefix / "lib" / "findlib.conf");
+      (* The relocatable ocamlfind installs findlib.conf with destdir=".",
+         expecting OCAMLFIND_DESTDIR to be set at use-time. Without this,
+         "ocamlfind install" (e.g. zarith's `make install`) writes files
+         relative to the build cwd rather than into the prefix, and the
+         layer-diff captures nothing. *)
+      ("OCAMLFIND_DESTDIR", prefix / "lib");
+      ( "OCAMLPATH",
+        String.concat ":" [ prefix / "lib"; prefix / "lib" / "ocaml" ] );
+      ("OCAMLTOP_INCLUDE_PATH", prefix / "lib" / "toplevel");
+      ("OCAML_TOPLEVEL_PATH", prefix / "lib" / "toplevel");
+    ]
+  in
+  match toolchain with
+  | None -> no_toolchain_env ()
+  (* Relocatable toolchain: the compiler lives in the consumer prefix
+     (no fixed-prefix layering), so the env layout is identical to the
+     no-toolchain branch. The version pinning still keeps the right
+     compiler in scope. *)
+  | Some { relocatable = true; _ } -> no_toolchain_env ()
+  | Some tc ->
+      (* Toolchain-layered env. PATH / OCAMLPATH / CAML_LD_LIBRARY_PATH
+         prepend toolchain paths (validated by the spike against a
+         non-relocatable upstream ocaml switch). No OCAMLLIB /
+         OCAMLFIND_CONF — the baked compiler path is authoritative and
+         the toolchain's [findlib.conf] has the right [path:] entries
+         already. OCAMLFIND_DESTDIR still points at the consumer
+         prefix so [ocamlfind install] writes new libs into [prefix],
+         not into the toolchain. *)
+      [
+        ("OPAM_SWITCH_PREFIX", prefix);
+        ( "CAML_LD_LIBRARY_PATH",
+          String.concat ":"
+            [
+              prefix / "lib" / "stublibs";
+              prefix / "lib" / "ocaml" / "stublibs";
+              tc.install_prefix / "lib" / "stublibs";
+            ] );
+        ("OCAMLFIND_DESTDIR", prefix / "lib");
+        ( "OCAMLPATH",
+          String.concat ":"
+            [
+              prefix / "lib";
+              prefix / "lib" / "ocaml";
+              tc.install_prefix / "lib";
+            ] );
+        ("OCAMLTOP_INCLUDE_PATH", prefix / "lib" / "toplevel");
+        ("OCAML_TOPLEVEL_PATH", prefix / "lib" / "toplevel");
+      ]
 
-let create ~prefix ~packages_dirs ~conf =
+let create ~prefix ~packages_dirs ~conf ?toolchain () =
   let loaded_gt =
     match !_global_state with
     | Some gt -> gt
@@ -175,14 +226,24 @@ let create ~prefix ~packages_dirs ~conf =
   in
   let switch_config =
     let sc = OpamFile.Switch_config.empty in
-    {
-      sc with
-      env =
-        List.map
-          (fun (k, v) ->
-            OpamTypesBase.env_update_resolved k Eq v ~comment:"switch env")
-          (switch_env ~prefix);
-    }
+    let base_env =
+      List.map
+        (fun (k, v) ->
+          OpamTypesBase.env_update_resolved k Eq v ~comment:"switch env")
+        (switch_env ?toolchain ~prefix ())
+    in
+    (* When a toolchain is active, prepend its [bin] to PATH via opam's
+       PlusEq (colon-prepend) semantics so the non-relocatable compiler
+       resolves ahead of anything else on PATH. *)
+    let env =
+      match toolchain with
+      | None | Some { relocatable = true; _ } -> base_env
+      | Some tc ->
+          OpamTypesBase.env_update_resolved "PATH" PlusEq (tc.install_prefix / "bin")
+            ~comment:"toolchain bin"
+          :: base_env
+    in
+    { sc with env }
   in
 
   OpamStateConfig.update ~root_dir:root ();
@@ -271,7 +332,58 @@ let create ~prefix ~packages_dirs ~conf =
       overwrote_opams = OpamPackage.Map.empty;
     }
   in
-  { st; conf; prefix }
+  (* Pre-mark toolchain packages as installed. Makes the synthetic
+     switch honest about what's already present at build time, so that
+     consumer packages that read [ocaml:native] / [ocaml:version] get
+     real values resolved via [synthetic_config] rather than empty
+     strings. Skipped for relocatable toolchains: the compiler is
+     supposed to be built into the consumer prefix exactly like in
+     no-toolchain mode, so the layer cache contains the same set of
+     layers regardless of whether [--toolchain] was passed. *)
+  let st =
+    match toolchain with
+    | None | Some { relocatable = true; _ } -> st
+    | Some tc ->
+        OpamPackage.Set.fold
+          (fun pkg st ->
+            match OpamPackage.Map.find_opt pkg all_opams with
+            | None -> st
+            | Some opam ->
+                let name = OpamPackage.name pkg in
+                (* Inline the [synthetic_config] / [mark_installed]
+                   bodies since both are defined later in this file and
+                   we'd otherwise forward-reference. *)
+                let config =
+                  match OpamPackage.Name.to_string name with
+                  | "ocaml" ->
+                      let var s = OpamVariable.of_string s in
+                      let b v = OpamTypes.B v in
+                      let s v = OpamTypes.S v in
+                      Some
+                        (OpamFile.Dot_config.create
+                           [
+                             (var "native", b true);
+                             (var "native-tools", b true);
+                             (var "native-dynlink", b true);
+                             (var "preinstalled", b false);
+                             (var "compiler", s "");
+                           ])
+                  | _ -> None
+                in
+                let open OpamStateTypes in
+                {
+                  st with
+                  installed = OpamPackage.Set.add pkg st.installed;
+                  installed_opams =
+                    OpamPackage.Map.add pkg opam st.installed_opams;
+                  conf_files =
+                    (match config with
+                    | Some c -> OpamPackage.Name.Map.add name c st.conf_files
+                    | None -> st.conf_files);
+                })
+          tc.packages st
+  in
+  { st; conf; prefix; toolchain }
 
 let switch_state t =
   (* Coerce rw to unlocked for the solver *)
@@ -371,14 +483,29 @@ let resolve_substs t opam =
   Hashtbl.fold (fun k v acc -> (k, v) :: acc) vars []
   |> List.sort (fun (a, _) (b, _) -> String.compare a b)
 
-let resolve_commands t ~test ~doc ~dev_setup opam =
+let resolve_commands t ~test ~doc ~dev_setup ?build_dir opam =
   let local =
-    OpamVariable.Map.of_list
+    let base =
       [
         (OpamVariable.of_string "with-test", Some (OpamTypes.B test));
         (OpamVariable.of_string "with-doc", Some (OpamTypes.B doc));
         (OpamVariable.of_string "with-dev-setup", Some (OpamTypes.B dev_setup));
       ]
+    in
+    (* Override [%{build}%] to oi's actual build cwd. opam's default
+       resolution returns [<switch>/.opam-switch/build/<pkg>], but oi
+       runs build commands with [cwd = build_dir] (a hash-suffixed
+       dir under [cache_root/build/_build/]) — packages like
+       [oxcaml-compiler] reference [%{build}%/<subdir>] expecting
+       the cwd, so without this override absolute paths point at a
+       directory that doesn't exist. *)
+    let with_build =
+      match build_dir with
+      | None -> base
+      | Some d ->
+          (OpamVariable.of_string "build", Some (OpamTypes.S d)) :: base
+    in
+    OpamVariable.Map.of_list with_build
   in
   let env = OpamPackageVar.resolve ~opam ~local t.st in
   OpamFilter.commands env (OpamFile.OPAM.build opam)

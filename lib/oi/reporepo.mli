@@ -20,6 +20,30 @@ type entry = {
       (** Upstream git ref this entry tracks (typically a branch like
           [refs/heads/relocatable]). Used by [refresh] and [bump] to pick up new
           commits on the same branch rather than HEAD. *)
+  toolchain : string option;
+      (** [x-oi-toolchain]: this overlay targets the named toolchain (use-site
+          relationship). Drives auto-injected base depends in [bump]: an
+          [oxcaml]-targeted overlay re-locks against the toolchain's own base
+          set instead of the default [relocatable; default]. *)
+  toolchain_name : string option;
+      (** [x-oi-toolchain-name]: when set, this entry DEFINES a toolchain
+          with the given CLI name (e.g. ["oxcaml"], ["ocaml-5.4"]). Distinct
+          from {!toolchain} above: that one says "uses toolchain X", this one
+          says "is the definition of toolchain X". The reporepo handle and
+          the toolchain CLI name live in separate namespaces so the handle
+          can stay opam-valid (e.g. [toolchain-ocaml-5-4] handle defines
+          toolchain CLI name [ocaml-5.4]). *)
+  toolchain_compiler : string option;
+      (** [x-oi-toolchain-compiler]: the primary compiler package spec, e.g.
+          ["ocaml-variants.5.2.0+ox"]. Used by [Toolchain.resolve] to anchor
+          [pick_ocaml_version]. Only meaningful when {!toolchain_name} is set. *)
+  relocatable : bool option;
+      (** [x-oi-relocatable]: build mode for the toolchain this entry defines.
+          [Some true] means relocatable (no fixed-prefix install), [Some false]
+          means fixed-prefix. [None] for non-toolchain entries. *)
+  toolchain_roots : string list list;
+      (** [x-oi-toolchain-roots]: solver root specs for the toolchain. Same
+          shape as [root_packages]. *)
   depends : (string * string option) list;
       (** Other overlay handles this one depends on, optionally with an exact
           version. *)
@@ -72,6 +96,20 @@ val materialize :
     the list override earlier on name clashes by the solver's own first-wins
     rule). *)
 
+val materialize_one :
+  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  refresh:bool ->
+  data_dir:string ->
+  handle:string ->
+  version:string ->
+  url:string ->
+  commit:string ->
+  string
+(** Single-overlay variant of {!materialize} that takes the identity fields
+    directly rather than an [entry] record. Used for builtin toolchains where
+    a synthetic [entry] would be all placeholder fields. Pass [commit:""] to
+    track the URL's HEAD without pinning a specific sha. *)
+
 (** {1 Base overlay resolution}
 
     Every $(b,oi) invocation needs a baseline set of opam repositories to
@@ -109,9 +147,15 @@ val default_path : string
     then [~/.local/share/oi/reporepo]). Overridable with [$OI_REPOREPO] or a
     per-command [--reporepo] flag. *)
 
+val env_path : unit -> string
+(** [env_path ()] returns [$OI_REPOREPO] if set, else {!default_path}. *)
+
 val default_url : string
 (** The upstream git URL the reporepo is cloned from when none is set via
     [$OI_REPOREPO_URL] or a per-command [--reporepo-url] flag. *)
+
+val env_url : unit -> string
+(** [env_url ()] returns [$OI_REPOREPO_URL] if set, else {!default_url}. *)
 
 val ensure_clone :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -168,12 +212,12 @@ val add :
   handle:string ->
   url:string ->
   ?ref_:string ->
+  ?toolchain:string ->
+  ?base_handles:string list ->
   ?depends:(string * string option) list ->
   ?root_packages:string list list ->
   ?synopsis:string ->
-  ?display_name:string ->
   ?force:bool ->
-  ?origin_url:string ->
   unit ->
   entry
 (** Create the first package for [handle] in the reporepo at [path].
@@ -183,10 +227,17 @@ val add :
     [~ref_:"relocatable"] (for example) to pin a non-default branch. The version
     is [YYYYMMDD.0] for today's date.
 
+    [~toolchain] persists the targeted builtin toolchain handle in the new
+    opam file's [x-oi-toolchain] field. [~base_handles] overrides the
+    default [["relocatable"; "default"]] base set — typically supplied by
+    the CLI from {!Toolchain.depends_of} when [~toolchain] is set so
+    auto-injected deps match the toolchain's own base set.
+
     When [depends] is omitted and [handle] is not itself a base overlay, the new
-    entry auto-depends on the latest [relocatable] and [default] versions
-    currently in the reporepo — that's how user overlays lock themselves against
-    a specific base set. Pass [~depends:[]] to produce an entry with no deps.
+    entry auto-depends on the latest versions of each handle in [base_handles]
+    (default [relocatable; default]) currently in the reporepo — that's how
+    user overlays lock themselves against a specific base set. Pass
+    [~depends:[]] to produce an entry with no deps.
 
     Raises if [handle] already has entries in the reporepo, unless [force] is
     [true] — in which case a new [YYYYMMDD.N] version is written alongside the
@@ -200,6 +251,8 @@ val bump :
   handle:string ->
   ?url:string ->
   ?ref_:string ->
+  ?toolchain:string ->
+  ?base_handles:string list ->
   ?depends:(string * string option) list ->
   ?root_packages:string list list ->
   unit ->
@@ -209,11 +262,17 @@ val bump :
     [~ref_] targets a specific branch or ref (defaults to the one the previous
     version tracked, or [HEAD]).
 
+    [~toolchain] overrides the previous entry's [x-oi-toolchain]; absent, it
+    is inherited unchanged. [~base_handles] selects which handles auto-deps
+    are pinned against (defaulting to [["relocatable"; "default"]]) — the CLI
+    typically passes the targeted toolchain's own base set here so a bump
+    re-locks against the right family.
+
     When [depends] is omitted and [handle] is a non-base overlay, the
-    auto-injected base pins are refreshed to the latest [relocatable] /
-    [default] versions in the reporepo (re-locking the user overlay against the
-    current base set). Base overlays and overlays without any auto-injected base
-    pin preserve their previous [depends] list.
+    auto-injected base pins are refreshed to the latest versions of each
+    handle in [base_handles] (re-locking the user overlay against the current
+    base set). Base overlays and overlays without any auto-injected base pin
+    preserve their previous [depends] list.
 
     When [root_packages] is omitted, the previous version's list is preserved.
     Pass [~root_packages:[]] to explicitly clear it.

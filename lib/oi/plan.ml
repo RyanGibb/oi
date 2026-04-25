@@ -18,6 +18,7 @@ type package_plan = {
   dep_layers : dep_layer list;
   source : source_info option;
   extra_sources : (string * source_info) list;
+  extra_files : (string * string) list;
   patches : patch list;
   substs : subst list;
   subst_vars : (string * string) list;
@@ -38,6 +39,7 @@ type t = {
   cache_root : string;
   os_key : string;
   ocaml_version : string;
+  build_prefix : string;
   total_packages : int;
 }
 
@@ -68,9 +70,34 @@ let find_pkg_source_dir ~packages_dirs pkg =
     (fun d -> Sys.file_exists (d / name / full / "opam"))
     packages_dirs
 
-let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ action_plan =
-  let prefix = cache_root / "build" / "prefix" in
+let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix
+    action_plan =
+  let prefix = build_prefix in
   let groups = Action.parallel_groups action_plan in
+  (* Non-relocatable toolchains live at a fixed prefix and are NOT
+     built/installed into the consumer prefix — we drop them from
+     each group here so Execute never tries to restore or re-build
+     them. Keeping them in [action_plan] (i.e. in the hash graph) is
+     still important for layer_hash correctness: consumer layers
+     must change when the toolchain does.
+
+     Relocatable toolchains take the opposite path: their compiler
+     IS built into the consumer prefix (matching [Opam_ctx.create]'s
+     [mark_installed] skip), so leave the packages in their build
+     groups. The layer cache replays them like any other dep. *)
+  let tc_pkgs =
+    match Opam_ctx.toolchain ctx with
+    | None -> OpamPackage.Set.empty
+    | Some tc when tc.relocatable -> OpamPackage.Set.empty
+    | Some tc -> tc.packages
+  in
+  let is_toolchain_name name =
+    match
+      OpamPackage.Name.Map.find_opt name (Action.nodes_by_name action_plan)
+    with
+    | None -> false
+    | Some node -> OpamPackage.Set.mem node.Action.pkg tc_pkgs
+  in
   (* Track which packages have been "installed" in the synthetic ctx
      so that variables like [ocaml:native] resolve correctly when
      resolving commands for later stages. We mark each stage's packages
@@ -92,6 +119,7 @@ let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ action_plan =
   in
   List.mapi
     (fun i names ->
+      let names = List.filter (fun n -> not (is_toolchain_name n)) names in
       let packages =
         List.map
           (fun name ->
@@ -141,6 +169,33 @@ let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ action_plan =
                   (name, { url; checksums }))
                 (OpamFile.OPAM.extra_sources opam)
             in
+            (* Inline files declared by [extra-files:] in the opam
+               recipe live next to the opam file at
+               [<packages_dir>/<name>/<name.version>/files/<basename>].
+               Capture their absolute paths so [Execute] can copy
+               them into [build_dir] before patches are applied. *)
+            let extra_files =
+              match OpamFile.OPAM.extra_files opam with
+              | None -> []
+              | Some xs ->
+                  let pkg_source_dir =
+                    find_pkg_source_dir ~packages_dirs pkg
+                  in
+                  List.filter_map
+                    (fun (base, _hash) ->
+                      let basename = OpamFilename.Base.to_string base in
+                      match pkg_source_dir with
+                      | None -> None
+                      | Some d ->
+                          let src =
+                            d
+                            / OpamPackage.Name.to_string (OpamPackage.name pkg)
+                            / pkg_s / "files" / basename
+                          in
+                          if Sys.file_exists src then Some (basename, src)
+                          else None)
+                    xs
+            in
             let patches =
               List.map
                 (fun (base, filter) ->
@@ -152,29 +207,28 @@ let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ action_plan =
             let substs =
               List.map OpamFilename.Base.to_string (OpamFile.OPAM.substs opam)
             in
-            let build_commands =
-              Opam_ctx.resolve_commands ctx ~test:false ~doc:false
-                ~dev_setup:false opam
-            in
-            let install_commands =
-              let env = Opam_ctx.resolve ctx opam in
-              OpamFilter.commands env (OpamFile.OPAM.install opam)
-              |> List.filter_map (function [] -> None | cmd -> Some cmd)
-            in
-            (* Suffix the build dir with the short layer hash so two
-               overlays that pin the same [name.version] to different
-               upstream URLs (or with different deps/options) don't
-               clash on one [_build/<pkg>] directory. The layer hash
-               already folds in URL, commit, deps, patches, OS key and
-               build flags, so sharing a dir implies genuinely
-               interchangeable inputs. [install_file] lives under
-               [build_dir] so it inherits the uniqueness automatically. *)
+            (* [build_dir] is computed below; capture it first for
+               the [%{build}%] override. *)
             let short_hash =
               String.sub layer_hash 0 (min 12 (String.length layer_hash))
             in
             let build_dir =
               cache_root / "build" / "_build" / (pkg_s ^ "-" ^ short_hash)
             in
+            let build_commands =
+              Opam_ctx.resolve_commands ctx ~test:false ~doc:false
+                ~dev_setup:false ~build_dir opam
+            in
+            let install_commands =
+              let env = Opam_ctx.resolve ctx opam in
+              OpamFilter.commands env (OpamFile.OPAM.install opam)
+              |> List.filter_map (function [] -> None | cmd -> Some cmd)
+            in
+            (* [build_dir]'s short-hash suffix (above) means two
+               overlays pinning the same [name.version] to different
+               upstream URLs/deps don't clash on one [_build/<pkg>]
+               dir. [install_file] under [build_dir] inherits this
+               uniqueness automatically. *)
             let name_s = OpamPackage.Name.to_string (OpamPackage.name pkg) in
             let install_file = build_dir / (name_s ^ ".install") in
             let env = Opam_ctx.compilation_env ctx opam in
@@ -191,6 +245,7 @@ let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ action_plan =
               dep_layers;
               source;
               extra_sources;
+              extra_files;
               patches;
               substs;
               subst_vars;
@@ -209,14 +264,21 @@ let resolve_plan ctx ~packages_dirs ~cache_root ~os_key:_ action_plan =
       { stage = i + 1; packages })
     groups
 
-let create ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version action_plan =
+let create ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version ?build_prefix
+    action_plan =
+  let build_prefix =
+    match build_prefix with
+    | Some p -> p
+    | None -> cache_root / "build" / "prefix"
+  in
   let groups =
-    resolve_plan ctx ~packages_dirs ~cache_root ~os_key action_plan
+    resolve_plan ctx ~packages_dirs ~cache_root ~os_key ~build_prefix
+      action_plan
   in
   let total_packages =
     List.fold_left (fun acc g -> acc + List.length g.packages) 0 groups
   in
-  { groups; cache_root; os_key; ocaml_version; total_packages }
+  { groups; cache_root; os_key; ocaml_version; build_prefix; total_packages }
 
 (* -- Pretty-printing ----------------------------------------------------- *)
 

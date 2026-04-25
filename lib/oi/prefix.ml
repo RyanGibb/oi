@@ -11,9 +11,9 @@ let canonical p = try Unix.realpath p with Unix.Unix_error _ -> p
 
 (* -- OCaml-specific environment ------------------------------------------ *)
 
-let env_vars ~prefix ~dune_cache_root =
+let env_vars ?toolchain ~prefix ~dune_cache_root () =
   let prefix = canonical prefix in
-  Opam_ctx.switch_env ~prefix
+  Opam_ctx.switch_env ?toolchain ~prefix ()
   @ [
       ("OCAMLFIND_DESTDIR", prefix / "lib");
       ("DUNE_CACHE", "enabled");
@@ -21,13 +21,13 @@ let env_vars ~prefix ~dune_cache_root =
       ("DUNE_CACHE_STORAGE_MODE", "hardlink");
     ]
 
-let envrc_content ~prefix ?tools ~dune_cache_root () =
+let envrc_content ?toolchain ~prefix ?tools ~dune_cache_root () =
   let prefix = canonical prefix in
   let tools = Option.map canonical tools in
   let switch_vars =
     List.map
       (fun (k, v) -> Fmt.str "export %s=\"%s\"" k v)
-      (Opam_ctx.switch_env ~prefix)
+      (Opam_ctx.switch_env ?toolchain ~prefix ())
   in
   let header =
     [
@@ -42,10 +42,18 @@ let envrc_content ~prefix ?tools ~dune_cache_root () =
   in
   (* Tools bin goes first so dev binaries shadow stale host copies; the
      project prefix follows so the main deps' binaries win over system
-     PATH. *)
+     PATH. Toolchain [bin] goes AFTER the project prefix so the
+     project's own ocamlc (if any) wins over the toolchain's — but in
+     practice the project prefix is empty of compiler binaries and the
+     toolchain supplies them. *)
   let path_adds =
     (match tools with None -> [] | Some _ -> [ "PATH_add \"$OI_TOOLS/bin\"" ])
     @ [ "PATH_add \"$OI_PREFIX/bin\"" ]
+    @
+    match toolchain with
+    | None | Some { Opam_ctx.relocatable = true; _ } -> []
+    | Some (tc : Opam_ctx.toolchain) ->
+        [ Fmt.str "PATH_add \"%s/bin\"" tc.install_prefix ]
   in
   String.concat "\n"
     (header @ path_adds @ switch_vars
@@ -57,8 +65,8 @@ let envrc_content ~prefix ?tools ~dune_cache_root () =
         "";
       ])
 
-let make_env ~prefix ?tools ~dune_cache_root () =
-  let vars = env_vars ~prefix ~dune_cache_root in
+let make_env ?toolchain ~prefix ?tools ~dune_cache_root () =
+  let vars = env_vars ?toolchain ~prefix ~dune_cache_root () in
   let dominated =
     "PATH" :: List.map (fun (k, _) -> String.uppercase_ascii k) vars
   in
@@ -75,10 +83,20 @@ let make_env ~prefix ?tools ~dune_cache_root () =
     |> List.filter (fun s -> not (List.exists (has_prefix s) dominated))
   in
   let tools_bin = Option.map (fun t -> canonical t / "bin") tools in
+  let toolchain_bin =
+    match toolchain with
+    | None | Some { Opam_ctx.relocatable = true; _ } -> None
+    | Some (tc : Opam_ctx.toolchain) -> Some (tc.install_prefix / "bin")
+  in
+  (* PATH precedence: [tools/bin] > [prefix/bin] > [toolchain/bin] >
+     existing PATH. Tools (dev tooling) shadow the project; the
+     project shadows the toolchain so a project-built ocamlc wins if
+     present; the toolchain provides what the project doesn't. *)
+  let path_components =
+    List.filter_map Fun.id [ tools_bin; Some (prefix / "bin"); toolchain_bin ]
+  in
   let path_entry =
-    match tools_bin with
-    | None -> "PATH=" ^ (prefix / "bin") ^ ":" ^ current_path
-    | Some tb -> "PATH=" ^ tb ^ ":" ^ (prefix / "bin") ^ ":" ^ current_path
+    "PATH=" ^ String.concat ":" path_components ^ ":" ^ current_path
   in
   let env_pairs = path_entry :: List.map (fun (k, v) -> k ^ "=" ^ v) vars in
   Array.of_list (env_pairs @ base)

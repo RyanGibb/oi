@@ -42,9 +42,29 @@ let env_url () =
 type entry = {
   handle : string;
   version : string;
-  url : string;
-  commit : string;
+  url : string;  (** Empty string for definition-only entries (no own clone). *)
+  commit : string;  (** Empty when [url] is empty. *)
   ref_ : string option;
+  toolchain : string option;
+      (** [x-oi-toolchain]: this overlay was built against the named toolchain. *)
+  toolchain_name : string option;
+      (** [x-oi-toolchain-name]: when set, this entry DEFINES a toolchain with
+          the given CLI name (e.g. ["oxcaml"], ["ocaml-5.4"]). The reporepo
+          handle and the toolchain CLI name live in separate namespaces:
+          [toolchain-oxcaml] (handle) vs [oxcaml] (CLI name). *)
+  toolchain_compiler : string option;
+      (** [x-oi-toolchain-compiler]: the primary compiler package spec, e.g.
+          ["ocaml-variants.5.2.0+ox"]. Used by [Toolchain.resolve] to anchor
+          [pick_ocaml_version]. Only meaningful when [toolchain_name] is set. *)
+  relocatable : bool option;
+      (** [x-oi-relocatable]: build mode for the toolchain this entry defines.
+          [Some true] = relocatable (no fixed-prefix install), [Some false] =
+          fixed-prefix. [None] for non-toolchain entries. *)
+  toolchain_roots : string list list;
+      (** [x-oi-toolchain-roots]: solver root specs for the toolchain. Same
+          shape as [x-root-packages]: each top-level entry is one solve
+          group, either a bare string (singleton) or a nested list of
+          strings (multi-package group). *)
   depends : (string * string option) list;
   root_packages : string list list;
   opam_path : string;
@@ -310,20 +330,44 @@ let parse_entry_file path : entry option =
         | Some v -> OpamPackage.Version.to_string v
         | None -> Error.config_error "%s: missing version field" path
       in
-      let url =
+      (* [url:] is optional: definition-only entries (e.g. toolchain
+         metadata that composes existing overlays) carry no URL. We
+         require either a URL or [x-oi-toolchain-name] so that loose
+         "broken" entries with neither still produce a clear error. *)
+      let extensions = OpamFile.OPAM.extensions opam in
+      let url_bare, commit =
         match OpamFile.OPAM.url opam with
-        | Some u -> OpamUrl.to_string (OpamFile.URL.url u)
-        | None -> Error.config_error "%s: missing url: src field" path
+        | Some u -> split_url_commit (OpamUrl.to_string (OpamFile.URL.url u))
+        | None -> ("", "")
       in
-      let url_bare, commit = split_url_commit url in
+      let toolchain_name =
+        read_string_extension extensions "x-oi-toolchain-name"
+      in
+      if url_bare = "" && toolchain_name = None then
+        Error.config_error
+          "%s: entry needs either a [url:] block or [x-oi-toolchain-name]"
+          path;
       let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
-      let ref_ =
-        read_string_extension (OpamFile.OPAM.extensions opam) "x-oi-ref"
+      let ref_ = read_string_extension extensions "x-oi-ref" in
+      let toolchain = read_string_extension extensions "x-oi-toolchain" in
+      let toolchain_compiler =
+        read_string_extension extensions "x-oi-toolchain-compiler"
+      in
+      let relocatable =
+        match OpamStd.String.Map.find_opt "x-oi-relocatable" extensions with
+        | None -> None
+        | Some v -> (
+            match v.OpamParserTypes.FullPos.pelem with
+            | OpamParserTypes.FullPos.Bool b -> Some b
+            | _ ->
+                Error.config_error
+                  "%s: x-oi-relocatable must be a boolean" path)
+      in
+      let toolchain_roots =
+        read_root_packages_extension ~path extensions "x-oi-toolchain-roots"
       in
       let root_packages =
-        read_root_packages_extension ~path
-          (OpamFile.OPAM.extensions opam)
-          "x-root-packages"
+        read_root_packages_extension ~path extensions "x-root-packages"
       in
       Some
         {
@@ -332,6 +376,11 @@ let parse_entry_file path : entry option =
           url = url_bare;
           commit;
           ref_;
+          toolchain;
+          toolchain_name;
+          toolchain_compiler;
+          relocatable;
+          toolchain_roots;
           depends;
           root_packages;
           opam_path = path;
@@ -471,20 +520,31 @@ let resolve entries ~roots =
 
 (* -- Materialising (cloning) ------------------------------------------- *)
 
-let clone_dir_name (e : entry) = "overlay-" ^ e.handle ^ "-" ^ e.version
+let clone_dir_name ~handle ~version = "overlay-" ^ handle ^ "-" ^ version
+
+(* Clone a single overlay clone given its identity directly (handle,
+   version, url, optional commit). Doesn't require a [Reporepo.entry]
+   record — useful for builtin toolchains where the entry would be a
+   synthetic placeholder. The URL fragment [#<commit>] is respected by
+   opam's git backend for reproducibility. *)
+let materialize_one ~fs ~refresh ~data_dir ~handle ~version ~url ~commit =
+  let name = clone_dir_name ~handle ~version in
+  let dir = data_dir / "repos" / name in
+  let url = if commit = "" then url else url ^ "#" ^ commit in
+  Repo.ensure_one ~fs ~refresh ~label:name ~url ~dir;
+  dir / "packages"
 
 let materialize ~fs ~sys:_ ~data_dir ?(refresh = false) entries =
-  List.map
+  (* Definition-only entries (toolchain views, etc.) carry no own URL
+     and therefore no own clone — skip them. They contribute through
+     [depends:] resolution rather than directly. *)
+  List.filter_map
     (fun (e : entry) ->
-      let name = clone_dir_name e in
-      let dir = data_dir / "repos" / name in
-      (* Pin to the exact commit in the URL fragment so the clone is
-         reproducible. The upstream URL may be any backend opam
-         understands; the [#<sha>] suffix is respected by the git
-         backend. *)
-      let url = if e.commit = "" then e.url else e.url ^ "#" ^ e.commit in
-      Repo.ensure_one ~fs ~refresh ~label:name ~url ~dir;
-      dir / "packages")
+      if e.url = "" then None
+      else
+        Some
+          (materialize_one ~fs ~refresh ~data_dir ~handle:e.handle
+             ~version:e.version ~url:e.url ~commit:e.commit))
     entries
 
 (* -- Base overlay resolution ------------------------------------------- *)
@@ -527,11 +587,8 @@ let ensure_base ~fs ~sys ~data_dir ?(refresh = false) () =
                (List.map (fun (e : entry) -> e.handle ^ "." ^ e.version) base)));
       List.map
         (fun (e : entry) ->
-          let name = clone_dir_name e in
-          let dir = data_dir / "repos" / name in
-          let url = if e.commit = "" then e.url else e.url ^ "#" ^ e.commit in
-          Repo.ensure_one ~fs ~refresh ~label:name ~url ~dir;
-          dir / "packages")
+          materialize_one ~fs ~refresh ~data_dir ~handle:e.handle
+            ~version:e.version ~url:e.url ~commit:e.commit)
         base
 
 (* -- git ls-remote ------------------------------------------------------- *)
@@ -551,10 +608,14 @@ let parse_ls_remote_output out =
             Some (sha, ref_name)
         | _ -> None)
 
+(* [git ls-remote] writes "warning: redirecting to https://..." and
+   similar chatter to stderr even when the call succeeds — use
+   [run_out_quiet] so it doesn't leak into [oi repo list]'s table. *)
 let try_ls_remote ~sys url args =
   try
     Retry.with_attempts ~label:(Fmt.str "git ls-remote %s" url) (fun () ->
-        D10.Sysops.Cmd.run_out sys ("git" :: "ls-remote" :: url :: args))
+        D10.Sysops.Cmd.run_out_quiet sys
+          ("git" :: "ls-remote" :: url :: args))
   with exn ->
     Error.config_error "git ls-remote %s failed: %s" url
       (Printexc.to_string exn)
@@ -635,13 +696,44 @@ let escape_string s =
   Buffer.add_char buf '"';
   Buffer.contents buf
 
-let render_opam ~synopsis ~url ~commit ~ref_ ~depends ~root_packages
-    ~display_name ~origin_url =
+let render_root_groups buf field groups =
+  match groups with
+  | [] -> ()
+  | groups ->
+      Printf.bprintf buf "%s: [\n" field;
+      List.iter
+        (fun group ->
+          match group with
+          | [] -> ()
+          | [ one ] -> Printf.bprintf buf "  %s\n" (escape_string one)
+          | multi ->
+              Buffer.add_string buf "  [";
+              List.iter
+                (fun p -> Printf.bprintf buf " %s" (escape_string p))
+                multi;
+              Buffer.add_string buf " ]\n")
+        groups;
+      Buffer.add_string buf "]\n"
+
+(* The four [x-oi-toolchain-*] / [x-oi-relocatable] fields a
+   toolchain-definition entry carries. Bundled into one record so
+   {!render_opam} and the CLI add/bump paths thread one value
+   instead of four parallel parameters that always travel together. *)
+type toolchain_def = {
+  td_name : string;
+  td_compiler : string option;
+  td_relocatable : bool option;
+  td_roots : string list list;
+}
+
+let render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ?toolchain_def ~depends
+    ~root_packages () =
   let buf = Buffer.create 512 in
   Printf.bprintf buf "opam-version: \"2.0\"\n";
   Printf.bprintf buf "synopsis: %s\n" (escape_string synopsis);
-  Printf.bprintf buf "url {\n  src: %s\n}\n"
-    (escape_string (if commit = "" then url else url ^ "#" ^ commit));
+  if url <> "" then
+    Printf.bprintf buf "url {\n  src: %s\n}\n"
+      (escape_string (if commit = "" then url else url ^ "#" ^ commit));
   (match depends with
   | [] -> ()
   | ds ->
@@ -660,28 +752,21 @@ let render_opam ~synopsis ~url ~commit ~ref_ ~depends ~root_packages
     (fun s -> Printf.bprintf buf "x-oi-ref: %s\n" (escape_string s))
     ref_;
   Stdlib.Option.iter
-    (fun s -> Printf.bprintf buf "x-oi-display-name: %s\n" (escape_string s))
-    display_name;
+    (fun s -> Printf.bprintf buf "x-oi-toolchain: %s\n" (escape_string s))
+    toolchain;
   Stdlib.Option.iter
-    (fun s -> Printf.bprintf buf "x-oi-origin-url: %s\n" (escape_string s))
-    origin_url;
-  (match root_packages with
-  | [] -> ()
-  | groups ->
-      Buffer.add_string buf "x-root-packages: [\n";
-      List.iter
-        (fun group ->
-          match group with
-          | [] -> ()
-          | [ one ] -> Printf.bprintf buf "  %s\n" (escape_string one)
-          | multi ->
-              Buffer.add_string buf "  [";
-              List.iter
-                (fun p -> Printf.bprintf buf " %s" (escape_string p))
-                multi;
-              Buffer.add_string buf " ]\n")
-        groups;
-      Buffer.add_string buf "]\n");
+    (fun (td : toolchain_def) ->
+      Printf.bprintf buf "x-oi-toolchain-name: %s\n" (escape_string td.td_name);
+      Stdlib.Option.iter
+        (fun s ->
+          Printf.bprintf buf "x-oi-toolchain-compiler: %s\n" (escape_string s))
+        td.td_compiler;
+      Stdlib.Option.iter
+        (fun b -> Printf.bprintf buf "x-oi-relocatable: %b\n" b)
+        td.td_relocatable;
+      render_root_groups buf "x-oi-toolchain-roots" td.td_roots)
+    toolchain_def;
+  render_root_groups buf "x-root-packages" root_packages;
   Buffer.contents buf
 
 let write_entry ~fs ~path ~handle ~version content =
@@ -699,24 +784,29 @@ let ensure_repo_marker ~fs ~path =
 
 let default_synopsis handle = "Overlay: " ^ handle ^ " — pinned opam repository"
 
-(* Every non-base overlay carries [relocatable]/[default] deps pinned
-   to whatever the reporepo currently has at its latest versions.
-   That's how an overlay captures, via the [depends:] lockfile, which
-   base repos and which commits it was composed against. *)
+(* Every non-base overlay carries deps pinned to whatever the reporepo
+   currently has at the latest version of each base handle. That's how
+   an overlay captures, via the [depends:] lockfile, which base repos
+   and which commits it was composed against. The default base set is
+   [relocatable; default]; an overlay with [x-oi-toolchain] on it
+   substitutes the toolchain's own base set instead, so e.g. an
+   [oxcaml]-targeted overlay only depends on [default]. *)
 let is_base_handle h = h = "default" || h = "relocatable"
 
-let auto_base_depends entries ~handle =
+let default_base_handles = [ "relocatable"; "default" ]
+
+let auto_base_depends entries ~handle ~base_handles =
   if is_base_handle handle then []
   else
-    let pin h =
-      match latest entries ~handle:h with
-      | Some e -> Some (h, Some e.version)
-      | None -> None
-    in
-    List.filter_map Fun.id [ pin "relocatable"; pin "default" ]
+    List.filter_map
+      (fun h ->
+        match latest entries ~handle:h with
+        | Some e -> Some (h, Some e.version)
+        | None -> None)
+      base_handles
 
-let add ~fs ~sys ~path ~handle ~url ?ref_ ?depends ?(root_packages = [])
-    ?synopsis ?display_name ?(force = false) ?origin_url () =
+let add ~fs ~sys ~path ~handle ~url ?ref_ ?toolchain ?base_handles ?depends
+    ?(root_packages = []) ?synopsis ?(force = false) () =
   let entries = load ~path in
   let handle_exists =
     List.exists (fun (e : entry) -> e.handle = handle) entries
@@ -726,8 +816,13 @@ let add ~fs ~sys ~path ~handle ~url ?ref_ ?depends ?(root_packages = [])
       "overlay %s already exists in reporepo; use 'oi repo bump' to add a new \
        version, or pass --force to register a new entry with a different URL"
       handle;
+  let base_handles =
+    Stdlib.Option.value base_handles ~default:default_base_handles
+  in
   let depends =
-    match depends with Some d -> d | None -> auto_base_depends entries ~handle
+    match depends with
+    | Some d -> d
+    | None -> auto_base_depends entries ~handle ~base_handles
   in
   let commit = ls_remote_sha ~sys ?ref_ url in
   (* [force] on an existing handle picks the next [YYYYMMDD.N] slot so
@@ -741,14 +836,29 @@ let add ~fs ~sys ~path ~handle ~url ?ref_ ?depends ?(root_packages = [])
     Stdlib.Option.value synopsis ~default:(default_synopsis handle)
   in
   let content =
-    render_opam ~synopsis ~url ~commit ~ref_ ~depends ~root_packages
-      ~display_name ~origin_url
+    render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ~depends ~root_packages
+      ()
   in
   ensure_repo_marker ~fs ~path;
   let opam_path = write_entry ~fs ~path ~handle ~version content in
-  { handle; version; url; commit; ref_; depends; root_packages; opam_path }
+  {
+    handle;
+    version;
+    url;
+    commit;
+    ref_;
+    toolchain;
+    toolchain_name = None;
+    toolchain_compiler = None;
+    relocatable = None;
+    toolchain_roots = [];
+    depends;
+    root_packages;
+    opam_path;
+  }
 
-let bump ~fs ~sys ~path ~handle ?url ?ref_ ?depends ?root_packages () =
+let bump ~fs ~sys ~path ~handle ?url ?ref_ ?toolchain ?base_handles ?depends
+    ?root_packages () =
   let entries = load ~path in
   let prev =
     match latest entries ~handle with
@@ -762,20 +872,40 @@ let bump ~fs ~sys ~path ~handle ?url ?ref_ ?depends ?root_packages () =
      tracked. This keeps a branch like [relocatable] pinned across
      bumps rather than silently reverting to HEAD. *)
   let ref_ = match ref_ with Some _ -> ref_ | None -> prev.ref_ in
+  (* Same inheritance rule for the toolchain: a bump without
+     [--toolchain] keeps whatever the previous version declared. *)
+  let toolchain =
+    match toolchain with Some _ -> toolchain | None -> prev.toolchain
+  in
   let commit = ls_remote_sha ~sys ?ref_ url in
   (* When [--depend] wasn't passed, refresh the auto-injected base
      pins against whatever the reporepo currently has. That way
      bumping a user overlay automatically re-locks it against the
      latest base versions, which is usually what you want. Explicit
-     deps are carried through untouched. *)
+     deps are carried through untouched.
+
+     [base_handles] handling splits two ways: a caller-supplied
+     [Some bh] (the CLI threading a toolchain's base set) is the
+     source of truth even when [bh = []], so that switching to a
+     toolchain like [ocaml-5.5] (no base deps) clears the previous
+     auto pins. When [base_handles] is [None] we fall back to the
+     legacy default; an empty result then preserves [prev.depends]
+     so an under-populated reporepo doesn't accidentally wipe out
+     manual edits. *)
   let depends =
     match depends with
     | Some d -> d
     | None ->
         if is_base_handle handle then prev.depends
         else
-          let auto = auto_base_depends entries ~handle in
-          if auto = [] then prev.depends else auto
+          match base_handles with
+          | Some bh -> auto_base_depends entries ~handle ~base_handles:bh
+          | None ->
+              let auto =
+                auto_base_depends entries ~handle
+                  ~base_handles:default_base_handles
+              in
+              if auto = [] then prev.depends else auto
   in
   (* When [--root-packages] wasn't passed, carry the previous list through
      untouched. Explicitly pass [~root_packages:[]] to clear it. *)
@@ -783,26 +913,53 @@ let bump ~fs ~sys ~path ~handle ?url ?ref_ ?depends ?root_packages () =
     match root_packages with Some r -> r | None -> prev.root_packages
   in
   (* Skip the write when the resolved state matches [prev] exactly —
-     same URL, commit, branch, and deps. Otherwise we'd accumulate
-     identical [YYYYMMDD.N] entries on every scheduled bump. Compare
-     deps and roots order-insensitively since [auto_base_depends]
-     returns them in lookup order, which may differ from the file
-     order. *)
+     same URL, commit, branch, toolchain, and deps. Otherwise we'd
+     accumulate identical [YYYYMMDD.N] entries on every scheduled bump.
+     Compare deps and roots order-insensitively since
+     [auto_base_depends] returns them in lookup order, which may
+     differ from the file order. *)
   let eq_as_set a b = List.sort compare a = List.sort compare b in
   if
     url = prev.url && commit = prev.commit && ref_ = prev.ref_
+    && toolchain = prev.toolchain
     && eq_as_set depends prev.depends
     && eq_as_set root_packages prev.root_packages
   then `Unchanged prev
   else
     let version = next_version entries ~handle in
+    let toolchain_def =
+      match prev.toolchain_name with
+      | None -> None
+      | Some name ->
+          Some
+            {
+              td_name = name;
+              td_compiler = prev.toolchain_compiler;
+              td_relocatable = prev.relocatable;
+              td_roots = prev.toolchain_roots;
+            }
+    in
     let content =
       render_opam ~synopsis:(default_synopsis handle) ~url ~commit ~ref_
-        ~depends ~root_packages ~display_name:None ~origin_url:None
+        ~toolchain ?toolchain_def ~depends ~root_packages ()
     in
     let opam_path = write_entry ~fs ~path ~handle ~version content in
     `Bumped
-      { handle; version; url; commit; ref_; depends; root_packages; opam_path }
+      {
+        handle;
+        version;
+        url;
+        commit;
+        ref_;
+        toolchain;
+        toolchain_name = prev.toolchain_name;
+        toolchain_compiler = prev.toolchain_compiler;
+        relocatable = prev.relocatable;
+        toolchain_roots = prev.toolchain_roots;
+        depends;
+        root_packages;
+        opam_path;
+      }
 
 let remove ~fs ~path ~handle ?version () =
   let entries = load ~path in

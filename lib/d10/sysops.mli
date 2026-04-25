@@ -67,7 +67,16 @@ module Cmd : sig
       non-zero exit. Stdout and stderr are captured silently. *)
 
   val run_out : t -> string list -> string
-  (** [run_out t args] executes [args] and returns its trimmed stdout. *)
+  (** [run_out t args] executes [args] and returns its trimmed stdout.
+      Subprocess stderr is left attached to the parent's stderr — chatty
+      commands like [git ls-remote] (redirect warnings) will leak there.
+      Use {!run_out_quiet} when that's not desired. *)
+
+  val run_out_quiet : t -> string list -> string
+  (** Like {!run_out} but routes the subprocess's stderr to a throwaway
+      buffer so warnings / progress lines don't reach the parent's
+      stderr. Useful for query-shaped commands where we only care about
+      stdout. *)
 
   val run_inherit : t -> string list -> unit
   (** Like {!run} but the subprocess inherits the parent's stdout and stderr so

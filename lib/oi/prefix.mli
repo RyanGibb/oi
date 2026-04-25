@@ -7,10 +7,20 @@
     Environment variables for OCaml toolchain prefixes. Layer assembly is
     handled by {!D10.Prefix}. *)
 
-val env_vars : prefix:string -> dune_cache_root:string -> (string * string) list
+val env_vars :
+  ?toolchain:Opam_ctx.toolchain ->
+  prefix:string ->
+  dune_cache_root:string ->
+  unit ->
+  (string * string) list
 
 val envrc_content :
-  prefix:string -> ?tools:string -> dune_cache_root:string -> unit -> string
+  ?toolchain:Opam_ctx.toolchain ->
+  prefix:string ->
+  ?tools:string ->
+  dune_cache_root:string ->
+  unit ->
+  string
 (** Generate the contents of an [.envrc] that activates [prefix]. When [tools]
     is given, its [bin/] subdirectory is prepended to [PATH] ahead of
     [prefix/bin]. The tools [lib/] is intentionally NOT wired into
@@ -18,6 +28,7 @@ val envrc_content :
     PATH but invisible to the main project's compiler. *)
 
 val make_env :
+  ?toolchain:Opam_ctx.toolchain ->
   prefix:string ->
   ?tools:string ->
   dune_cache_root:string ->

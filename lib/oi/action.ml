@@ -37,7 +37,10 @@ let plan ctx ?d10 ~packages_dirs pkgs =
     List.fold_left
       (fun (installed, nodes, order) pkg ->
         let name = OpamPackage.name pkg in
-        let dep_set = Solve.dep_names ~packages_dirs ctx pkg in_solution in
+        let dep_set =
+          Solve.dep_names ~packages_dirs ~conf:(Opam_ctx.conf ctx) pkg
+            in_solution
+        in
         let deps =
           dep_set |> OpamPackage.Name.Set.elements
           |> List.filter (fun n -> OpamPackage.Name.Set.mem n in_solution)
@@ -112,6 +115,16 @@ let plan ctx ?d10 ~packages_dirs pkgs =
           match topo_sort dag |> List.rev with [] -> [] | _ :: rest -> rest
         in
         let layer_hash = D10.Layer.hash ~packages_dirs (pkg :: all_dep_pkgs) in
+        (* Non-relocatable toolchains bake their [install_prefix] into
+           the binaries they produce (e.g. bytecode shebangs), so the
+           layer hash must include the toolchain identity or stale
+           binaries with dangling shebangs get reused from the cache. *)
+        let layer_hash =
+          match Opam_ctx.toolchain ctx with
+          | Some tc when not tc.relocatable ->
+              Digest.string (layer_hash ^ ":" ^ tc.hash) |> Digest.to_hex
+          | _ -> layer_hash
+        in
         let method_ =
           match d10 with
           | Some d10 when D10.Layer.succeeded d10 ~hash:layer_hash -> Binary

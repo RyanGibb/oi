@@ -26,6 +26,12 @@ type package_plan = {
   dep_layers : dep_layer list;
   source : source_info option;
   extra_sources : (string * source_info) list;
+  extra_files : (string * string) list;
+      (** Opam [extra-files:] entries: pairs of [(basename, src_path)] where
+          [src_path] is the absolute path to the file in
+          [<packages_dir>/<name>/<name.version>/files/<basename>]. Copied into
+          [build_dir] before patches are applied, so inline patches the
+          recipe references actually exist when [patch -i] runs. *)
   patches : patch list;
   substs : subst list;
   subst_vars : (string * string) list;
@@ -51,6 +57,10 @@ type t = {
   cache_root : string;
   os_key : string;
   ocaml_version : string;
+  build_prefix : string;
+      (** Prefix into which every package in this plan is built and installed.
+          Usually [{cache_root}/build/prefix] for consumer solves; set to a
+          toolchain dir when building a fixed-prefix toolchain. *)
   total_packages : int;
 }
 
@@ -60,11 +70,13 @@ val create :
   cache_root:string ->
   os_key:string ->
   ocaml_version:string ->
+  ?build_prefix:string ->
   Action.t ->
   t
 (** [packages_dirs] is the same list passed to the solver, used to attribute
     each package to its source directory so the resulting plan (and any layer
     built from it) can be tagged with the overlay that contributed the opam
-    file. *)
+    file. [?build_prefix] defaults to [{cache_root}/build/prefix]; pass a
+    different path to build into a fixed location (e.g. a toolchain prefix). *)
 
 val pp : t Fmt.t

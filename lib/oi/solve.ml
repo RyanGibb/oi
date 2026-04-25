@@ -57,7 +57,7 @@ let filter_env (conf : Opam_ctx.conf) v =
 
 (** Compute direct dependency names of [pkg] that are in [in_solution],
     including depopts that appear in the solution. *)
-let dep_names ~packages_dirs ctx pkg in_solution =
+let dep_names ~packages_dirs ~(conf : Opam_ctx.conf) pkg in_solution =
   let env v =
     if List.mem v OpamPackageVar.predefined_depends_variables then None
     else
@@ -66,7 +66,7 @@ let dep_names ~packages_dirs ctx pkg in_solution =
           Some
             (OpamTypes.S
                (OpamPackage.Version.to_string (OpamPackage.version pkg)))
-      | x -> ctx_env ctx x
+      | x -> std_env conf x
   in
   match load_opam packages_dirs pkg with
   | None -> OpamPackage.Name.Set.empty
@@ -99,7 +99,7 @@ let dep_names ~packages_dirs ctx pkg in_solution =
       OpamPackage.Name.Set.union deps depopts
 
 (* DFS topological sort. Cycles are broken by the visited set. *)
-let topo_sort ~packages_dirs ctx pkgs =
+let topo_sort ~packages_dirs ~conf pkgs =
   let in_solution =
     List.fold_left
       (fun s p -> OpamPackage.Name.Set.add (OpamPackage.name p) s)
@@ -114,7 +114,7 @@ let topo_sort ~packages_dirs ctx pkgs =
     List.fold_left
       (fun m p ->
         OpamPackage.Name.Map.add (OpamPackage.name p)
-          (dep_names ~packages_dirs ctx p in_solution)
+          (dep_names ~packages_dirs ~conf p in_solution)
           m)
       OpamPackage.Name.Map.empty pkgs
   in
@@ -132,35 +132,66 @@ let topo_sort ~packages_dirs ctx pkgs =
   List.iter (fun p -> visit (OpamPackage.name p)) pkgs;
   List.rev !result
 
+(* Bare opam-0install run: takes whatever constraints/env the caller
+   supplies and returns the solution (or a diagnostic string). No
+   auto-pinning, no [Opam_ctx], no solve cache — purely a thin wrapper
+   over [Solver.solve] that hides the [Solver.Make (Dir_context)]
+   instantiation. Used by the higher-level {!solve_with_dir_context}
+   and directly by callers (like the toolchain bring-up) that own
+   their constraint set. *)
+let solve_dir ~env ~packages_dirs ~constraints names =
+  let dir_ctx = Dir_context.create ~env ~constraints packages_dirs in
+  match Solver.solve dir_ctx names with
+  | Ok sels -> Ok (Solver.packages_of_result sels)
+  | Error diag -> Error (Solver.diagnostics diag)
+
+(* Augment [constraints] with the OCaml-family pins the consumer
+   solver expects: either the toolchain's own root versions when one
+   is active, or [conf.ocaml_version] for [ocaml]/[ocaml-base-compiler]/
+   [ocaml-compiler] otherwise. Pulled out of {!solve_with_dir_context}
+   so toolchain bring-up can deliberately skip it. *)
+let augment_compiler_constraints ctx ~ocaml_version constraints =
+  let add name version_s m =
+    let n = OpamPackage.Name.of_string name in
+    if OpamPackage.Name.Map.mem n m then m
+    else
+      let v = OpamPackage.Version.of_string version_s in
+      OpamPackage.Name.Map.add n (`Eq, v) m
+  in
+  match Opam_ctx.toolchain ctx with
+  | Some tc ->
+      OpamPackage.Name.Set.fold
+        (fun name acc ->
+          match
+            OpamPackage.Set.elements tc.packages
+            |> List.find_opt (fun p ->
+                   OpamPackage.Name.equal (OpamPackage.name p) name)
+          with
+          | None -> acc
+          | Some pkg ->
+              add
+                (OpamPackage.Name.to_string name)
+                (OpamPackage.Version.to_string (OpamPackage.version pkg))
+                acc)
+        tc.root_names constraints
+  | None ->
+      constraints |> add "ocaml" ocaml_version
+      |> add "ocaml-base-compiler" ocaml_version
+      |> add "ocaml-compiler" ocaml_version
+
 let solve_with_dir_context ctx ~packages_dirs ~constraints ~ocaml_version names
     =
-  let constraints =
-    let add name version_s m =
-      let n = OpamPackage.Name.of_string name in
-      if OpamPackage.Name.Map.mem n m then m
-      else
-        let v = OpamPackage.Version.of_string version_s in
-        OpamPackage.Name.Map.add n (`Eq, v) m
-    in
-    constraints |> add "ocaml" ocaml_version
-    |> add "ocaml-base-compiler" ocaml_version
-    |> add "ocaml-compiler" ocaml_version
-  in
+  let constraints = augment_compiler_constraints ctx ~ocaml_version constraints in
   Log.info (fun m ->
       m "Solving for %a (ocaml = %s)"
         Fmt.(list ~sep:comma string)
         (List.map OpamPackage.Name.to_string names)
         ocaml_version);
-  let dir_ctx =
-    Dir_context.create ~env:(ctx_env ctx) ~constraints packages_dirs
-  in
-  match Solver.solve dir_ctx names with
-  | Ok sels ->
-      let pkgs = Solver.packages_of_result sels in
+  match solve_dir ~env:(ctx_env ctx) ~packages_dirs ~constraints names with
+  | Ok pkgs ->
       Log.info (fun m -> m "Solution: %d packages to build" (List.length pkgs));
       Ok (pkgs, packages_dirs)
-  | Error diag ->
-      let msg = Solver.diagnostics diag in
+  | Error msg ->
       Log.debug (fun m -> m "No solution: %s" msg);
       Error msg
 
@@ -205,14 +236,66 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
     | Some i -> String.sub conf.ocaml_version 0 i
     | None -> conf.ocaml_version
   in
+  (* Toolchain-active solve: pull the toolchain's solver-root names
+     in as required consumer roots so the compiler etc. are forced
+     into the solution. *)
+  let names =
+    match Opam_ctx.toolchain ctx with
+    | None -> names
+    | Some tc ->
+        let existing = OpamPackage.Name.Set.of_list names in
+        let extra =
+          OpamPackage.Name.Set.diff tc.root_names existing
+          |> OpamPackage.Name.Set.elements
+        in
+        names @ extra
+  in
+  (* Log the version each requested name was solved to, plus the
+     compiler family. Surfaces which [utop.X] / [ocaml-variants.X]
+     etc. the solver actually picked — important because the
+     toolchain's pinned set steers consumer choices in non-obvious
+     ways (e.g. [oxcaml-utop-patches.enabled] forces utop into the
+     [+ox*] range). *)
+  let log_selected_versions pkgs =
+    let by_name =
+      List.fold_left
+        (fun m p -> OpamPackage.Name.Map.add (OpamPackage.name p) p m)
+        OpamPackage.Name.Map.empty pkgs
+    in
+    let render n =
+      match OpamPackage.Name.Map.find_opt n by_name with
+      | Some p ->
+          Some
+            (Fmt.str "%s.%s"
+               (OpamPackage.Name.to_string n)
+               (OpamPackage.Version.to_string (OpamPackage.version p)))
+      | None -> None
+    in
+    let compiler_names =
+      List.map OpamPackage.Name.of_string
+        [ "ocaml"; "ocaml-variants"; "ocaml-base-compiler"; "ocaml-compiler";
+          "oxcaml-compiler" ]
+    in
+    let interesting =
+      List.filter_map render names
+      @ List.filter_map render
+          (List.filter
+             (fun n -> not (List.exists (OpamPackage.Name.equal n) names))
+             compiler_names)
+    in
+    if interesting <> [] then
+      Log.info (fun m ->
+          m "Selected: %s" (String.concat ", " interesting))
+  in
   let run_solve () =
     match
       solve_with_dir_context ctx ~packages_dirs ~constraints ~ocaml_version
         names
     with
     | Ok (pkgs, _) ->
-        let pkgs = topo_sort ~packages_dirs ctx pkgs in
+        let pkgs = topo_sort ~packages_dirs ~conf:(Opam_ctx.conf ctx) pkgs in
         log_package_sources ~packages_dirs pkgs;
+        log_selected_versions pkgs;
         Ok pkgs
     | Error _ as e -> e
   in
@@ -222,7 +305,10 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
      repository, or a new overlay version) is exercised immediately.
      [key] returns [None] if any [packages_dir] isn't under a git
      working tree — we then fall back to an uncached solve. *)
-  match Solve_cache.key ~conf ~packages_dirs ~constraints ~names with
+  match
+    Solve_cache.key ~conf ~packages_dirs ~constraints ~names
+      ?toolchain:(Opam_ctx.toolchain ctx) ()
+  with
   | None -> run_solve ()
   | Some cache_key -> (
       match Solve_cache.lookup ~cache_root ~key:cache_key with
@@ -231,6 +317,7 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
               m "solve cache hit %s (%d packages)"
                 (String.sub cache_key 0 12)
                 (List.length pkgs));
+          log_selected_versions pkgs;
           Ok pkgs
       | None -> (
           match run_solve () with

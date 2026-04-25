@@ -116,8 +116,14 @@ let scan_files ~fs fs_dir =
           in
           try
             let st = Eio.Path.stat ~follow:false Eio.Path.(dir / name) in
-            if st.kind = `Regular_file then files := rel :: !files
-            else if st.kind = `Directory then scan rel
+            (* Symlinks count as files for indexing — many layers ship
+               [bin/ocamlc] as a symlink to [bin/ocamlc.opt], and a
+               regular-file-only scan would silently drop the
+               user-facing name from the binary index. *)
+            match st.kind with
+            | `Regular_file | `Symbolic_link -> files := rel :: !files
+            | `Directory -> scan rel
+            | _ -> ()
           with Eio.Exn.Io _ -> ())
         (Eio.Path.read_dir dir)
   in

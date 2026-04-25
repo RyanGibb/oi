@@ -28,15 +28,28 @@ val solve :
     when an identical input is presented again (see {!Solve_cache}). Failed
     solves are not cached. *)
 
+val solve_dir :
+  env:(string -> OpamVariable.variable_contents option) ->
+  packages_dirs:string list ->
+  constraints:OpamFormula.version_constraint OpamTypes.name_map ->
+  OpamPackage.Name.t list ->
+  (OpamPackage.t list, string) result
+(** Lower-level solver entrypoint. Runs [opam-0install] over [packages_dirs]
+    with exactly the [constraints] and [env] supplied — no auto-pinning of
+    OCaml-family packages, no [Opam_ctx], no solve cache. Suitable for one-off
+    solves where the caller fully owns the constraint set, e.g. resolving the
+    package closure for a fixed-prefix toolchain whose pinned compiler version
+    would collide with {!solve}'s default [conf.ocaml_version] injection. *)
+
 val dep_names :
   packages_dirs:string list ->
-  Opam_ctx.t ->
+  conf:Opam_ctx.conf ->
   OpamPackage.t ->
   OpamPackage.Name.Set.t ->
   OpamPackage.Name.Set.t
-(** [dep_names ~packages_dirs ctx pkg in_solution] returns the set of dependency
-    names of [pkg] that appear in [in_solution], after filtering by the platform
-    variables. *)
+(** [dep_names ~packages_dirs ~conf pkg in_solution] returns the set of
+    dependency names of [pkg] that appear in [in_solution], after filtering by
+    the platform variables in [conf]. *)
 
 val load_opam : string list -> OpamPackage.t -> OpamFile.OPAM.t option
 (** [load_opam packages_dirs pkg] searches [packages_dirs] in order for the opam
@@ -52,10 +65,10 @@ val filter_env : Opam_ctx.conf -> OpamFilter.env
 
 val topo_sort :
   packages_dirs:string list ->
-  Opam_ctx.t ->
+  conf:Opam_ctx.conf ->
   OpamPackage.t list ->
   OpamPackage.t list
-(** [topo_sort ~packages_dirs ctx pkgs] returns [pkgs] in topological order
+(** [topo_sort ~packages_dirs ~conf pkgs] returns [pkgs] in topological order
     (dependencies before dependents). Safe to call on the union of several
     solver results — the relative order already produced by the solver is not
     required. *)

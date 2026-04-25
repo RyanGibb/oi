@@ -46,6 +46,21 @@ let run_capture t cmd =
   Log.debug (fun m -> m "%s" out);
   out
 
+(* Like [run_capture] but with stderr redirected into a throwaway
+   buffer so chatty subprocesses (git's "warning: redirecting to ..."
+   notice) don't leak to the parent's stderr. *)
+let run_capture_quiet t cmd =
+  Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
+  let stderr_buf = Buffer.create 64 in
+  let stderr_sink = Eio.Flow.buffer_sink stderr_buf in
+  let out =
+    String.trim
+      (Eio.Process.parse_out ~stderr:stderr_sink t.proc_mgr
+         Eio.Buf_read.take_all cmd)
+  in
+  Log.debug (fun m -> m "%s" out);
+  out
+
 (* Spawn [which NAME] with both stdout and stderr routed into a
    throwaway buffer. Nix's [which] writes "no NAME in PATH" to stderr
    on miss; [Eio.Process.parse_out] only captures stdout, so without
@@ -152,6 +167,7 @@ let run_inherit t cmd =
 module Cmd = struct
   let run t cmd = run_quiet t cmd
   let run_out t cmd = run_capture t cmd
+  let run_out_quiet t cmd = run_capture_quiet t cmd
   let run_inherit t cmd = run_inherit t cmd
 end
 

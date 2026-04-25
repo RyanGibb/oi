@@ -61,6 +61,15 @@ let cleanable_items t ~data_dir =
       path = p "pins";
       description = "Pin-depends sources and synthesized packages trees";
     };
+    {
+      (* Resolved via [Toolchain.default_root] rather than [p
+         "toolchains"] because the toolchain path is XDG-derived
+         independently of [OI_CACHE_DIR], and we want clean to nuke
+         what's actually on disk regardless of any env mismatch. *)
+      label = "toolchains";
+      path = Eio.Path.(t.fs / Toolchain.default_root ());
+      description = "Built compiler toolchains (oxcaml, etc.)";
+    };
   ]
 
 let size ~sys path =

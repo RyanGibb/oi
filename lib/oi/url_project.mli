@@ -24,9 +24,10 @@ type t = {
           provided by each URL project. Names are strings so callers can feed
           them straight into the existing [with_deps] plumbing. *)
   extra_repos : Project.extra_repo list;
-      (** Any [x-opam-repositories:] the URL project declared. *)
+      (** URL entries from the URL project's [x-repos:] field. *)
   overlays : string list;
-      (** Any [x-reporepo:] handles the URL project declared. *)
+      (** Reporepo handles from the URL project's [x-repos:] field
+          ([@HANDLE] form). *)
 }
 
 (** A single [--with=…] CLI token, classified. URLs are always tested first;
