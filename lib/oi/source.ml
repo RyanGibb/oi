@@ -130,6 +130,8 @@ module Reporepo = struct
     toolchain_compiler : string option;
     relocatable : bool option;
     toolchain_roots : string list list;
+    toolchain_tools : string list;
+    default_toolchain : bool;
     depends : (string * string option) list;
     root_packages : string list list;
     opam_path : string;
@@ -289,6 +291,33 @@ module Reporepo = struct
         | OpamParserTypes.FullPos.String s -> Some s
         | _ -> None)
 
+  let read_bool_extension ~path extensions name =
+    match OpamStd.String.Map.find_opt name extensions with
+    | None -> None
+    | Some v -> (
+        match v.OpamParserTypes.FullPos.pelem with
+        | OpamParserTypes.FullPos.Bool b -> Some b
+        | _ -> Error.config_error "%s: %s must be a boolean" path name)
+
+  let read_string_list_extension ~path extensions name =
+    match OpamStd.String.Map.find_opt name extensions with
+    | None -> []
+    | Some v -> (
+        match v.OpamParserTypes.FullPos.pelem with
+        | OpamParserTypes.FullPos.String s -> [ s ]
+        | OpamParserTypes.FullPos.List { pelem = items; _ } ->
+            List.map
+              (fun (it : OpamParserTypes.FullPos.value) ->
+                match it.pelem with
+                | OpamParserTypes.FullPos.String s -> s
+                | _ ->
+                    Error.config_error
+                      "%s: %s items must be strings" path name)
+              items
+        | _ ->
+            Error.config_error
+              "%s: %s must be a string or a list of strings" path name)
+
   let read_root_packages_extension ~path extensions name =
     let as_string_item (v : OpamParserTypes.FullPos.value) =
       match v.pelem with
@@ -371,19 +400,29 @@ module Reporepo = struct
         let toolchain_compiler =
           read_string_extension extensions "x-oi-toolchain-compiler"
         in
-        let relocatable =
-          match OpamStd.String.Map.find_opt "x-oi-relocatable" extensions with
-          | None -> None
-          | Some v -> (
-              match v.OpamParserTypes.FullPos.pelem with
-              | OpamParserTypes.FullPos.Bool b -> Some b
-              | _ ->
-                  Error.config_error "%s: x-oi-relocatable must be a boolean"
-                    path)
-        in
+        if toolchain_name <> None && toolchain_compiler = None then
+          Error.config_error
+            "%s: x-oi-toolchain-name is set but x-oi-toolchain-compiler is \
+             missing — every toolchain definition must declare its compiler \
+             package (e.g. \"ocaml-base-compiler.5.4.1\")"
+            path;
+        let relocatable = read_bool_extension ~path extensions "x-oi-relocatable" in
         let toolchain_roots =
           read_root_packages_extension ~path extensions "x-oi-toolchain-roots"
         in
+        let toolchain_tools =
+          read_string_list_extension ~path extensions "x-oi-toolchain-tools"
+        in
+        let default_toolchain =
+          match read_bool_extension ~path extensions "x-oi-default-toolchain" with
+          | Some b -> b
+          | None -> false
+        in
+        if default_toolchain && toolchain_name = None then
+          Error.config_error
+            "%s: x-oi-default-toolchain is only meaningful on toolchain \
+             definitions (entries with x-oi-toolchain-name set)"
+            path;
         let root_packages =
           read_root_packages_extension ~path extensions "x-root-packages"
         in
@@ -399,6 +438,8 @@ module Reporepo = struct
             toolchain_compiler;
             relocatable;
             toolchain_roots;
+            toolchain_tools;
+            default_toolchain;
             depends;
             root_packages;
             opam_path = path;
@@ -409,27 +450,59 @@ module Reporepo = struct
         Log.warn (fun m -> m "Skipping %s: %s" path (Printexc.to_string exn));
         None
 
-  let load ~path =
-    let packages_dir = path / "packages" in
-    if not (Sys.file_exists packages_dir) then []
-    else
-      let handles = Sys.readdir packages_dir |> Array.to_list in
-      List.sort String.compare handles
-      |> List.concat_map (fun h ->
-          let handle_dir = packages_dir / h in
-          if not (Sys.is_directory handle_dir) then []
-          else
-            let versions = Sys.readdir handle_dir |> Array.to_list in
-            List.sort String.compare versions
-            |> List.filter_map (fun v ->
-                let opam_path = handle_dir / v / "opam" in
-                if Sys.file_exists opam_path then parse_entry_file opam_path
-                else None))
-
   let version_compare a b =
     OpamPackage.Version.compare
       (OpamPackage.Version.of_string a)
       (OpamPackage.Version.of_string b)
+
+  let load ~path =
+    let packages_dir = path / "packages" in
+    if not (Sys.file_exists packages_dir) then []
+    else
+      let entries =
+        let handles = Sys.readdir packages_dir |> Array.to_list in
+        List.sort String.compare handles
+        |> List.concat_map (fun h ->
+            let handle_dir = packages_dir / h in
+            if not (Sys.is_directory handle_dir) then []
+            else
+              let versions = Sys.readdir handle_dir |> Array.to_list in
+              List.sort String.compare versions
+              |> List.filter_map (fun v ->
+                  let opam_path = handle_dir / v / "opam" in
+                  if Sys.file_exists opam_path then parse_entry_file opam_path
+                  else None))
+      in
+      (* Default-flag check: ask "for each handle's LATEST version, is
+         it flagged?". Older versions don't count — bumping a
+         toolchain to clear the flag must not be defeated by the
+         original-flagged entry still on disk. *)
+      let latest_per_handle =
+        entries
+        |> List.fold_left
+            (fun acc (e : entry) ->
+              match List.assoc_opt e.handle acc with
+              | None -> (e.handle, e) :: acc
+              | Some prev when version_compare e.version prev.version > 0 ->
+                  (e.handle, e) :: List.remove_assoc e.handle acc
+              | Some _ -> acc)
+            []
+      in
+      let defaults =
+        latest_per_handle
+        |> List.filter_map (fun (_, (e : entry)) ->
+            if e.default_toolchain then Some e.handle else None)
+        |> List.sort String.compare
+      in
+      (match defaults with
+      | [] | [ _ ] -> ()
+      | many ->
+          Error.config_error
+            "reporepo at %s has %d toolchains marked as default \
+             (x-oi-default-toolchain: true): %s. Exactly one toolchain may \
+             be the default — clear the flag on the others."
+            path (List.length many) (String.concat ", " many));
+      entries
 
   let latest entries ~handle =
     entries
@@ -444,6 +517,26 @@ module Reporepo = struct
     List.find_opt
       (fun (e : entry) -> e.handle = handle && e.version = version)
       entries
+
+  let default_toolchain entries =
+    let candidates =
+      entries
+      |> List.filter (fun (e : entry) -> e.toolchain_name <> None)
+      |> List.fold_left
+          (fun acc (e : entry) ->
+            match List.assoc_opt e.handle acc with
+            | None -> (e.handle, e) :: acc
+            | Some prev when version_compare e.version prev.version > 0 ->
+                (e.handle, e) :: List.remove_assoc e.handle acc
+            | Some _ -> acc)
+          []
+    in
+    candidates
+    |> List.filter_map (fun (_, (e : entry)) ->
+        if e.default_toolchain then Some e else None)
+    |> function
+    | [] -> None
+    | e :: _ -> Some e
 
   let topo_sort entries =
     let by_handle = Hashtbl.create 16 in
@@ -689,6 +782,8 @@ module Reporepo = struct
     td_compiler : string option;
     td_relocatable : bool option;
     td_roots : string list list;
+    td_tools : string list;
+    td_default : bool;
   }
 
   let render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ?toolchain_def
@@ -730,7 +825,17 @@ module Reporepo = struct
         Stdlib.Option.iter
           (fun b -> Printf.bprintf buf "x-oi-relocatable: %b\n" b)
           td.td_relocatable;
-        render_root_groups buf "x-oi-toolchain-roots" td.td_roots)
+        if td.td_default then
+          Printf.bprintf buf "x-oi-default-toolchain: true\n";
+        render_root_groups buf "x-oi-toolchain-roots" td.td_roots;
+        (match td.td_tools with
+        | [] -> ()
+        | tools ->
+            Buffer.add_string buf "x-oi-toolchain-tools: [\n";
+            List.iter
+              (fun t -> Printf.bprintf buf "  %s\n" (escape_string t))
+              tools;
+            Buffer.add_string buf "]\n"))
       toolchain_def;
     render_root_groups buf "x-root-packages" root_packages;
     Buffer.contents buf
@@ -807,13 +912,15 @@ module Reporepo = struct
       toolchain_compiler = None;
       relocatable = None;
       toolchain_roots = [];
+      toolchain_tools = [];
+      default_toolchain = false;
       depends;
       root_packages;
       opam_path;
     }
 
   let bump ~fs ~sys ~path ~handle ?url ?ref_ ?toolchain ?base_handles ?depends
-      ?root_packages () =
+      ?root_packages ?default () =
     let entries = load ~path in
     let prev =
       match latest entries ~handle with
@@ -822,12 +929,22 @@ module Reporepo = struct
           Error.config_error
             "overlay %s not in reporepo; use 'oi repo add' to create it" handle
     in
+    if default <> None && prev.toolchain_name = None then
+      Error.config_error
+        "overlay %s is not a toolchain definition (no x-oi-toolchain-name) — \
+         the --default flag only applies to toolchain entries"
+        handle;
+    let default_toolchain =
+      Stdlib.Option.value default ~default:prev.default_toolchain
+    in
     let url = Stdlib.Option.value url ~default:prev.url in
     let ref_ = match ref_ with Some _ -> ref_ | None -> prev.ref_ in
     let toolchain =
       match toolchain with Some _ -> toolchain | None -> prev.toolchain
     in
-    let commit = ls_remote_sha ~sys ?ref_ url in
+    let commit =
+      if url = "" then prev.commit else ls_remote_sha ~sys ?ref_ url
+    in
     let depends =
       match depends with
       | Some d -> d
@@ -850,6 +967,7 @@ module Reporepo = struct
     if
       url = prev.url && commit = prev.commit && ref_ = prev.ref_
       && toolchain = prev.toolchain
+      && default_toolchain = prev.default_toolchain
       && eq_as_set depends prev.depends
       && eq_as_set root_packages prev.root_packages
     then `Unchanged prev
@@ -865,6 +983,8 @@ module Reporepo = struct
                 td_compiler = prev.toolchain_compiler;
                 td_relocatable = prev.relocatable;
                 td_roots = prev.toolchain_roots;
+                td_tools = prev.toolchain_tools;
+                td_default = default_toolchain;
               }
       in
       let content =
@@ -884,6 +1004,8 @@ module Reporepo = struct
           toolchain_compiler = prev.toolchain_compiler;
           relocatable = prev.relocatable;
           toolchain_roots = prev.toolchain_roots;
+          toolchain_tools = prev.toolchain_tools;
+          default_toolchain;
           depends;
           root_packages;
           opam_path;

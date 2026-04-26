@@ -132,10 +132,15 @@ end
     path. *)
 
 module Tool : sig
-  type trigger = Always | Ocamlformat_file | Dune_project_using of string
+  type trigger = Ocamlformat_file | Dune_project_using of string
   type spec = { name : string; binary : string; trigger : trigger }
 
   val registry : spec list
+  (** Editor / dev tools whose installation is project-state-driven (e.g.
+      ocamlformat when [.ocamlformat] is present, mdx when [dune-project]
+      uses it). Always-on tools live in the active toolchain's
+      [x-oi-toolchain-tools] field instead — the toolchain decides what
+      its consumers get without a hardcoded list here. *)
 
   type result = {
     spec : spec;

@@ -35,12 +35,86 @@ let toolchain_views info conf =
   let ctx = Option.map Toolchain.opam_ctx_of_info info in
   (conf, ctx)
 
-let resolve_toolchain ~fs ~sys ~data_dir ~conf ~install = function
-  | None -> None
-  | Some h ->
-      let info = Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle:h in
-      if install then Toolchain.ensure_installed ~fs info;
-      Some info
+(* Toolchain names implied by a single handle: the [x-oi-toolchain]
+   field on its latest reporepo entry, plus the handle's own name when
+   it itself is a toolchain definition (i.e. some entry has matching
+   [x-oi-toolchain-name]). Both pickup paths are needed: an overlay
+   pinned to a non-default toolchain via [oi repo add --toolchain=oxcaml]
+   uses (1); a [@oxcaml/utop] target uses (2). *)
+let toolchain_names_of_handle entries handle =
+  let from_field =
+    match Source.Reporepo.latest entries ~handle with
+    | Some (e : Source.Reporepo.entry) -> Stdlib.Option.to_list e.toolchain
+    | None -> []
+  in
+  let from_self =
+    if Toolchain.depends_of ~handle <> None then [ handle ] else []
+  in
+  from_field @ from_self
+
+let resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
+  let path = Source.Reporepo.env_path () in
+  let entries =
+    if Sys.file_exists path then
+      try Source.Reporepo.load ~path with Error.E _ -> []
+    else []
+  in
+  (* Pick a toolchain handle by precedence; resolve once at the end. *)
+  let pick () =
+    match override with
+    | Some h ->
+        Log.debug (fun m -> m "Using --toolchain=%s" h);
+        h
+    | None ->
+        let from_scope =
+          List.concat_map (toolchain_names_of_handle entries) handles
+          |> List.sort_uniq String.compare
+        in
+        match from_scope with
+        | [ n ] ->
+            Log.debug (fun m -> m "Using toolchain %s from handle scope" n);
+            n
+        | many when many <> [] ->
+            Error.config_error
+              "overlays in scope declare conflicting toolchains: %s — pass \
+               --toolchain=NAME to disambiguate"
+              (String.concat ", " many)
+        | _ ->
+            (match Source.Reporepo.default_toolchain entries with
+             | Some e ->
+                 let n = Stdlib.Option.value e.toolchain_name ~default:e.handle in
+                 Log.debug (fun m -> m "Using default toolchain %s" n);
+                 n
+             | None ->
+                 let known =
+                   entries
+                   |> List.filter_map (fun (e : Source.Reporepo.entry) ->
+                        e.toolchain_name)
+                   |> List.sort_uniq String.compare
+                 in
+                 let hint =
+                   if known = [] then
+                     "the reporepo has no toolchain definitions yet"
+                   else
+                     Fmt.str
+                       "mark one with: oi repo bump <handle> --default. Known \
+                        toolchains: %s"
+                       (String.concat ", " known)
+                 in
+                 Error.config_error
+                   "no default toolchain set in reporepo at %s — %s. Or pass \
+                    --toolchain=NAME explicitly."
+                   path hint)
+  in
+  let info = Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle:(pick ()) in
+  if install then Toolchain.ensure_installed ~fs info;
+  Some info
+
+let drop_override_compiler_roots ~override ~toolchain names =
+  match (override, (toolchain : Toolchain.info option)) with
+  | None, _ | _, None -> names
+  | Some _, Some info ->
+      List.filter (fun n -> not (OpamPackage.Name.Set.mem n info.root_names)) names
 
 (* -- Sources ------------------------------------------------------------- *)
 

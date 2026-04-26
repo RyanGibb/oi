@@ -84,6 +84,15 @@ module Reporepo : sig
         *)
     toolchain_roots : string list list;
         (** [x-oi-toolchain-roots]: solver root specs for the toolchain. *)
+    toolchain_tools : string list;
+        (** [x-oi-toolchain-tools]: package names that [oi sync] should always
+            install when this toolchain is active (typically dev tools like
+            [odoc], [merlin], [ocaml-lsp-server]). Empty for non-toolchain
+            entries and toolchains that don't ship a default tool set. *)
+    default_toolchain : bool;
+        (** [x-oi-default-toolchain]: when [true], this toolchain is selected
+            when no [--toolchain] is passed on the CLI. {!load} validates that
+            at most one toolchain handle in the reporepo carries this flag. *)
     depends : (string * string option) list;
         (** Other overlay handles this one depends on, optionally with an exact
             version. *)
@@ -102,6 +111,11 @@ module Reporepo : sig
   (** Highest-versioned entry for a given handle. *)
 
   val find : entry list -> handle:string -> version:string -> entry option
+
+  val default_toolchain : entry list -> entry option
+  (** Latest version of the toolchain definition flagged
+      [x-oi-default-toolchain: true], or [None] if no entry carries the flag.
+      {!load} guarantees at most one toolchain handle is so flagged. *)
 
   type root = { handle : string; version : string option }
 
@@ -211,8 +225,15 @@ module Reporepo : sig
     ?base_handles:string list ->
     ?depends:(string * string option) list ->
     ?root_packages:string list list ->
+    ?default:bool ->
     unit ->
     [ `Bumped of entry | `Unchanged of entry ]
+  (** [?default] flips the [x-oi-default-toolchain] flag on the bumped entry.
+      Only valid for entries that already carry [x-oi-toolchain-name] (the
+      function errors otherwise). Callers that want to switch the default
+      from one toolchain to another are responsible for clearing the flag
+      on the previous default before setting it on the new one — {!load}
+      otherwise refuses to load a multi-default reporepo. *)
 
   val remove :
     fs:Eio.Fs.dir_ty Eio.Path.t ->

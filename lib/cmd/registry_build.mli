@@ -7,11 +7,16 @@ val compute_overlay_depexts_for_conf :
   data_dir:string ->
   refresh:bool ->
   conf:Oi.Solver.Ctx.conf ->
+  ?override:string ->
+  unit ->
   string list
 (** Solve every overlay's [x-root-packages] and return the union of
     depexts declared by the resulting packages, evaluated under [conf]'s
     opam filter variables (os, os-family, os-distribution, os-version).
-    Backs the [oi registry depexts] command. *)
+    Backs the [oi registry depexts] command. [?override] passes through
+    a [--toolchain=NAME] flag, overriding each overlay's implicit
+    toolchain selection — useful for "what would the depexts be if I
+    forced ocaml-5.5 across the board?". *)
 
 val compute_overlay_depexts_per_distro :
   fs:Eio.Fs.dir_ty Eio.Path.t ->

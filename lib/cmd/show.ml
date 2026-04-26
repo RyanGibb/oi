@@ -330,7 +330,7 @@ let show_render_info ~target_label ~target_version ~target_opam ~overlay ~os_key
 [@@@warning "-32"]
 
 let cmd =
-  let run () data_dir cache_dir refresh registry toolchain targets with_repos
+  let run () data_dir cache_dir refresh registry toolchain_override targets with_repos
       with_deps tree only_depexts os_override =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = clock; sys = sys; platform = platform; os_key = os_key; cache = cache } =
@@ -344,21 +344,6 @@ let cmd =
       match os_override with
       | None -> conf_host
       | Some os -> Os_override.resolve conf_host os
-    in
-    let toolchain =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false
-        toolchain
-    in
-    let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain conf in
-    (* Toolchain overlay's packages_dirs drive the consumer solve too:
-       when set, they REPLACE [get_packages_dirs] rather than stack
-       on top, otherwise the default flow would add [relocatable]
-       whose [ocaml-base-compiler.5.5.0] conflicts with the toolchain
-       pin. *)
-    let tc_pkg_dirs =
-      match toolchain with
-      | None -> None
-      | Some (info : Oi.Toolchain.info) -> Some info.packages_dirs
     in
     let cwd_s, _ = Workspace.resolved_cwd fs in
     (* No pre-rewrite of the targets: solve them as-is. The layer
@@ -396,12 +381,34 @@ let cmd =
     let project_extras = project_extras @ url_project.extra_repos in
     let project_pins = project_pins @ url_project.pins in
     let project_overlays = project_overlays @ url_project.overlays in
+    (* Resolve the toolchain now that all [@handle]s are in scope. *)
+    let tc_handles =
+      Target.pin_handles handle_pins
+      @ Target.handles_of_tokens with_repos
+      @ project_overlays
+      |> List.sort_uniq String.compare
+    in
+    let toolchain =
+      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false
+        ~override:toolchain_override ~handles:tc_handles ()
+    in
+    let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain conf in
+    (* Toolchain overlay's packages_dirs drive the consumer solve too:
+       when set, they REPLACE [get_packages_dirs] rather than stack
+       on top, otherwise the default flow would add [relocatable]
+       whose [ocaml-base-compiler.5.5.0] conflicts with the toolchain
+       pin. *)
+    let tc_pkg_dirs =
+      match toolchain with
+      | None -> None
+      | Some (info : Oi.Toolchain.info) -> Some info.packages_dirs
+    in
     let project_overlays =
       Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(Terms.reporepo_path ())
         ~toolchain project_overlays
     in
     let with_repos = project_overlays @ with_repos in
-    let cli_extras = Target.cli_extra_repos ~fs ~sys with_repos in
+    let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in
     let all_extras = Target.merge_extras ~cli:cli_extras ~project:project_extras in
     let extra_pkg_dirs =
       Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
@@ -438,6 +445,8 @@ let cmd =
     let names =
       List.map OpamPackage.Name.of_string targets
       @ project_dep_names @ extra_names @ url_names
+      |> Oi.Pipeline.drop_override_compiler_roots
+           ~override:toolchain_override ~toolchain
     in
     if names = [] then
       Oi.Error.config_error

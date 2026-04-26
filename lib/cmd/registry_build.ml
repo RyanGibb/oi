@@ -561,67 +561,31 @@ let cmd =
     let reporepo_entries_cache =
       try Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ()) with _ -> []
     in
-    (* Toolchain resolution per group: the [--toolchain=NAME] flag, if
-       given, wins. Otherwise inspect the [x-oi-toolchain] field on
-       the latest entry of each token handle (i.e. handles that come
-       from [@h/pkg] tokens, not global [--with-repo] handles); if a
-       single toolchain is declared, use it. Multiple conflicting
-       declarations short-circuit with a clear error. The result is
-       memoised so that 30 [@avsm/...] groups share one
-       [Toolchain.resolve] / [ensure_installed] pass. *)
-    let resolved_toolchains : (string, Oi.Toolchain.info) Hashtbl.t =
+    (* Toolchain resolution per group goes through {Pipeline.resolve_toolchain}
+       — same precedence rulebook every command shares ([--toolchain=NAME]
+       override, then implicit pickup from the group's handles, then the
+       reporepo default). The cache memoises the resolved [info] so 30
+       [@avsm/...] groups share one [Toolchain.resolve] /
+       [ensure_installed] pass. With [--toolchain=NAME] every group
+       resolves to the same toolchain regardless of its handles, so all
+       groups share one cache slot. *)
+    let resolved_toolchains : (string list, Oi.Toolchain.info option) Hashtbl.t =
       Hashtbl.create 4
     in
-    let resolve_toolchain handle =
-      match Hashtbl.find_opt resolved_toolchains handle with
+    let toolchain_for_handles handles =
+      let key =
+        if toolchain_override <> None then []
+        else List.sort_uniq String.compare handles
+      in
+      match Hashtbl.find_opt resolved_toolchains key with
       | Some i -> i
       | None ->
-          let info = Oi.Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle in
-          Oi.Toolchain.ensure_installed ~fs info;
-          Hashtbl.add resolved_toolchains handle info;
+          let info =
+            Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf
+              ~install:true ~override:toolchain_override ~handles:key ()
+          in
+          Hashtbl.add resolved_toolchains key info;
           info
-    in
-    let toolchain_for_handles handles =
-      match toolchain_override with
-      | Some h -> Some (resolve_toolchain h)
-      | None -> (
-          (* Two ways an overlay handle picks a toolchain implicitly:
-             1. The overlay's [x-oi-toolchain] field names one explicitly
-                ([oi repo add/bump --toolchain=NAME] sets this).
-             2. The handle name itself matches a reporepo toolchain
-                definition ([x-oi-toolchain-name: NAME] in some entry's
-                opam file). Without (2) the user has to either set
-                [x-oi-toolchain] on every overlay or pass
-                [--toolchain=NAME] every time, which breaks
-                [oi registry build --all] across overlays that each
-                want their own toolchain. *)
-          let from_x_oi_toolchain =
-            List.filter_map
-              (fun h ->
-                match
-                  Oi.Source.Reporepo.latest reporepo_entries_cache ~handle:h
-                with
-                | Some (e : Oi.Source.Reporepo.entry) -> e.toolchain
-                | None -> None)
-              handles
-          in
-          let from_handle_name =
-            List.filter
-              (fun h -> Oi.Toolchain.depends_of ~handle:h <> None)
-              handles
-          in
-          let names =
-            from_x_oi_toolchain @ from_handle_name
-            |> List.sort_uniq String.compare
-          in
-          match names with
-          | [] -> None
-          | [ n ] -> Some (resolve_toolchain n)
-          | many ->
-              Oi.Error.config_error
-                "overlays in scope declare conflicting toolchains: %s — pass \
-                 --toolchain=NAME to disambiguate"
-                (String.concat ", " many))
     in
     let overlay_entries_for_handles handles =
       let roots =
@@ -774,32 +738,6 @@ let cmd =
     let solutions =
       let n_groups = List.length target_groups in
       let group_label group = String.concat " " group in
-      (* Compiler-family package names that should yield to the
-         [--toolchain=NAME] override when the user is testing an
-         overlay against a different compiler. Without this filter,
-         an overlay's [x-root-packages] entry like [oxcaml-compiler]
-         would still enter the solve alongside the override
-         toolchain's roots ([ocaml-base-compiler] from
-         [--toolchain=ocaml-5.5], say) and the conflict-class chain
-         on the [ocaml-core-compiler] virtual would reject both. *)
-      let compiler_family =
-        [
-          "ocaml";
-          "ocaml-base-compiler";
-          "ocaml-variants";
-          "ocaml-compiler";
-          "ocaml-system";
-          "oxcaml-compiler";
-          "dkml-base-compiler";
-        ]
-      in
-      let drop_compiler_family group =
-        List.filter
-          (fun pkg ->
-            let name, _ = Target.parse_pkg_target pkg in
-            not (List.mem (OpamPackage.Name.to_string name) compiler_family))
-          group
-      in
       let solve_one (group, handles) =
         let toolchain = toolchain_for_handles handles in
         let pkg_dirs = packages_dirs_for_handles ?toolchain handles in
@@ -810,19 +748,25 @@ let cmd =
         in
         (* When [--toolchain=NAME] is explicit, strip any compiler-family
            entries the overlay's [x-root-packages] declares so the
-           override's compiler pins land cleanly. The overlay's other
-           packages still get solved against the override toolchain — that's
-           exactly the "test this overlay against ocaml-5.5" workflow the
-           flag is for. *)
+           override's compiler pins land cleanly. Same intent as
+           {Pipeline.drop_override_compiler_roots} but applied to the raw
+           [pkg] strings (e.g. ["oxcaml-compiler.5.2.0+ox"]) rather than
+           parsed [Name.t]s. *)
         let group =
-          if toolchain_override <> None then drop_compiler_family group
-          else group
+          match (toolchain_override, toolchain) with
+          | Some _, Some (info : Oi.Toolchain.info) ->
+              List.filter
+                (fun pkg ->
+                  let name, _ = Target.parse_pkg_target pkg in
+                  not (OpamPackage.Name.Set.mem name info.root_names))
+                group
+          | _ -> group
         in
         if group = [] then begin
           Log.info (fun m ->
               m
-                "Skipping solve group: every entry was a compiler-family \
-                 package replaced by --toolchain");
+                "Skipping solve group: every entry was a root package \
+                 replaced by --toolchain");
           None
         end
         else
@@ -1407,7 +1351,8 @@ let packages_dirs_for_overlay ~data_dir ~base_packages_dirs ~reporepo_entries
    shared across every per-platform depext evaluation, since every
    target only differs in opam filter variables (os, os-family, …) —
    those don't influence the solver picks here. *)
-let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf =
+let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
+    ?override () =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   let base_packages_dirs =
     Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
@@ -1419,17 +1364,33 @@ let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf =
   let targets = overlay_root_targets reporepo_entries in
   let cache_root = Oi.Cache.root_s cache in
   let build_prefix = cache_root / "build" / "prefix" in
+  (* Per-overlay toolchain resolution: respect the overlay's own
+     [x-oi-toolchain] tag if set, otherwise fall back to the
+     reporepo's marked default. Solves now require a toolchain on the
+     Ctx (the augment_compiler_constraints no-toolchain branch was
+     dropped when default-toolchain wiring went in). *)
+  (* Per-overlay: the unified resolver picks up [x-oi-toolchain] from the
+     handle's reporepo entry, or matches the handle name against a
+     toolchain definition, or falls back to the reporepo default. The
+     [--toolchain] override (when given by the caller) wins over all
+     three. *)
+  let toolchain_for handle =
+    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf:host_conf
+      ~install:false ~override ~handles:[ handle ] ()
+  in
   List.concat_map
     (fun (handle, groups) ->
       let pkg_dirs =
         packages_dirs_for_overlay ~data_dir ~base_packages_dirs
           ~reporepo_entries handle
       in
+      let toolchain = toolchain_for handle in
+      let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain host_conf in
       List.filter_map
         (fun group ->
           let ctx =
             Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
-              ~conf:host_conf ()
+              ~conf ?toolchain:tc_ctx ()
           in
           let items = List.map Target.parse_pkg_target group in
           let names = List.map fst items in
@@ -1479,10 +1440,11 @@ let depexts_union ~conf solves =
 (* Public: per-conf overlay depexts. Used by the [oi registry depexts]
    command (host or [--os=]-overridden conf) and indirectly by
    [oi registry docker] via {!compute_overlay_depexts_per_distro}. *)
-let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf =
+let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf
+    ?override () =
   let solves =
     solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh
-      ~host_conf:conf
+      ~host_conf:conf ?override ()
   in
   depexts_union ~conf solves
 
@@ -1495,7 +1457,7 @@ let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let solves =
-    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
+    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf ()
   in
   List.map
     (fun distro ->

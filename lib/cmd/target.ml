@@ -15,7 +15,14 @@ let is_url_like s =
     [ "http://"; "https://"; "git+"; "git://"; "git@"; "file://"; "./"; "/" ]
   || String.contains s '/'
 
-let overlay_extras_of_handles ~fs ~sys handles =
+(* Resolve a list of overlay handles against the reporepo. With a
+   toolchain in scope, look each handle up directly (no transitive
+   closure) — the toolchain's [info.packages_dirs] supplies the base
+   overlays, and walking the closure here would put a competing commit
+   of the same base repo into the solver scope. Without a toolchain, do
+   full transitive resolution so [@avsm] alone still pulls in
+   [default]/[relocatable]. *)
+let overlay_extras_of_handles ?toolchain ~fs ~sys handles =
   if handles = [] then []
   else begin
     let path = Terms.reporepo_path () in
@@ -25,19 +32,27 @@ let overlay_extras_of_handles ~fs ~sys handles =
       (String.concat ", " handles)
       path;
     let entries = Oi.Source.Reporepo.load ~path in
-    let roots =
-      List.rev handles
-      |> List.map (fun h : Oi.Source.Reporepo.root ->
-          { handle = h; version = None })
+    let resolved_in_dep_order =
+      match (toolchain : Oi.Toolchain.info option) with
+      | Some _ ->
+          (* Direct lookup — each handle stands alone. *)
+          List.filter_map
+            (fun h -> Oi.Source.Reporepo.latest entries ~handle:h)
+            handles
+      | None ->
+          (* Transitive closure of [handles]. *)
+          let roots =
+            List.rev handles
+            |> List.map (fun h : Oi.Source.Reporepo.root ->
+                { handle = h; version = None })
+          in
+          Oi.Source.Reporepo.resolve entries ~roots
     in
-    let resolved =
-      Oi.Source.Reporepo.resolve entries ~roots
-      (* Resolve returns deps-first (topological). The opam solver's
-         packages_dirs fold is first-wins on name collisions, so we
-         reverse to get dependents-first: [samoht, relocatable, default]
-         means samoht wins over relocatable wins over default. *)
-      |> List.rev
-    in
+    (* The opam solver's packages_dirs fold is first-wins on name
+       collisions, so reverse to get dependents-first: [samoht,
+       relocatable, default] means samoht wins over relocatable wins
+       over default. *)
+    let resolved = List.rev resolved_in_dep_order in
     log_overlay "overlay closure (highest priority first): %s"
       (String.concat ", "
          (List.map
@@ -53,10 +68,12 @@ let overlay_extras_of_handles ~fs ~sys handles =
       resolved
   end
 
-let cli_extra_repos ~fs ~sys tokens =
+let cli_extra_repos ~fs ~sys ?toolchain tokens =
   let urls, handles = List.partition is_url_like tokens in
-  overlay_extras_of_handles ~fs ~sys handles
+  overlay_extras_of_handles ?toolchain ~fs ~sys handles
   @ List.map cli_extra_repo_of_url urls
+
+let handles_of_tokens tokens = List.filter (fun s -> not (is_url_like s)) tokens
 
 (* -- Build target classification ---------------------------------------- *)
 
@@ -117,6 +134,8 @@ let split_handle_prefix s =
             pkg_spec;
           Some (handle, pkg_spec)
         end
+
+let pin_handles pins = List.map (fun (p : handle_pin) -> p.handle) pins
 
 let extract_handle_pins ~with_repos tokens =
   let acc_repos = ref with_repos in

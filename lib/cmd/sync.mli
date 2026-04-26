@@ -12,6 +12,27 @@ val needs_sync : cwd:string -> prefix:string -> bool
 (** [needs_sync ~cwd ~prefix] is [true] when [prefix] is missing or any
     [*.opam] in [cwd] has been modified more recently than [prefix]. *)
 
+val resolve_project_toolchain :
+  ?refresh:bool ->
+  ?with_repos:string list ->
+  ?with_deps:string list ->
+  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  sys:D10.Sysops.t ->
+  cache:Oi.Cache.t ->
+  data_dir:string ->
+  conf:Oi.Solver.Ctx.conf ->
+  install:bool ->
+  override:string option ->
+  cwd:string ->
+  unit ->
+  Oi.Toolchain.info option
+(** Resolve the toolchain a project-aware command should use, with the
+    same handle scope [oi sync] uses: project [x-repos:], URL-project
+    overlays from [--with], and [--with-repo=@h] handles. Used by
+    [oi exec] / [oi env] to pick the same toolchain [oi sync] would
+    have, without doing a full sync. [install] controls whether
+    non-relocatable toolchains get prepared on disk. *)
+
 val do_sync :
   ?quiet:bool ->
   ?refresh:bool ->
@@ -30,9 +51,10 @@ val do_sync :
   registry:string ->
   cwd:string ->
   unit ->
-  string
-(** Run a full sync in [cwd] and return the path to the assembled
-    [_oi/prefix/]. [quiet] (default [false]) routes narration to
-    [Logs.info] instead of stdout. *)
+  string * Oi.Toolchain.info option
+(** Run a full sync in [cwd] and return the assembled [_oi/prefix/]
+    path along with the resolved toolchain so callers can reuse it
+    (e.g. [oi exec] reading env vars without re-resolving). [quiet]
+    (default [false]) routes narration to [Logs.info] instead of stdout. *)
 
 val cmd : unit Cmdliner.Cmd.t

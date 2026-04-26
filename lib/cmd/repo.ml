@@ -456,7 +456,8 @@ end
 
 module Bump = struct
 let cmd =
-  let run () reporepo reporepo_url handle url ref_ toolchain depend_specs =
+  let run () reporepo reporepo_url handle url ref_ toolchain depend_specs
+      default =
     Harness.run @@ fun env ->
     let proc_mgr = Eio.Stdenv.process_mgr env in
     let fs = Eio.Stdenv.fs env in
@@ -484,13 +485,41 @@ let cmd =
             (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain)
     in
     let base_handles = base_handles_of_toolchain effective_toolchain in
+    (* Auto-clear: setting --default on toolchain X requires clearing
+       any other toolchain currently flagged default, otherwise the
+       reporepo would have two defaults and Source.Reporepo.load would
+       refuse to parse it on next solve. The clearing is done as
+       separate bump operations so the timeline stays auditable. *)
+    if default = Some true then begin
+      let entries = Oi.Source.Reporepo.load ~path:reporepo in
+      List.iter
+        (fun (e : Oi.Source.Reporepo.entry) -> () |> ignore;
+          if e.handle <> handle && e.default_toolchain
+             && e.toolchain_name <> None then begin
+            Fmt.pr "Clearing default flag on %s (replaced by %s)@."
+              e.handle handle;
+            match
+              Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle:e.handle
+                ~default:false ()
+            with
+            | `Bumped b ->
+                Fmt.pr "  -> %s.%s@." b.handle b.version
+            | `Unchanged _ -> ()
+          end)
+        (entries
+         |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
+         |> List.sort_uniq String.compare
+         |> List.filter_map (fun h -> Oi.Source.Reporepo.latest entries ~handle:h))
+    end;
     match
       Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle ?url ?ref_
-        ?toolchain ?base_handles ?depends ()
+        ?toolchain ?base_handles ?depends ?default ()
     with
     | `Bumped e ->
         Fmt.pr "Bumped %s to %s@ commit=%s@ at %s@." e.handle e.version e.commit
-          e.opam_path
+          e.opam_path;
+        if e.default_toolchain then
+          Fmt.pr "  marked as default toolchain@."
     | `Unchanged e ->
         Fmt.pr
           "No change: %s.%s already pins the current upstream commit (%s).@."
@@ -512,6 +541,35 @@ let cmd =
              recorded version of the overlay pins."
           [ "url" ])
   in
+  let default =
+    let set =
+      Arg.(value & flag
+             & info ~doc:"Mark this toolchain as the default — \
+                          [oi run] / [oi sync] without [--toolchain] \
+                          will pick it. Auto-clears the flag on any \
+                          other toolchain currently marked default. \
+                          Only valid on entries with \
+                          [x-oi-toolchain-name] set."
+                  [ "default" ])
+    in
+    let unset =
+      Arg.(value & flag
+             & info ~doc:"Clear the default-toolchain flag from this \
+                          entry. After clearing, no toolchain is \
+                          default and [oi run] without \
+                          [--toolchain] will hard-error until one is \
+                          set." [ "no-default" ])
+    in
+    let combine s u =
+      match (s, u) with
+      | true, true ->
+          `Error (false, "--default and --no-default are mutually exclusive")
+      | true, false -> `Ok (Some true)
+      | false, true -> `Ok (Some false)
+      | false, false -> `Ok None
+    in
+    Term.(ret (const combine $ set $ unset))
+  in
   let info =
     Cmd.info "bump" ~doc:"Bring an overlay up to the latest upstream commit"
       ~man:
@@ -524,19 +582,25 @@ let cmd =
              to.";
           `P
             "Idempotent: prints $(b,No change) when the upstream commit, URL, \
-             branch, toolchain tag, and deps still match the previous entry. \
-             Safe to run from cron or a pre-commit hook.";
+             branch, toolchain tag, default-flag, and deps still match the \
+             previous entry. Safe to run from cron or a pre-commit hook.";
           `P
             "Non-base overlays also re-lock against the current latest \
              $(b,default)/$(b,relocatable) on each bump (or, when the overlay \
              declares $(b,x-oi-toolchain), against that toolchain's own base \
              set). $(b,--depend) overrides the auto-injected pins.";
+          `P
+            "$(b,--default) flips the $(b,x-oi-default-toolchain) flag on \
+             toolchain-defining entries (those with \
+             $(b,x-oi-toolchain-name)). Setting it on one toolchain auto- \
+             clears it from any other; this is what $(b,oi run) without \
+             $(b,--toolchain) keys off.";
         ]
   in
   Cmd.v info
     Term.(
       const run $ Terms.log $ reporepo_term $ reporepo_url_term $ handle $ url
-      $ ref_term $ toolchain_repo_term $ depend_term)
+      $ ref_term $ toolchain_repo_term $ depend_term $ default)
 
 end
 
@@ -794,6 +858,172 @@ let cmd =
 
 end
 
+(* -- repo lint ----------------------------------------------------------- *)
+
+(* Shape and integrity checks for a reporepo on disk. The contract every
+   command's [Pipeline.resolve_toolchain] depends on: exactly one
+   default toolchain, every [x-oi-toolchain] reference resolves, every
+   toolchain definition carries the fields the resolver and Toolchain
+   pipeline read. Loading a reporepo through {!Reporepo.load} already
+   enforces some invariants ("at most one default", well-formed opam
+   files); [oi repo lint] surfaces the rest as a precommit-grade check. *)
+module Lint = struct
+
+type problem = { handle : string; version : string; msg : string }
+
+let collect_problems (entries : Oi.Source.Reporepo.entry list) : problem list =
+  let problems = ref [] in
+  let add ~handle ~version fmt =
+    Fmt.kstr (fun msg -> problems := { handle; version; msg } :: !problems) fmt
+  in
+  let toolchain_names =
+    List.filter_map
+      (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain_name)
+      entries
+    |> List.sort_uniq String.compare
+  in
+  let known_toolchain n = List.mem n toolchain_names in
+  List.iter
+    (fun (e : Oi.Source.Reporepo.entry) ->
+      let here fmt = add ~handle:e.handle ~version:e.version fmt in
+      if e.handle = "" then here "empty handle";
+      if e.version = "" then here "empty version";
+      (match e.toolchain_name with
+       | None ->
+           if e.relocatable <> None then
+             here
+               "[x-oi-relocatable] is set but [x-oi-toolchain-name] is not — \
+                only toolchain definitions take this field";
+           if e.toolchain_roots <> [] then
+             here
+               "[x-oi-toolchain-roots] is set but [x-oi-toolchain-name] is \
+                not — only toolchain definitions take this field"
+       | Some name ->
+           if name = "" then here "[x-oi-toolchain-name] is empty";
+           if e.relocatable = None then
+             here
+               "toolchain %S missing [x-oi-relocatable] (must be true or false)"
+               name;
+           if e.toolchain_roots = [] then
+             here "toolchain %S has empty [x-oi-toolchain-roots]" name;
+           if e.toolchain_compiler = None then
+             here
+               "toolchain %S missing [x-oi-toolchain-compiler] (e.g. \
+                \"ocaml-base-compiler.5.4.1\")"
+               name);
+      (match e.toolchain with
+       | None -> ()
+       | Some t ->
+           if not (known_toolchain t) then
+             here
+               "[x-oi-toolchain: %s] does not match any [x-oi-toolchain-name] \
+                in this reporepo (known: %s)"
+               t
+               (if toolchain_names = [] then "none"
+                else String.concat ", " toolchain_names)))
+    entries;
+  let defaults =
+    List.filter (fun (e : Oi.Source.Reporepo.entry) -> e.default_toolchain) entries
+  in
+  let here fmt = add ~handle:"(reporepo)" ~version:"" fmt in
+  (match defaults with
+   | [ _ ] -> () (* exactly one default — fine *)
+   | [] ->
+       let hint =
+         if toolchain_names = [] then "no toolchain definitions found"
+         else
+           Fmt.str "mark one with: oi repo bump <handle> --default. Known: %s"
+             (String.concat ", " toolchain_names)
+       in
+       here
+         "no entry has [x-oi-default-toolchain: true] — %s. Without a \
+          default, [oi run] / [oi sync] / etc. hard-error when the user \
+          omits [--toolchain]."
+         hint
+   | many ->
+       let labels =
+         List.map
+           (fun (e : Oi.Source.Reporepo.entry) ->
+             Fmt.str "%s.%s" e.handle e.version)
+           many
+       in
+       here
+         "multiple entries flagged [x-oi-default-toolchain: true]: %s — \
+          only one toolchain handle may be the default. Clear the flag on \
+          stale versions and on the losing handle."
+         (String.concat ", " labels));
+  List.rev !problems
+
+let cmd =
+  let run () reporepo reporepo_url =
+    Harness.run @@ fun env ->
+    let proc_mgr = Eio.Stdenv.process_mgr env in
+    let fs = Eio.Stdenv.fs env in
+    let sys =
+      D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+    in
+    Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
+      ~url:reporepo_url;
+    let entries = Oi.Source.Reporepo.load ~path:reporepo in
+    let problems = collect_problems entries in
+    if problems = [] then begin
+      Fmt.pr "%a %d entries, no problems found.@."
+        Fmt.(styled `Green string)
+        "OK:" (List.length entries);
+      exit 0
+    end
+    else begin
+      List.iter
+        (fun { handle; version; msg } ->
+          let where =
+            if version = "" then handle else Fmt.str "%s.%s" handle version
+          in
+          Fmt.pr "%a %s: %s@."
+            Fmt.(styled `Red string)
+            "error:" where msg)
+        problems;
+      Fmt.pr "@.%d problem(s) in %s@." (List.length problems) reporepo;
+      exit 1
+    end
+  in
+  let info =
+    Cmd.info "lint" ~doc:"Validate a reporepo's well-formedness"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "$(b,oi repo lint) walks every entry in the reporepo and reports \
+             any violations of the contract the rest of $(b,oi) relies on:";
+          `I
+            ( "Default toolchain.",
+              "Exactly one entry must carry $(b,x-oi-default-toolchain: \
+               true). Without one, every solving command that omits \
+               $(b,--toolchain) hard-errors." );
+          `I
+            ( "Toolchain references.",
+              "Every entry's $(b,x-oi-toolchain: NAME) must resolve to some \
+               other entry's $(b,x-oi-toolchain-name)." );
+          `I
+            ( "Toolchain definitions.",
+              "Entries with $(b,x-oi-toolchain-name) set must also declare \
+               $(b,x-oi-relocatable), $(b,x-oi-toolchain-compiler), and a \
+               non-empty $(b,x-oi-toolchain-roots)." );
+          `I
+            ( "Field discipline.",
+              "Toolchain-only fields ($(b,x-oi-relocatable), \
+               $(b,x-oi-toolchain-roots)) on an entry that does not also set \
+               $(b,x-oi-toolchain-name) are flagged as misplaced." );
+          `P
+            "Exits non-zero on any failure, suitable for a pre-commit hook \
+             or CI gate.";
+        ]
+  in
+  Cmd.v info
+    Term.(const run $ Terms.log $ reporepo_term $ reporepo_url_term)
+
+end
+
 let cmd =
   let info =
     Cmd.info "repo"
@@ -846,4 +1076,5 @@ let cmd =
       Set_roots.cmd;
       Remove.cmd;
       Push.cmd;
+      Lint.cmd;
     ]

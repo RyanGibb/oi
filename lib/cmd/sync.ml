@@ -4,14 +4,6 @@ let ( / ) = Filename.concat
 
 let short_hash h = String.sub h 0 (min 12 (String.length h))
 
-let warn_tool spec fmt =
-  Fmt.kstr
-    (fun s ->
-      Fmt.epr "%a tool %s: %s@."
-        Fmt.(styled `Yellow string)
-        "WARN" (spec : Oi.Project.Tool.spec).name s)
-    fmt
-
 (* Return the layer hash whose [layer.json] declares package name
    [want_name] (any version). Tools get assembled from only their own
    leaf layer — the transitive deps (ocaml, dune, ocamlfind…) are
@@ -34,58 +26,86 @@ let leaf_hash_for ~fs ~cache ~os_key ~want_name hashes =
   in
   List.find_map leaf hashes
 
-(* Solve and install every probed dev tool into [cwd/_oi/tools/]. Each
-   tool is its own independent solve so its dep closure never leaks
-   into the main project's OCAMLLIB / OCAMLPATH. A tool that fails to
-   solve (e.g. pinned to an older ocaml) warns and is skipped; other
-   tools still install. Returns the assembled path if at least one
-   tool made it in, or [None] if nothing to install. *)
+(* Solve and install every dev tool into [cwd/_oi/tools/]. The set is
+   the union of:
+   - tools listed in the active toolchain's [x-oi-toolchain-tools]
+     field (always-on for that toolchain — odoc, merlin, lsp);
+   - tools whose project-state trigger fires (mdx if dune-project uses
+     it, ocamlformat if .ocamlformat is present), via [Project.Tool.probe].
+   Each tool is its own independent solve so its dep closure never
+   leaks into the main project's OCAMLLIB / OCAMLPATH. A tool that
+   fails to solve (e.g. pinned to an older ocaml) warns and is
+   skipped; other tools still install. Returns the assembled path if
+   at least one tool made it in, or [None] if nothing to install. *)
 let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
-    ~cache ~data_dir ~conf ~os_key ~extra_repos ~pins ?remote ~cwd () =
+    ~cache ~data_dir ~conf ~os_key ~extra_repos ~pins ?toolchain ?remote ~cwd
+    () =
   let say fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Fmt.pr "%s@." s) fmt
   in
-  let install_one (r : Oi.Project.Tool.result) =
-    let spec = r.spec in
-    let name = OpamPackage.Name.of_string spec.name in
-    let constraints =
-      match r.version with
-      | None -> OpamPackage.Name.Map.empty
-      | Some v ->
-          OpamPackage.Name.Map.singleton name
-            (`Eq, OpamPackage.Version.of_string v)
-    in
+  let warn_named name fmt =
+    Fmt.kstr
+      (fun s ->
+        Fmt.epr "%a tool %s: %s@." Fmt.(styled `Yellow string) "WARN" name s)
+      fmt
+  in
+  let install_named ~tool_name ~constraints =
+    let name = OpamPackage.Name.of_string tool_name in
     try
       let hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-          ~os_key ~extra_repos ~pins ?refresh ?remote ?jobs ~constraints
-          [ name ]
+          ~os_key ~extra_repos ~pins ?refresh ?remote ?jobs ?toolchain
+          ~constraints [ name ]
       in
-      match leaf_hash_for ~fs ~cache ~os_key ~want_name:spec.name hashes with
+      match leaf_hash_for ~fs ~cache ~os_key ~want_name:tool_name hashes with
       | None ->
-          warn_tool spec "layer for leaf package not found";
+          warn_named tool_name "layer for leaf package not found";
           None
       | Some h ->
-          say "Tool %s: %d dep(s) built, leaf layer %s" spec.name
+          say "Tool %s: %d dep(s) built, leaf layer %s" tool_name
             (List.length hashes - 1)
             (short_hash h);
           Some h
     with
     | Oi.Error.E e ->
-        warn_tool spec "%a" Oi.Error.pp e;
+        warn_named tool_name "%a" Oi.Error.pp e;
         None
     | exn ->
-        warn_tool spec "%s" (Printexc.to_string exn);
+        warn_named tool_name "%s" (Printexc.to_string exn);
         None
   in
-  match Oi.Project.Tool.(hits (probe ~fs cwd)) with
-  | [] ->
+  let install_probed (r : Oi.Project.Tool.result) =
+    let constraints =
+      match r.version with
+      | None -> OpamPackage.Name.Map.empty
+      | Some v ->
+          OpamPackage.Name.Map.singleton
+            (OpamPackage.Name.of_string r.spec.name)
+            (`Eq, OpamPackage.Version.of_string v)
+    in
+    install_named ~tool_name:r.spec.name ~constraints
+  in
+  let toolchain_tools =
+    match (toolchain : Oi.Toolchain.info option) with
+    | None -> []
+    | Some info -> info.tools
+  in
+  let probed_hits = Oi.Project.Tool.(hits (probe ~fs cwd)) in
+  match (toolchain_tools, probed_hits) with
+  | [], [] ->
       say "No dev tools to install";
       None
-  | hits -> (
-      let leaves = List.filter_map install_one hits in
-      match leaves with
+  | _ ->
+      let from_toolchain =
+        List.filter_map
+          (fun n ->
+            install_named ~tool_name:n ~constraints:OpamPackage.Name.Map.empty)
+          toolchain_tools
+      in
+      let from_probes = List.filter_map install_probed probed_hits in
+      let leaves = from_toolchain @ from_probes in
+      (match leaves with
       | [] -> None
       | _ ->
           let tools_dir = cwd / "_oi" / "tools" in
@@ -101,14 +121,41 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
 
 (* -- sync ---------------------------------------------------------------- *)
 
+(* Load [cwd]/*.opam + URL-project overlays + [--with-repo] handles
+   into one deduped handle list, then resolve the toolchain against it.
+   This is the project-aware [tc_handles] formula every command should
+   use; [oi sync] does it inline below, [oi exec] / [oi env] call this
+   helper directly so they pick the same toolchain. *)
+let resolve_project_toolchain ?(refresh = false) ?(with_repos = [])
+    ?(with_deps = []) ~fs ~sys ~cache ~data_dir ~conf ~install ~override
+    ~cwd () =
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+  let project_overlays =
+    match Oi.Project.load ~fs cwd with
+    | exception Sys_error _ -> []
+    | exception Eio.Exn.Io _ -> []
+    | p -> p.overlays
+  in
+  let _, url_project =
+    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+  in
+  let tc_handles =
+    project_overlays @ url_project.overlays @ Target.handles_of_tokens with_repos
+    |> List.sort_uniq String.compare
+  in
+  Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override
+    ~handles:tc_handles ()
+
 (* Run a full sync in [cwd]: solve the deps declared in *.opam files,
    build/fetch layers, assemble [cwd]/_oi/prefix, and (re)write .envrc.
-   Returns the path to the assembled prefix. When [quiet] is true,
-   narration goes to Logs.info (hidden at default verbosity); otherwise
-   it prints to stdout. *)
+   Returns the assembled prefix path and the resolved toolchain. When
+   [quiet] is true, narration goes to Logs.info (hidden at default
+   verbosity); otherwise it prints to stdout. *)
 let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform
+    ?(with_deps = []) ?jobs ?(toolchain : string option) ~proc_mgr ~fs ~clock ~sys ~platform
     ~os_key ~cache ~data_dir ~registry ~cwd () =
+  let toolchain_override = toolchain in
   let say fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Fmt.pr "%s@." s) fmt
@@ -126,17 +173,22 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   if url_project.roots <> [] then
     say "URL-supplied packages: %s" (String.concat ", " url_project.roots);
   let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
-  (* Resolve the toolchain before assembling the overlay list so the
-     overlay-compatibility filter below can see what was requested. *)
+  (* Same handle scope as {resolve_project_toolchain} — kept inline
+     here so we can reuse the already-loaded [project] / [url_project]
+     side-products below. *)
+  let candidate_overlays = project.overlays @ url_project.overlays in
+  let tc_handles =
+    candidate_overlays @ Target.handles_of_tokens with_repos
+    |> List.sort_uniq String.compare
+  in
   let toolchain =
     Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
-      toolchain
+      ~override:toolchain ~handles:tc_handles ()
   in
-  let conf = Oi.Toolchain.apply_conf toolchain conf in
+  let conf, _ = Oi.Pipeline.toolchain_views toolchain conf in
   let project_overlays =
     Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(Terms.reporepo_path ())
-      ~toolchain
-      (project.overlays @ url_project.overlays)
+      ~toolchain candidate_overlays
   in
   if project_overlays <> [] then
     say "Project overlays (from x-repos): %s"
@@ -144,7 +196,7 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   let with_repos = project_overlays @ with_repos in
   let all_extras =
     Target.merge_extras
-      ~cli:(Target.cli_extra_repos ~fs ~sys with_repos)
+      ~cli:(Target.cli_extra_repos ~fs ~sys ?toolchain with_repos)
       ~project:(project.extra_repos @ url_project.extra_repos)
   in
   if all_extras <> [] then
@@ -165,6 +217,8 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   let url_names = List.map OpamPackage.Name.of_string url_project.roots in
   let names =
     List.map OpamPackage.Name.of_string deps @ extra_names @ url_names
+    |> Oi.Pipeline.drop_override_compiler_roots
+         ~override:toolchain_override ~toolchain
   in
   let layer_hashes =
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
@@ -181,16 +235,20 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   let tools =
     install_tools ~quiet ?refresh:(Some refresh) ?jobs ~proc_mgr ~fs ~clock ~sys
       ~cache ~data_dir ~conf ~os_key ~extra_repos:all_extras ~pins:project.pins
-      ?remote ~cwd ()
+      ?toolchain ?remote ~cwd ()
   in
   let envrc_path = Eio.Path.(fs / cwd / ".envrc") in
   let dune_cache_root = Oi.Cache.dune_root cache in
-  let envrc = Oi.Solver.Env.envrc_content ~prefix ?tools ~dune_cache_root () in
+  let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
+  let envrc =
+    Oi.Solver.Env.envrc_content ?toolchain:tc_ctx ~prefix ?tools
+      ~dune_cache_root ()
+  in
   (try Eio.Path.unlink envrc_path with Eio.Exn.Io _ -> ());
   Eio.Path.save ~create:(`Exclusive 0o644) envrc_path envrc;
   say "Wrote .envrc (run 'direnv allow' to activate)";
   say "Prefix assembled at %s (%d packages)" prefix (List.length layer_hashes);
-  prefix
+  (prefix, toolchain)
 
 (* True if [cwd]/_oi/prefix is missing, or any *.opam in [cwd] has been
    modified more recently than the prefix directory. *)

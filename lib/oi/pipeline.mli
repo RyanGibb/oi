@@ -45,13 +45,40 @@ val resolve_toolchain :
   data_dir:string ->
   conf:Solver.Ctx.conf ->
   install:bool ->
-  string option ->
+  override:string option ->
+  handles:string list ->
+  unit ->
   Toolchain.info option
-(** [resolve_toolchain ~install handle] looks up [handle] in the reporepo. When
-    [install:true] and the toolchain is non-relocatable, builds the toolchain
-    into its fixed prefix on first use. Returns [None] for [handle = None].
+(** Single source of truth for picking which toolchain a command runs against.
+    Selection precedence (first match wins):
+
+    + [override = Some h]: resolve [h] directly. The [--toolchain=NAME] flag.
+    + Implicit pickup from [handles]: scan each handle's latest reporepo entry
+      for an [x-oi-toolchain] field, and check whether the handle itself names
+      a toolchain definition ([x-oi-toolchain-name]). A unique non-empty result
+      wins; multiple distinct names hard-error with a "pass --toolchain=NAME to
+      disambiguate" hint.
+    + Reporepo default: the entry flagged [x-oi-default-toolchain: true].
+    + Nothing matched: hard-error. The reporepo is expected to declare a
+      default; [oi repo lint] enforces this.
+
+    [install:true] runs {!Toolchain.ensure_installed} on the chosen toolchain;
+    [install:false] returns the [info] without preparing its on-disk prefix.
     Compose with {!toolchain_views} when the caller also needs the [conf] /
     [Ctx.toolchain] views. *)
+
+val drop_override_compiler_roots :
+  override:string option ->
+  toolchain:Toolchain.info option ->
+  OpamPackage.Name.t list ->
+  OpamPackage.Name.t list
+(** Strip compiler-family root names (i.e. those in [tc.root_names]) from
+    [names] when [override] is set. Used to substitute the explicit
+    [--toolchain=NAME]'s compiler pins for whatever the call-site's overlays /
+    project would otherwise have asked for, avoiding [conflict-class] failures
+    on [ocaml-core-compiler]. No-op when [override] is [None] (the toolchain
+    came from implicit / default pickup, so its roots already line up with the
+    handles in scope). *)
 
 (** {1 Sources} *)
 

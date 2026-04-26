@@ -11,23 +11,30 @@ let cmd =
     in
     let cwd, _ = Workspace.resolved_cwd fs in
     let prefix = cwd / "_oi" / "prefix" in
+    let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
     (* Any --with-repo / --with / --toolchain flag forces a re-sync
        even if the prefix is fresh, so the extras and toolchain make
-       it into the build. *)
+       it into the build. The toolchain we use for env vars is the one
+       sync just resolved (when sync ran) or the same project-aware
+       resolve sync would have done (when we skipped it) — either way,
+       a single resolve, with the full project / URL-project / CLI
+       handle scope. *)
     let forced = with_repos <> [] || with_deps <> [] || toolchain <> None in
-    if forced || Sync.needs_sync ~cwd ~prefix then begin
-      Logs.info (fun m -> m "Syncing %s before exec" cwd);
-      ignore
-        (Sync.do_sync ~quiet:true ~refresh ~with_repos ~with_deps ?jobs ?toolchain
-           ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
-           ~registry ~cwd ())
-    end;
-    let tools = Workspace.tools_dir_for ~cwd in
-    let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
     let tc_info =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false
-        toolchain
+      if forced || Sync.needs_sync ~cwd ~prefix then begin
+        Logs.info (fun m -> m "Syncing %s before exec" cwd);
+        let _, tc =
+          Sync.do_sync ~quiet:true ~refresh ~with_repos ~with_deps ?jobs
+            ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
+            ~data_dir ~registry ~cwd ()
+        in
+        tc
+      end
+      else
+        Sync.resolve_project_toolchain ~refresh ~with_repos ~with_deps ~fs ~sys
+          ~cache ~data_dir ~conf ~install:true ~override:toolchain ~cwd ()
     in
+    let tools = Workspace.tools_dir_for ~cwd in
     let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info tc_info in
     let env_arr =
       Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ?tools

@@ -1,7 +1,7 @@
 open Cmdliner
 
 let cmd =
-  let run () data_dir cache_dir refresh os_override =
+  let run () data_dir cache_dir refresh os_override toolchain =
     Harness.run @@ fun env ->
     let { Harness.fs; sys; platform; cache; _ } =
       Harness.bootstrap env cache_dir
@@ -16,7 +16,7 @@ let cmd =
     in
     let names =
       Registry_build.compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir
-        ~refresh ~conf
+        ~refresh ~conf ?override:toolchain ()
     in
     List.iter (fun n -> Fmt.pr "%s@." n) names
   in
@@ -62,4 +62,4 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ os_override)
+      $ os_override $ Terms.toolchain)

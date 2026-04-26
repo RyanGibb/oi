@@ -625,14 +625,19 @@ end
 (* -- Dev-tool probes (was lib/oi/tool.ml) -------------------------------- *)
 
 module Tool = struct
-  type trigger = Always | Ocamlformat_file | Dune_project_using of string
+  type trigger = Ocamlformat_file | Dune_project_using of string
   type spec = { name : string; binary : string; trigger : trigger }
 
+  (* Editor and dev tools whose installation depends on project state.
+     Always-on tools (odoc, merlin, ocaml-lsp-server) used to live here
+     too; they migrated to the active toolchain's [x-oi-toolchain-tools]
+     reporepo field so the toolchain decides which dev tools its
+     consumers get. The probes below only cover triggered tools — the
+     triggers are project-state checks ([.ocamlformat] file present,
+     [dune-project] uses a particular plugin) that the reporepo can't
+     express. *)
   let registry =
     [
-      { name = "odoc"; binary = "odoc"; trigger = Always };
-      { name = "merlin"; binary = "ocamlmerlin"; trigger = Always };
-      { name = "ocaml-lsp-server"; binary = "ocamllsp"; trigger = Always };
       { name = "mdx"; binary = "ocaml-mdx"; trigger = Dune_project_using "mdx" };
       {
         name = "ocamlformat";
@@ -704,7 +709,6 @@ module Tool = struct
 
   let probe_one ~fs dir spec =
     match spec.trigger with
-    | Always -> hit spec "always"
     | Ocamlformat_file -> probe_ocamlformat ~fs dir spec
     | Dune_project_using plugin -> probe_using ~fs dir spec plugin
 

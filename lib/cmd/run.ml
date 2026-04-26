@@ -1,10 +1,9 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
-[@@@warning "-32"]
 
 let cmd =
-  let run () data_dir cache_dir refresh dry_run registry toolchain target
+  let run () data_dir cache_dir refresh dry_run registry toolchain_override target
       with_deps with_repos jobs args =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
@@ -13,30 +12,13 @@ let cmd =
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
     let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
-    let toolchain =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
-        toolchain
-    in
     let remote = Terms.remote_of_registry registry in
     let dune_cache_root = Oi.Cache.dune_root cache in
-    (* Preserve [binary_name] (the original token) for the final
-       [bin/<name>] exec lookup. Resolution proceeds solve-first,
-       search-after: we first try [target] verbatim as a package
-       name (with any [--with] deps included). If that solve
-       produces [bin/<binary_name>] in the prefix, we're done. Only
-       on miss do we consult the layer index for binary→package
-       mapping. The old approach of pre-rewriting [target] via the
-       index baked in a [@default/X] handle pin before any solve,
-       which then overrode user constraints like
-       [--with=utop.2.16.0+ox1]. *)
-    let binary_name = target in
     (* [TARGET] and every [--with] token accept the
        [@handle/pkg[constraint]] shortcut. The handle is routed into
        [with_repos] so the overlay joins the solve; the stripped
        package spec takes its place; each handle_pin is then pinned
-       to the overlay's version below. For [TARGET] the package name
-       feeds the solve, but [binary_name] (captured above) still
-       drives the final [bin/<name>] lookup. *)
+       to the overlay's version below. *)
     let target, with_repos, with_deps, target_pin =
       match Target.split_handle_prefix target with
       | None -> (target, with_repos, with_deps, None)
@@ -48,6 +30,10 @@ let cmd =
             with_deps @ [ pkg_spec ],
             Some pin )
     in
+    (* After the [@handle/pkg] strip above, [target] is the bare package
+       name (or the user's verbatim input if no [@] prefix was given);
+       use that as the binary name we'll look for in [prefix/bin/]. *)
+    let binary_name = target in
     let with_deps, with_repos, with_pins =
       Target.extract_handle_pins ~with_repos with_deps
     in
@@ -73,6 +59,22 @@ let cmd =
     let project_extras = project_extras @ url_project.extra_repos in
     let project_pins = project_pins @ url_project.pins in
     let project_overlays = project_overlays @ url_project.overlays in
+    (* Resolve the toolchain now that we know every [@handle] in scope:
+       any [@h/pkg] target/with-dep, every [--with-repo=@h] handle, and
+       every project [x-repos: @h]. The unified resolver scans these for
+       implicit [x-oi-toolchain] declarations, falls back to the reporepo
+       default, and hard-errors on conflict — same rulebook every command
+       uses. *)
+    let tc_handles =
+      Target.pin_handles (Stdlib.Option.to_list target_pin @ with_pins)
+      @ Target.handles_of_tokens with_repos
+      @ project_overlays
+      |> List.sort_uniq String.compare
+    in
+    let toolchain =
+      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+        ~override:toolchain_override ~handles:tc_handles ()
+    in
     (* Treat [@HANDLE] entries from the project's [x-repos:] as if
        they had been passed via [--with-repo]. Project-declared
        overlays go earlier in the list so CLI-supplied ones take
@@ -84,7 +86,7 @@ let cmd =
         ~toolchain project_overlays
     in
     let with_repos = project_overlays @ with_repos in
-    let cli_extras = Target.cli_extra_repos ~fs ~sys with_repos in
+    let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in
     let all_extras = Target.merge_extras ~cli:cli_extras ~project:project_extras in
     (* Pin each [@handle/pkg] (from TARGET or [--with]) to whatever
        version the overlay ships, so a dev-tagged version (e.g.
@@ -101,10 +103,51 @@ let cmd =
         (fun a _ -> a)
         handle_constraints extra_constraints
     in
-    let solve_assemble_run pkg_names =
+    (* [bin/] contents of the layer whose package matches [want_name].
+       Walks [hashes], reads each [layer.json], and lists the matching
+       layer's [fs/bin/]. Empty when no such layer exists or it ships
+       nothing in [bin/]. *)
+    let layer_binaries ~hashes ~want_name =
+      let layers_dir = Oi.Cache.root_s cache / "layers" / os_key in
+      let owns_target hash =
+        match
+          D10.Layer.load_meta Eio.Path.(fs / layers_dir / hash / "layer.json")
+        with
+        | Some m -> (
+            match OpamPackage.of_string_opt m.package with
+            | Some p
+              when OpamPackage.Name.to_string (OpamPackage.name p) = want_name ->
+                Some hash
+            | _ -> None)
+        | None -> None
+      in
+      match List.find_map owns_target hashes with
+      | None -> []
+      | Some hash ->
+          (try
+             Eio.Path.read_dir Eio.Path.(fs / layers_dir / hash / "fs" / "bin")
+             |> List.sort String.compare
+           with Eio.Exn.Io _ -> [])
+    in
+    (* When a solve succeeds but [bin/<binary_name>] is missing, stash
+       the binaries the target package's layer ships so the error site
+       can include them and suggest the right [oi run --with=…]
+       invocation. *)
+    let unfound_bins = ref [] in
+    (* Solve [pkg_names], assemble the consumer prefix, exec
+       [bin/<binary_name>] if it exists; falls back to looking under a
+       non-relocatable toolchain's fixed prefix before giving up.
+       Returns [false] when no matching binary was found, after
+       populating [unfound_bins] for the error path. Calls [exit] on
+       successful exec, so a [true] return is unreachable in practice. *)
+    let solve_and_exec pkg_names =
       Logs.info (fun m ->
           m "Solving for packages: %s" (String.concat ", " pkg_names));
-      let names = List.map OpamPackage.Name.of_string pkg_names in
+      let names =
+        List.map OpamPackage.Name.of_string pkg_names
+        |> Oi.Pipeline.drop_override_compiler_roots
+             ~override:toolchain_override ~toolchain
+      in
       let layer_hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
@@ -115,50 +158,58 @@ let cmd =
         Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
       in
       Logs.info (fun m -> m "Assembled prefix at %s" prefix);
-
-      let bin = prefix / "bin" / binary_name in
-      Logs.info (fun m -> m "Looking for binary: %s" bin);
       let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
       let env_vars () =
         Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
       in
+      let bin = prefix / "bin" / binary_name in
+      Logs.info (fun m -> m "Looking for binary: %s" bin);
       if Workspace.path_exists fs bin then begin
         Logs.info (fun m -> m "Found binary, executing");
         exit (Subprocess.run proc_mgr ~env:(env_vars ()) (bin :: args))
-      end
-      else
-        (* Non-relocatable toolchains keep their compiler binaries
-           (ocamlc, ocamlfind, ocamlbuild, ...) at the fixed
-           toolchain prefix rather than in the consumer prefix —
-           [Opam_ctx.create] marks those packages as already
-           installed so they're not rebuilt into the consumer side.
-           Look for the binary there too before declaring it
-           missing. The consumer prefix's env still applies (PATH /
-           OCAMLPATH / CAML_LD_LIBRARY_PATH layer the toolchain's
-           [bin]/[lib] in already). *)
-        let tc_bin =
-          match toolchain with
-          | Some (info : Oi.Toolchain.info) when not info.relocatable ->
-              let p = info.install_prefix / "bin" / binary_name in
-              if Workspace.path_exists fs p then Some p else None
-          | _ -> None
-        in
-        match tc_bin with
-        | Some p ->
-            Logs.info (fun m ->
-                m "Found %s in toolchain prefix: %s" binary_name p);
-            exit (Subprocess.run proc_mgr ~env:(env_vars ()) (p :: args))
-        | None ->
-            (* List what binaries are available in the prefix *)
-            let bin_dir = prefix / "bin" in
-            (try
-               let bins = Eio.Path.read_dir Eio.Path.(fs / bin_dir) in
-               Logs.info (fun m ->
-                   m "Available binaries in prefix: %s"
-                     (String.concat ", " (List.sort String.compare bins)))
-             with Eio.Exn.Io _ ->
-               Logs.info (fun m -> m "No bin/ directory in prefix"));
-            false
+      end;
+      (* Non-relocatable toolchains keep their compiler binaries
+         (ocamlc, ocamlfind, ocamlbuild, ...) at the fixed toolchain
+         prefix rather than in the consumer prefix — [Opam_ctx.create]
+         marks those packages as already installed so they're not
+         rebuilt into the consumer side. Look there before declaring
+         the binary missing. The consumer prefix's env still applies
+         (PATH / OCAMLPATH / CAML_LD_LIBRARY_PATH layer the toolchain's
+         [bin]/[lib] in already). *)
+      let toolchain_bin =
+        match toolchain with
+        | Some (info : Oi.Toolchain.info) when not info.relocatable ->
+            let p = info.install_prefix / "bin" / binary_name in
+            if Workspace.path_exists fs p then Some p else None
+        | _ -> None
+      in
+      match toolchain_bin with
+      | Some p ->
+          Logs.info (fun m ->
+              m "Found %s in toolchain prefix: %s" binary_name p);
+          exit (Subprocess.run proc_mgr ~env:(env_vars ()) (p :: args))
+      | None ->
+          (* For [@handle/pkg], list the binaries that pkg's own layer
+             ships (not the whole prefix). For plain targets we don't
+             yet know which package owns the binary, so fall back to
+             the whole prefix [bin/] — still a useful hint even if
+             noisy. *)
+          let bins =
+            match target_pin with
+            | Some (pin : Target.handle_pin) ->
+                let want_name = OpamPackage.Name.to_string pin.pkg in
+                layer_binaries ~hashes:layer_hashes ~want_name
+            | None ->
+                (try
+                   Eio.Path.read_dir Eio.Path.(fs / prefix / "bin")
+                   |> List.sort String.compare
+                 with Eio.Exn.Io _ -> [])
+          in
+          unfound_bins := bins;
+          Logs.info (fun m ->
+              m "Available binaries: %s"
+                (if bins = [] then "(none)" else String.concat ", " bins));
+          false
     in
     (* HTTP(S) script URLs: fetch to a fresh tmp file keeping the [.ml]
        suffix, then treat the local copy as the script path for the
@@ -196,6 +247,10 @@ let cmd =
           all_script_deps
       in
       let constraints = Oi.Project.Script.constraints all_script_deps in
+      let dep_opam_names =
+        Oi.Pipeline.drop_override_compiler_roots
+          ~override:toolchain_override ~toolchain dep_opam_names
+      in
       let layer_hashes =
         if dep_opam_names = [] then []
         else
@@ -210,7 +265,7 @@ let cmd =
         Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
       in
       Script_runner.run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache
-        ~data_dir ?remote target extra_deps args
+        ~data_dir ?toolchain ?remote target extra_deps args
     end
     else begin
       (* Include --with deps in every solve *)
@@ -223,15 +278,41 @@ let cmd =
           extra_deps
         @ url_project.roots
       in
-      let solve_assemble_run_with pkg_names =
-        solve_assemble_run (pkg_names @ extra_names)
+      (* Composes [solve_and_exec] with the [extra_names] every solve
+         needs to include ([--with] deps + URL-supplied roots). *)
+      let solve_with_extras pkg_names =
+        solve_and_exec (pkg_names @ extra_names)
+      in
+      (* Materialise [packages_dirs] once, lazily — both step 0a's
+         "is [target] a package?" precheck and step 2's dash-prefix
+         search consult it, so we want to share one Pin.materialize +
+         Repo.ensure_extra + Reporepo.ensure_base pass. The toolchain's
+         own [info.packages_dirs] takes the place of the default base
+         when set (matches what Pipeline.build does), so the precheck
+         sees the same package universe the actual solve will. *)
+      let packages_dirs = lazy (
+        let pin_dir =
+          Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
+        in
+        Stdlib.Option.to_list pin_dir
+        @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
+        @ (match toolchain with
+           | Some (info : Oi.Toolchain.info) -> info.packages_dirs
+           | None -> Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()))
+      in
+      let package_exists name =
+        List.exists
+          (fun dir -> Sys.file_exists (dir / name))
+          (Lazy.force packages_dirs)
       in
       (* Step 0a: solve [target] as a package name alongside [--with]
          deps. Catches the common case where binary and package name
-         match (utop, dune, odoc, ...). The catch logs in verbose
-         mode — when no later step succeeds either the user gets a
-         generic "no package provides" error, and the [-v] log is
-         where they find the real solver diagnostic. *)
+         match (utop, dune, odoc, ...). Skipped when [target] isn't a
+         known package name in any configured repo — solving for it
+         would just waste a solver pass and produce a confusing "no
+         known implementations" diagnostic. The [@handle/pkg] case from
+         a [--with=@h/pkg] token already routed [pkg] into [extra_names],
+         so step 0b handles it. *)
       let try_step label f =
         try f ()
         with Oi.Error.E e ->
@@ -239,8 +320,15 @@ let cmd =
           false
       in
       let from_target =
-        try_step (Fmt.str "solve %s" target) (fun () ->
-            solve_assemble_run_with [ target ])
+        if not (package_exists target) then begin
+          Logs.info (fun m ->
+              m "Skipping solve %s — not a package name in any configured repo"
+                target);
+          false
+        end
+        else
+          try_step (Fmt.str "solve %s" target) (fun () ->
+              solve_with_extras [ target ])
       in
       (* Step 0b: best-effort fallback when [target] isn't an opam
          package. Solve whatever else we have (extras, toolchain
@@ -249,29 +337,47 @@ let cmd =
       let from_with =
         if not from_target then
           try_step "fallback solve (extras + toolchain roots)" (fun () ->
-              solve_assemble_run extra_names)
+              solve_and_exec extra_names)
         else from_target
       in
-      (* Explicit [@handle/pkg] target: never silently fall through
-         to the layer-index lookup. The user named the source of
-         truth; substituting a different package (irmin-cli for
-         irmin, say) would be wrong. *)
-      if Stdlib.Option.is_some target_pin && not from_with then
+      (* Explicit [@handle/pkg] target: never silently fall through to
+         the layer-index lookup. The user named the source of truth;
+         substituting a different package (irmin-cli for irmin, say)
+         would be wrong. The error tells them which executables the
+         package does install and how to run one. *)
+      let fail_overlay_pin_no_binary (pin : Target.handle_pin) =
+        let qualified =
+          "@" ^ pin.handle ^ "/" ^ OpamPackage.Name.to_string pin.pkg
+        in
+        let suggestion =
+          match !unfound_bins with
+          | [] ->
+              " The package solved but installed no executables — check \
+               the overlay's opam file."
+          | bins ->
+              Fmt.str
+                " The package installs: %s.@,To run one of them: oi run \
+                 --with=%s %s"
+                (String.concat ", " bins) qualified (List.hd bins)
+        in
         Oi.Error.not_found binary_name
-          "overlay-pinned package does not provide bin/%s. Check 'oi config' \
-           or the overlay's opam file."
-          binary_name;
+          "%s solved but does not install bin/%s.%s" qualified binary_name
+          suggestion
+      in
+      (match target_pin with
+       | Some pin when not from_with -> fail_overlay_pin_no_binary pin
+       | _ -> ());
       if not from_with then begin
-        (* Dash-split prefixes: "a-b-c" → ["a-b-c"; "a-b"; "a"] *)
+        (* Dash-split prefixes, longest-first: "a-b-c" →
+           ["a-b-c"; "a-b"; "a"]. Each accumulator step appends the next
+           segment to the previous longest prefix. *)
         let dash_prefixes name =
-          let parts = String.split_on_char '-' name in
-          let rec aux acc prefix = function
-            | [] -> List.rev acc
-            | p :: rest ->
-                let prefix = match prefix with "" -> p | s -> s ^ "-" ^ p in
-                aux (prefix :: acc) prefix rest
-          in
-          List.rev (aux [] "" parts)
+          String.split_on_char '-' name
+          |> List.fold_left
+               (fun acc part ->
+                 let prev = match acc with [] -> "" | p :: _ -> p ^ "-" in
+                 (prev ^ part) :: acc)
+               []
         in
         (* Step 1: layer-index lookup. Solving for [target] verbatim
            didn't yield [bin/<target>] — either [target] isn't a
@@ -289,7 +395,7 @@ let cmd =
           | Some (pkg_name, _) when pkg_name <> binary_name ->
               (* Layer index says [bin/<binary_name>] is shipped by
                  [pkg_name] (and optionally an overlay handle).
-                 [solve_assemble_run_with] takes raw package names —
+                 [solve_with_extras] takes raw package names —
                  [@handle/pkg] tokens were never parsed here. The base
                  [@default] is always in scope already, and any
                  user-relevant overlay handle is in scope via
@@ -299,7 +405,7 @@ let cmd =
               Logs.info (fun m ->
                   m "Index: bin/%s provided by package %s" binary_name pkg_name);
               try_step (Fmt.str "solve %s" pkg_name) (fun () ->
-                  solve_assemble_run_with [ pkg_name ])
+                  solve_with_extras [ pkg_name ])
           | _ -> false
         in
         if not from_index then begin
@@ -308,18 +414,8 @@ let cmd =
              and skip any prefix that doesn't exist as a package in any
              configured repo — a missing package name cannot possibly
              provide the binary, and attempting to solve for it wastes
-             a full solver run. *)
-          let pin_dir =
-            Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
-          in
-          let packages_dirs =
-            Stdlib.Option.to_list pin_dir
-            @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
-            @ Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
-          in
-          let package_exists name =
-            List.exists (fun dir -> Sys.file_exists (dir / name)) packages_dirs
-          in
+             a full solver run. Reuses the same materialisation as
+             step 0a's precheck. *)
           let prefixes =
             dash_prefixes target
             |> List.filter (fun p -> not (List.mem p extra_names))
@@ -334,7 +430,7 @@ let cmd =
               List.exists
                 (fun name ->
                   try_step (Fmt.str "solve %s (dash-prefix)" name) (fun () ->
-                      solve_assemble_run_with [ name ]))
+                      solve_with_extras [ name ]))
                 prefixes
             in
             if not found then

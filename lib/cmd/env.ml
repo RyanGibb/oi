@@ -18,9 +18,12 @@ let cmd =
       with_repos <> [] || with_deps <> [] || toolchain <> None
     in
     let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+    (* Use the same project-aware resolve [oi sync] uses, so [oi env]
+       picks the toolchain the existing prefix was actually built with
+       (project [x-repos:] declarations and all). *)
     let tc_info =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
-        toolchain
+      Sync.resolve_project_toolchain ~refresh ~with_repos ~with_deps ~fs ~sys
+        ~cache ~data_dir ~conf ~install:true ~override:toolchain ~cwd:cwd_s ()
     in
     let conf, tc_ctx = Oi.Pipeline.toolchain_views tc_info conf in
     let prefix =
@@ -40,7 +43,9 @@ let cmd =
         in
         let extras =
           Target.merge_extras
-            ~cli:(Target.cli_extra_repos ~fs ~sys (with_repos @ url_overlays))
+            ~cli:
+              (Target.cli_extra_repos ~fs ~sys ?toolchain:tc_info
+                 (with_repos @ url_overlays))
             ~project:url_project.extra_repos
         in
         let extra_constraints = Oi.Project.Script.constraints extra_cli in

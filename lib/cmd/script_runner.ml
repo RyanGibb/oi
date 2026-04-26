@@ -1,7 +1,7 @@
 let ( / ) = Filename.concat
 
 let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
-    ?remote script_path cli_deps args =
+    ?toolchain ?remote script_path cli_deps args =
   let file_deps = Oi.Project.Script.parse_deps_from_file ~fs script_path in
   let all_deps = Oi.Project.Script.dedup (file_deps @ cli_deps) in
   if all_deps = [] then
@@ -33,8 +33,10 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
     if dep_names <> [] then begin
       let cache_root = Oi.Cache.root_s cache in
       let build_prefix = cache_root / "build" / "prefix" in
+      let tc_ctx = Stdlib.Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
       let ctx =
-        Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs ~conf ()
+        Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs ~conf
+          ?toolchain:tc_ctx ()
       in
       let pkgs =
         match

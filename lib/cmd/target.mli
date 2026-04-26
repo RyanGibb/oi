@@ -49,6 +49,11 @@ val extract_handle_pins :
     overlay's version. Returns
     [(stripped_tokens, updated_with_repos, handle_pins)]. *)
 
+val pin_handles : handle_pin list -> string list
+(** Project a list of handle-pins down to their handle strings. Useful
+    for feeding the [@h/pkg] half of [--with] / [TARGET] tokens into
+    {!Oi.Pipeline.resolve_toolchain}. *)
+
 val handle_pin_constraints :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   data_dir:string ->
@@ -68,6 +73,11 @@ val is_url_like : string -> bool
 (** A [--with-repo] / [--with] token is a URL when it has a scheme-like
     prefix or contains a path separator; otherwise it's an overlay handle. *)
 
+val handles_of_tokens : string list -> string list
+(** Keep only the handle-shaped tokens (those for which {!is_url_like}
+    returns [false]). Used by every solving command to derive the handle
+    list fed into {!Oi.Pipeline.resolve_toolchain}. *)
+
 val cli_extra_repo_of_url : string -> Oi.Project.extra_repo
 (** Convert a CLI [--with-repo URL] entry into a {!Oi.Project.extra_repo}
     with a deterministic hashed name. *)
@@ -75,11 +85,19 @@ val cli_extra_repo_of_url : string -> Oi.Project.extra_repo
 val cli_extra_repos :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   sys:D10.Sysops.t ->
+  ?toolchain:Oi.Toolchain.info ->
   string list ->
   Oi.Project.extra_repo list
 (** Resolve a list of [--with-repo] tokens (a mix of URLs and reporepo
     handles) into the flat extra-repo list the solver wants. Later handles
-    in the input list are given highest priority. *)
+    in the input list are given highest priority.
+
+    When [?toolchain] is set, handle resolution is direct (each handle's
+    latest reporepo entry only) — the toolchain's [info.packages_dirs]
+    already supplies the base overlays, so transitively closing each
+    explicit handle would put two different commits of the same base
+    repo (e.g. [default]) into the solver's search path and trigger
+    [conflict-class] failures on [ocaml-core-compiler]. *)
 
 val merge_extras :
   cli:Oi.Project.extra_repo list ->

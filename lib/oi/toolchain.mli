@@ -42,6 +42,13 @@ type info = {
           env / [mark_installed] paths skip the fixed-prefix treatment. The
           toolchain still pins the compiler version via {!opam_ctx_of_info}. *)
   packages : OpamPackage.Set.t;  (** Packages installed in the toolchain. *)
+  compiler_name : OpamPackage.Name.t;
+      (** The single compiler-package name this toolchain installs (parsed from
+          [x-oi-toolchain-compiler], e.g. [ocaml-base-compiler] for upstream,
+          [ocaml-variants] for relocatable / oxcaml). Replaces the hardcoded
+          [["ocaml"; "ocaml-base-compiler"; "ocaml-variants"; ...]] families
+          previously sprinkled across the codebase: every site that wants to
+          ask "is this package the toolchain's compiler?" reads this field. *)
   root_names : OpamPackage.Name.Set.t;
       (** Names originally passed as root packages to the toolchain solver (e.g.
           [ocaml-variants], [ocamlfind]). Subset of [packages] by name. The
@@ -51,6 +58,12 @@ type info = {
   packages_dirs : string list;
       (** Packages directories used to resolve [packages]. Preserved for later
           solves that want to consult the toolchain's opam metadata. *)
+  tools : string list;
+      (** Package names from the toolchain's [x-oi-toolchain-tools] field.
+          [oi sync] installs these unconditionally into [_oi/tools/] when this
+          toolchain is active. Empty when the toolchain ships no default tool
+          set; per-project triggered tools (mdx when dune-project uses it,
+          ocamlformat when .ocamlformat is present) live in code, not here. *)
   dep_handles : string list;
       (** Reporepo overlay handles the toolchain layers under (e.g.
           [["default"]]). Surfaced verbatim by [oi show]'s [Repositories] block.
@@ -107,8 +120,14 @@ type summary = {
   ref_ : string option;  (** Git ref tracked, e.g. [Some "relocatable"]. *)
   relocatable : bool;
       (** [true] when the toolchain skips the fixed-prefix install. *)
+  is_default : bool;
+      (** [true] when this toolchain's latest entry carries
+          [x-oi-default-toolchain: true]. *)
   depends : string list;
   roots : string list;
+  tools : string list;
+      (** Always-on dev tools the toolchain installs into [_oi/tools/] on each
+          [oi sync] (from [x-oi-toolchain-tools]). *)
   installs : (string * bool) list;
       (** Existing install prefixes on disk for this handle, paired with whether
           each one has its [.oi-toolchain-ready] sentinel. The list reflects

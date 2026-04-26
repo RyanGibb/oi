@@ -30,12 +30,19 @@ let cmd =
             Fmt.str "[%a]" Fmt.(styled `Green string) "relocatable"
           else Fmt.str "[%a]" Fmt.(styled `Yellow string) "fixed-prefix"
         in
-        Fmt.pr "  %a  %s  %s@,"
+        let default_tag =
+          if s.is_default then
+            Fmt.str "  [%a]" Fmt.(styled `Bold (styled `Cyan string)) "default"
+          else ""
+        in
+        Fmt.pr "  %a  %s%s  %s@,"
           Fmt.(styled `Bold string)
-          s.handle mode_tag url_with_ref;
+          s.handle mode_tag default_tag url_with_ref;
         if s.depends <> [] then
           Fmt.pr "    depends:    %s@," (String.concat ", " s.depends);
         Fmt.pr "    roots:      %s@," (String.concat ", " s.roots);
+        if s.tools <> [] then
+          Fmt.pr "    tools:      %s@," (String.concat ", " s.tools);
         if s.relocatable then ()
         else
           match s.installs with

@@ -955,16 +955,26 @@ let solve_dir ~env ~packages_dirs ~constraints names =
   | Ok sels -> Ok (Inst.packages_of_result sels)
   | Error diag -> Error (Inst.diagnostics diag)
 
-let augment_compiler_constraints ctx ~ocaml_version constraints =
-  let add name version_s m =
-    let n = OpamPackage.Name.of_string name in
-    if OpamPackage.Name.Map.mem n m then m
-    else
-      let v = OpamPackage.Version.of_string version_s in
-      OpamPackage.Name.Map.add n (`Eq, v) m
-  in
+let augment_compiler_constraints ctx constraints =
   match Ctx.toolchain ctx with
+  | None ->
+      (* Every code path that reaches the augment step now goes
+         through Pipeline.resolve_toolchain (which returns the
+         x-oi-default-toolchain entry when no --toolchain is given,
+         or hard-errors). Hitting this branch means the caller
+         constructed a Ctx without a toolchain and tried to solve —
+         a bug rather than a configuration question. *)
+      Error.config_error
+        "Solver.augment_compiler_constraints: no toolchain set on Solver.Ctx \
+         — every solve must thread a toolchain through (default or \
+         --toolchain=NAME). Construct the Ctx via Pipeline.resolve_toolchain."
   | Some tc ->
+      let add name version_s m =
+        if OpamPackage.Name.Map.mem name m then m
+        else
+          let v = OpamPackage.Version.of_string version_s in
+          OpamPackage.Name.Map.add name (`Eq, v) m
+      in
       OpamPackage.Name.Set.fold
         (fun name acc ->
           match
@@ -974,38 +984,17 @@ let augment_compiler_constraints ctx ~ocaml_version constraints =
           with
           | None -> acc
           | Some pkg ->
-              add
-                (OpamPackage.Name.to_string name)
+              add name
                 (OpamPackage.Version.to_string (OpamPackage.version pkg))
                 acc)
         tc.root_names constraints
-  | None ->
-      constraints |> add "ocaml" ocaml_version
-      |> add "ocaml-base-compiler" ocaml_version
-      |> add "ocaml-compiler" ocaml_version
 
-let solve_with_dir_context ?(pin_compiler = true) ctx ~packages_dirs
-    ~constraints ~ocaml_version names =
-  let constraints =
-    if pin_compiler then
-      augment_compiler_constraints ctx ~ocaml_version constraints
-    else
-      (* Toolchain pins are still applied — they're not "the host's
-         default ocaml" but a hard requirement of the toolchain's
-         identity. Only the no-toolchain default fall-through (below
-         in [augment_compiler_constraints]) gets skipped, which is
-         what lets each overlay's own [packages_dirs] drive the
-         solver's compiler choice. *)
-      match Ctx.toolchain ctx with
-      | None -> constraints
-      | Some _ -> augment_compiler_constraints ctx ~ocaml_version constraints
-  in
+let solve_with_dir_context ctx ~packages_dirs ~constraints names =
+  let constraints = augment_compiler_constraints ctx constraints in
   Log.info (fun m ->
-      m "Solving for %a (ocaml %s)"
+      m "Solving for %a (toolchain-pinned compiler)"
         Fmt.(list ~sep:comma string)
-        (List.map OpamPackage.Name.to_string names)
-        (if pin_compiler then Fmt.str "= %s" ocaml_version
-         else "= overlay-driven"));
+        (List.map OpamPackage.Name.to_string names));
   match solve_dir ~env:(ctx_env ctx) ~packages_dirs ~constraints names with
   | Ok pkgs ->
       Log.info (fun m -> m "Solution: %d packages to build" (List.length pkgs));
@@ -1042,14 +1031,8 @@ let log_package_sources ~packages_dirs pkgs =
       end)
     packages_dirs
 
-let solve ?(pin_compiler = true) ~fs ~cache_root ctx ~packages_dirs
-    ~constraints names =
+let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
   let conf = Ctx.conf ctx in
-  let ocaml_version =
-    match String.index_opt conf.ocaml_version '+' with
-    | Some i -> String.sub conf.ocaml_version 0 i
-    | None -> conf.ocaml_version
-  in
   let names =
     match Ctx.toolchain ctx with
     | None -> names
@@ -1076,31 +1059,22 @@ let solve ?(pin_compiler = true) ~fs ~cache_root ctx ~packages_dirs
                (OpamPackage.Version.to_string (OpamPackage.version p)))
       | None -> None
     in
-    let compiler_names =
-      List.map OpamPackage.Name.of_string
-        [
-          "ocaml";
-          "ocaml-variants";
-          "ocaml-base-compiler";
-          "ocaml-compiler";
-          "oxcaml-compiler";
-        ]
+    let extra_names =
+      match Ctx.toolchain ctx with
+      | None -> []
+      | Some tc ->
+          OpamPackage.Name.Set.elements tc.root_names
+          |> List.filter (fun n ->
+              not (List.exists (OpamPackage.Name.equal n) names))
     in
     let interesting =
-      List.filter_map render names
-      @ List.filter_map render
-          (List.filter
-             (fun n -> not (List.exists (OpamPackage.Name.equal n) names))
-             compiler_names)
+      List.filter_map render names @ List.filter_map render extra_names
     in
     if interesting <> [] then
       Log.info (fun m -> m "Selected: %s" (String.concat ", " interesting))
   in
   let run_solve () =
-    match
-      solve_with_dir_context ~pin_compiler ctx ~packages_dirs ~constraints
-        ~ocaml_version names
-    with
+    match solve_with_dir_context ctx ~packages_dirs ~constraints names with
     | Ok (pkgs, _) ->
         let pkgs = topo_sort ~packages_dirs ~conf:(Ctx.conf ctx) pkgs in
         log_package_sources ~packages_dirs pkgs;

@@ -20,8 +20,10 @@ type info = {
           {!opam_ctx_of_info} still drives compiler selection. [false] (e.g.
           oxcaml) keeps the legacy fixed-prefix behaviour. *)
   packages : OpamPackage.Set.t;
+  compiler_name : OpamPackage.Name.t;
   root_names : OpamPackage.Name.Set.t;
   packages_dirs : string list;
+  tools : string list;
   dep_handles : string list;
 }
 
@@ -119,8 +121,10 @@ type summary = {
   url : string;
   ref_ : string option;
   relocatable : bool;
+  is_default : bool;
   depends : string list;
   roots : string list;
+  tools : string list;
   installs : (string * bool) list;
 }
 
@@ -180,8 +184,10 @@ let available () =
               url;
               ref_;
               relocatable;
+              is_default = e.default_toolchain;
               depends = List.map fst e.depends;
               roots;
+              tools = e.toolchain_tools;
               installs = installs_for ~handle:cli_name;
             })
     handles
@@ -224,30 +230,19 @@ let compute_hash ~packages_dirs ~(conf : Solver.Ctx.conf) pkgs =
   in
   Digest.string material |> Digest.to_hex
 
-(* Pick the OCaml-version-string out of the solved package set.
-   When [explicit_compiler] is set (from the toolchain entry's
-   [x-oi-toolchain-compiler] field), use that name as the anchor;
-   otherwise fall back to the standard candidate list. *)
-let pick_ocaml_version ?explicit_compiler pkgs =
-  let candidate_names =
-    match explicit_compiler with
-    | Some spec ->
-        let name, _ = parse_spec spec in
-        [ name ]
-    | None ->
-        [ "ocaml-variants"; "ocaml-base-compiler"; "ocaml-compiler"; "ocaml" ]
-  in
-  let find name =
-    List.find_opt
-      (fun p -> OpamPackage.Name.to_string (OpamPackage.name p) = name)
-      pkgs
-  in
-  List.find_map
-    (fun n ->
-      match find n with
-      | None -> None
-      | Some p -> Some (OpamPackage.Version.to_string (OpamPackage.version p)))
-    candidate_names
+(* Pick the OCaml-version-string out of the solved package set,
+   using the toolchain entry's [x-oi-toolchain-compiler] spec to
+   identify which package the version should come from. The spec is
+   required on every toolchain definition (validated at parse time
+   in [Source.Reporepo.parse_entry_file]) so there's no fallback
+   guess list anymore. *)
+let pick_ocaml_version ~explicit_compiler pkgs =
+  let name, _ = parse_spec explicit_compiler in
+  List.find_opt
+    (fun p -> OpamPackage.Name.to_string (OpamPackage.name p) = name)
+    pkgs
+  |> Stdlib.Option.map (fun p ->
+      OpamPackage.Version.to_string (OpamPackage.version p))
 
 let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
   (* Auto-clone the reporepo if missing so [--toolchain=HANDLE] still
@@ -327,14 +322,24 @@ let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
   Log.info (fun m ->
       m "Toolchain %s solved packages: %s" handle
         (String.concat ", " (List.map OpamPackage.to_string pkgs)));
+  let explicit_compiler =
+    match entry.toolchain_compiler with
+    | Some s -> s
+    | None ->
+        (* Source.Reporepo.parse_entry_file guarantees a toolchain
+           entry has [x-oi-toolchain-compiler] set. If we hit this
+           branch the reporepo bypassed validation. *)
+        Error.config_error
+          "toolchain %s: %s.%s has no x-oi-toolchain-compiler" handle
+          entry.handle entry.version
+  in
   let ocaml_version =
-    match
-      pick_ocaml_version ?explicit_compiler:entry.toolchain_compiler pkgs
-    with
+    match pick_ocaml_version ~explicit_compiler pkgs with
     | Some v -> v
     | None ->
         Error.config_error
-          "toolchain %s: solved set contains no ocaml compiler package" handle
+          "toolchain %s: solved set contains no %s package" handle
+          (fst (parse_spec explicit_compiler))
   in
   let relocatable_flag = Stdlib.Option.value entry.relocatable ~default:true in
   let hash = compute_hash ~packages_dirs ~conf pkgs in
@@ -347,6 +352,9 @@ let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
      plumbing (PATH=<install_prefix>/bin etc.) works without further
      adjustment. *)
   let install_prefix = default_root () / dir_name / "_opam" in
+  let compiler_name =
+    OpamPackage.Name.of_string (fst (parse_spec explicit_compiler))
+  in
   {
     handle;
     ocaml_version;
@@ -354,8 +362,10 @@ let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
     hash;
     relocatable = relocatable_flag;
     packages = OpamPackage.Set.of_list pkgs;
+    compiler_name;
     root_names = OpamPackage.Name.Set.of_list names;
     packages_dirs;
+    tools = entry.toolchain_tools;
     dep_handles = List.map fst entry.depends;
   }
 
@@ -506,20 +516,12 @@ let ensure_installed ~fs (info : info) =
          [ocamlbuild], [dune]) aren't pulled in by the [invariant]
          alone — that's a compiler-only selector. Install them
          explicitly so the toolchain prefix carries the full set of
-         binaries consumer builds expect on PATH. *)
-        let compiler_names =
-          [
-            "ocaml-variants";
-            "ocaml-base-compiler";
-            "ocaml-compiler";
-            "ocaml";
-            "oxcaml-compiler";
-          ]
-        in
+         binaries consumer builds expect on PATH. The compiler itself
+         is excluded because [install_compiler] just handled it. *)
         let extra_atoms =
           OpamPackage.Name.Set.fold
             (fun n acc ->
-              if List.mem (OpamPackage.Name.to_string n) compiler_names then acc
+              if OpamPackage.Name.equal n info.compiler_name then acc
               else (n, None) :: acc)
             info.root_names []
         in
