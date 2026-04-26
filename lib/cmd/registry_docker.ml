@@ -31,46 +31,71 @@ let build_depexts = function
 
 (* -- Hardcoded depexts for common opam [conf-*] probe packages ---------- *)
 
-(* Apache Arrow's apt source per https://arrow.apache.org/install/.
-   Required for [libarrow-dev] on Debian and Ubuntu — Apache ships a
-   third-party apt repository whose [deb] meta-package configures
-   the canonical Arrow URLs and signing key. Fedora has [libarrow-devel]
-   in its main repos; Alpine has [apache-arrow-dev] in community, so
-   neither needs extra setup. *)
-let arrow_apt_source_setup =
-  "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-   --no-install-recommends ca-certificates lsb-release wget gpg && wget -O \
-   /tmp/arrow.deb \
-   \"https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | \
-   tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename \
-   --short).deb\" && apt-get install -y --no-install-recommends \
-   /tmp/arrow.deb && rm /tmp/arrow.deb && apt-get update -qq"
+(* Apache Arrow lives in third-party repos rather than each distro's
+   default set. We try its install per https://arrow.apache.org/install/
+   on a best-effort basis: distros where Apache hasn't yet published a
+   matching repo / package (Ubuntu 25.10 questing as of late 2025, for
+   example) skip [libarrow-dev] gracefully and let [conf-arrow]'s
+   build log surface the real error if any package actually needs it.
 
-(* Pre-install repository / source setup commands. Run before the main
-   install line of each per-distro stage. *)
-let extra_setup_cmds mgr =
-  match mgr with `Apt -> [ arrow_apt_source_setup ] | _ -> []
+   Apt: Apache ships an apt-source deb that configures their repo +
+   signing key; we wget it (probing both the [debian] and [ubuntu]
+   path components), install it, refresh, then [apt-get install
+   libarrow-dev]. Wrapping the whole sequence in [if … then … else]
+   means a missing apt-source deb (404) doesn't fail the [docker
+   build].
+
+   Yum/Apk: just attempt the install; on success it sticks, on
+   failure we log and move on. *)
+let arrow_install_cmd = function
+  | `Apt ->
+      "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install \
+       -y --no-install-recommends ca-certificates lsb-release wget gpg && \
+       codename=$(lsb_release --codename --short) && distro=$(lsb_release \
+       --id --short | tr 'A-Z' 'a-z') && url=\"https://apache.jfrog.io/artifactory/arrow/$distro/apache-arrow-apt-source-latest-$codename.deb\" \
+       && if wget -q -O /tmp/arrow.deb \"$url\"; then apt-get install -y \
+       --no-install-recommends /tmp/arrow.deb && rm /tmp/arrow.deb && \
+       apt-get update -qq && apt-get install -y --no-install-recommends \
+       libarrow-dev || echo \"apt-get install libarrow-dev failed; \
+       conf-arrow probe will fail if needed\"; else echo \"Apache Arrow \
+       apt-source not yet published for $distro/$codename ($url 404); \
+       libarrow-dev will be unavailable\"; fi && rm -rf \
+       /var/lib/apt/lists/*"
+  | `Yum ->
+      "dnf install -y libarrow-devel || echo \"libarrow-devel not \
+       available on this distro; conf-arrow probe will fail if needed\""
+  | `Apk ->
+      "apk add --no-cache apache-arrow-dev || echo \"apache-arrow-dev not \
+       in this Alpine release's community repo; conf-arrow probe will \
+       fail if needed\""
+  | _ -> ""
 
 (* Hardcoded -dev packages that the upstream [compute_overlay_depexts]
    pre-pass tends to miss — either because the conf-* probe package
    isn't part of any overlay's solved root closure, or because the
    solve fails silently and the union ends up empty. Listing them
    inline keeps the corresponding [conf-*] probe packages
-   (conf-arrow, conf-blosc, conf-gdal, conf-libcurl, conf-libpcre,
-   conf-pam, conf-binaryen, conf-zstd, conf-oniguruma, conf-netsnmp)
-   compiling without the user having to chase them down one at a
-   time. *)
+   (conf-blosc, conf-gdal, conf-libcurl, conf-libpcre, conf-pam,
+   conf-binaryen, conf-zstd, conf-oniguruma, conf-netsnmp) compiling
+   without the user having to chase them down one at a time. Arrow
+   is handled separately because it lives in a third-party repo. *)
 let extra_depexts = function
   | `Apk ->
-      "apache-arrow-dev binaryen blosc-dev curl-dev gdal-dev linux-pam-dev \
-       net-snmp-dev oniguruma-dev pcre2-dev zstd-dev"
+      "binaryen blosc-dev curl-dev gdal-dev linux-pam-dev net-snmp-dev \
+       oniguruma-dev pcre2-dev zstd-dev"
   | `Apt ->
-      "binaryen libarrow-dev libblosc-dev libcurl4-openssl-dev libgdal-dev \
-       libonig-dev libpam0g-dev libpcre2-dev libsnmp-dev libzstd-dev"
+      "binaryen libblosc-dev libcurl4-openssl-dev libgdal-dev libonig-dev \
+       libpam0g-dev libpcre2-dev libsnmp-dev libzstd-dev"
   | `Yum ->
-      "binaryen blosc-devel gdal-devel libarrow-devel libcurl-devel \
-       libzstd-devel net-snmp-devel oniguruma-devel pam-devel pcre2-devel"
+      "binaryen blosc-devel gdal-devel libcurl-devel libzstd-devel \
+       net-snmp-devel oniguruma-devel pam-devel pcre2-devel"
   | _ -> ""
+
+(* Best-effort post-install commands run AFTER the main package install
+   line. Currently just the Arrow attempt. *)
+let post_install_cmds mgr =
+  let cmd = arrow_install_cmd mgr in
+  if cmd = "" then [] else [ cmd ]
 
 (* -- Distro → opam platform variables ----------------------------------- *)
 
@@ -216,19 +241,21 @@ let distro_stage ?(overlay_depexts = []) d =
     | xs -> combined_base ^ " " ^ String.concat " " xs
   in
   let stage_init =
-    DF.comment "=== Stage: %s ===" human @@ DF.from ~alias ~tag img
+    DF.comment "=== Stage: %s ===" human
+    @@ DF.from ~alias ~tag img
+    @@ DF.run "%s" (install_cmd mgr combined)
   in
-  (* Add per-distro source-setup steps before the main install line —
-     e.g. add Apache Arrow's apt source on Debian/Ubuntu so
-     [libarrow-dev] resolves on the next [apt-get install]. *)
-  let stage_with_setup =
+  (* Best-effort post-install RUNs — currently just Apache Arrow,
+     which lives in a third-party repo and may not be published for
+     every distro release yet. Each command MUST handle its own
+     failures so a 404 on a not-yet-published apt-source deb doesn't
+     fail the whole [docker build]. *)
+  let stage_with_post =
     List.fold_left
       (fun acc cmd -> acc @@ DF.run "%s" cmd)
-      stage_init (extra_setup_cmds mgr)
+      stage_init (post_install_cmds mgr)
   in
-  stage_with_setup
-  @@ DF.run "%s" (install_cmd mgr combined)
-  @@ DF.run "%s" fetch_oi @@ DF.workdir "/work"
+  stage_with_post @@ DF.run "%s" fetch_oi @@ DF.workdir "/work"
 
 (* -- Top-level Dockerfiles ---------------------------------------------- *)
 
