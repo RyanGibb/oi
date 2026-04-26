@@ -1,0 +1,24 @@
+(library
+ (name oi_cmd)
+ (libraries
+  oi
+  d10
+  osrel
+  cmdliner
+  fmt
+  fmt.tty
+  fmt.cli
+  logs
+  logs.cli
+  logs.fmt
+  eio
+  eio_posix
+  eio.unix
+  xdge
+  progress
+  dockerfile-opam
+  jsont
+  jsont.bytesrw
+  parsexp
+  sexplib0
+  dockerfile))

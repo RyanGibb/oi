@@ -1,0 +1,276 @@
+open Cmdliner
+
+let ( / ) = Filename.concat
+
+let short_hash h = String.sub h 0 (min 12 (String.length h))
+
+let warn_tool spec fmt =
+  Fmt.kstr
+    (fun s ->
+      Fmt.epr "%a tool %s: %s@."
+        Fmt.(styled `Yellow string)
+        "WARN" (spec : Oi.Project.Tool.spec).name s)
+    fmt
+
+(* Return the layer hash whose [layer.json] declares package name
+   [want_name] (any version). Tools get assembled from only their own
+   leaf layer — the transitive deps (ocaml, dune, ocamlfind…) are
+   already present in the shared d10 cache but are not needed at
+   runtime by a native-compiled tool binary, so we leave them out of
+   [_oi/tools/] to keep it small and focused. *)
+let leaf_hash_for ~fs ~cache ~os_key ~want_name hashes =
+  let layers_dir = Oi.Cache.root_s cache / "layers" / os_key in
+  let leaf hash =
+    match
+      D10.Layer.load_meta Eio.Path.(fs / layers_dir / hash / "layer.json")
+    with
+    | Some m -> (
+        match OpamPackage.of_string_opt m.package with
+        | Some p
+          when OpamPackage.Name.to_string (OpamPackage.name p) = want_name ->
+            Some hash
+        | _ -> None)
+    | None -> None
+  in
+  List.find_map leaf hashes
+
+(* Solve and install every probed dev tool into [cwd/_oi/tools/]. Each
+   tool is its own independent solve so its dep closure never leaks
+   into the main project's OCAMLLIB / OCAMLPATH. A tool that fails to
+   solve (e.g. pinned to an older ocaml) warns and is skipped; other
+   tools still install. Returns the assembled path if at least one
+   tool made it in, or [None] if nothing to install. *)
+let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
+    ~cache ~data_dir ~conf ~os_key ~extra_repos ~pins ?remote ~cwd () =
+  let say fmt =
+    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    else Fmt.kstr (fun s -> Fmt.pr "%s@." s) fmt
+  in
+  let install_one (r : Oi.Project.Tool.result) =
+    let spec = r.spec in
+    let name = OpamPackage.Name.of_string spec.name in
+    let constraints =
+      match r.version with
+      | None -> OpamPackage.Name.Map.empty
+      | Some v ->
+          OpamPackage.Name.Map.singleton name
+            (`Eq, OpamPackage.Version.of_string v)
+    in
+    try
+      let hashes =
+        Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+          ~os_key ~extra_repos ~pins ?refresh ?remote ?jobs ~constraints
+          [ name ]
+      in
+      match leaf_hash_for ~fs ~cache ~os_key ~want_name:spec.name hashes with
+      | None ->
+          warn_tool spec "layer for leaf package not found";
+          None
+      | Some h ->
+          say "Tool %s: %d dep(s) built, leaf layer %s" spec.name
+            (List.length hashes - 1)
+            (short_hash h);
+          Some h
+    with
+    | Oi.Error.E e ->
+        warn_tool spec "%a" Oi.Error.pp e;
+        None
+    | exn ->
+        warn_tool spec "%s" (Printexc.to_string exn);
+        None
+  in
+  match Oi.Project.Tool.(hits (probe ~fs cwd)) with
+  | [] ->
+      say "No dev tools to install";
+      None
+  | hits -> (
+      let leaves = List.filter_map install_one hits in
+      match leaves with
+      | [] -> None
+      | _ ->
+          let tools_dir = cwd / "_oi" / "tools" in
+          Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / tools_dir);
+          Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / tools_dir);
+          let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
+          let unique = List.sort_uniq String.compare leaves in
+          D10.Prefix.assemble d10 ~layer_hashes:unique
+            ~dst:Eio.Path.(fs / tools_dir);
+          say "Tools assembled at %s (%d tool(s), %d leaf layer(s))" tools_dir
+            (List.length leaves) (List.length unique);
+          Some tools_dir)
+
+(* -- sync ---------------------------------------------------------------- *)
+
+(* Run a full sync in [cwd]: solve the deps declared in *.opam files,
+   build/fetch layers, assemble [cwd]/_oi/prefix, and (re)write .envrc.
+   Returns the path to the assembled prefix. When [quiet] is true,
+   narration goes to Logs.info (hidden at default verbosity); otherwise
+   it prints to stdout. *)
+let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
+    ?(with_deps = []) ?jobs ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform
+    ~os_key ~cache ~data_dir ~registry ~cwd () =
+  let say fmt =
+    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    else Fmt.kstr (fun s -> Fmt.pr "%s@." s) fmt
+  in
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+  let project = Oi.Project.load ~fs cwd in
+  let extra_cli, url_project =
+    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+  in
+  let deps = project.deps in
+  if deps = [] && extra_cli = [] && url_project.roots = [] then
+    Oi.Error.config_error "No .opam files found in %s." cwd;
+  say "Dependencies from opam files: %s" (String.concat ", " deps);
+  if url_project.roots <> [] then
+    say "URL-supplied packages: %s" (String.concat ", " url_project.roots);
+  let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+  (* Resolve the toolchain before assembling the overlay list so the
+     overlay-compatibility filter below can see what was requested. *)
+  let toolchain =
+    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+      toolchain
+  in
+  let conf = Oi.Toolchain.apply_conf toolchain conf in
+  let project_overlays =
+    Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(Terms.reporepo_path ())
+      ~toolchain
+      (project.overlays @ url_project.overlays)
+  in
+  if project_overlays <> [] then
+    say "Project overlays (from x-repos): %s"
+      (String.concat ", " project_overlays);
+  let with_repos = project_overlays @ with_repos in
+  let all_extras =
+    Target.merge_extras
+      ~cli:(Target.cli_extra_repos ~fs ~sys with_repos)
+      ~project:(project.extra_repos @ url_project.extra_repos)
+  in
+  if all_extras <> [] then
+    say "Extra repositories: %s"
+      (String.concat ", "
+         (List.map
+            (fun (e : Oi.Project.extra_repo) -> Fmt.str "%s (%s)" e.name e.url)
+            all_extras));
+  let remote = Terms.remote_of_registry registry in
+  let extra_constraints = Oi.Project.Script.constraints extra_cli in
+  let extra_names =
+    List.filter_map
+      (fun (d : Oi.Project.Script.dep) ->
+        if OpamPackage.Name.to_string d.name = "ocaml" then None
+        else Some d.name)
+      extra_cli
+  in
+  let url_names = List.map OpamPackage.Name.of_string url_project.roots in
+  let names =
+    List.map OpamPackage.Name.of_string deps @ extra_names @ url_names
+  in
+  let layer_hashes =
+    Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
+      ~extra_repos:all_extras
+      ~pins:(project.pins @ url_project.pins)
+      ~refresh ~constraints:extra_constraints ?remote ?jobs ?toolchain names
+  in
+  let oi_dir = cwd / "_oi" in
+  let prefix = oi_dir / "prefix" in
+  Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix);
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / oi_dir);
+  let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
+  D10.Prefix.assemble d10 ~layer_hashes ~dst:Eio.Path.(fs / prefix);
+  let tools =
+    install_tools ~quiet ?refresh:(Some refresh) ?jobs ~proc_mgr ~fs ~clock ~sys
+      ~cache ~data_dir ~conf ~os_key ~extra_repos:all_extras ~pins:project.pins
+      ?remote ~cwd ()
+  in
+  let envrc_path = Eio.Path.(fs / cwd / ".envrc") in
+  let dune_cache_root = Oi.Cache.dune_root cache in
+  let envrc = Oi.Solver.Env.envrc_content ~prefix ?tools ~dune_cache_root () in
+  (try Eio.Path.unlink envrc_path with Eio.Exn.Io _ -> ());
+  Eio.Path.save ~create:(`Exclusive 0o644) envrc_path envrc;
+  say "Wrote .envrc (run 'direnv allow' to activate)";
+  say "Prefix assembled at %s (%d packages)" prefix (List.length layer_hashes);
+  prefix
+
+(* True if [cwd]/_oi/prefix is missing, or any *.opam in [cwd] has been
+   modified more recently than the prefix directory. *)
+let needs_sync ~cwd ~prefix =
+  match Unix.stat prefix with
+  | exception Unix.Unix_error _ -> true
+  | st ->
+      let prefix_mtime = st.Unix.st_mtime in
+      let opam_files =
+        try
+          Sys.readdir cwd |> Array.to_list
+          |> List.filter (fun f ->
+              Filename.check_suffix f ".opam"
+              && Filename.chop_suffix f ".opam" <> "")
+        with Sys_error _ -> []
+      in
+      List.exists
+        (fun f ->
+          try (Unix.stat (cwd / f)).Unix.st_mtime > prefix_mtime
+          with Unix.Unix_error _ -> false)
+        opam_files
+
+let cmd =
+  let run () data_dir cache_dir refresh registry with_repos with_deps jobs
+      toolchain =
+    Harness.run @@ fun env ->
+    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
+      Harness.bootstrap env cache_dir
+    in
+    let cwd, _ = Workspace.resolved_cwd fs in
+    ignore
+      (do_sync ~refresh ~with_repos ~with_deps ?jobs ?toolchain ~proc_mgr ~fs
+         ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry ~cwd ())
+  in
+  let info =
+    Cmd.info "sync" ~doc:"Install project dependencies into _oi/prefix/"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Solve the $(b,*.opam) files in the current directory, install the \
+             resulting packages into $(b,_oi/prefix/), and write $(b,.envrc) \
+             for $(b,direnv).";
+          `P
+            "Activate by running $(b,direnv allow), sourcing $(b,.envrc), or \
+             $(b,eval \"\\$(oi env)\"). $(b,oi exec) auto-syncs when the \
+             prefix is missing or older than any $(b,*.opam); explicit $(b,oi \
+             sync) is for after a manifest edit.";
+          `S "DEV TOOLS";
+          `P
+            "Sync also installs editor tooling into $(b,_oi/tools/bin/), \
+             prepended to $(b,PATH):";
+          `I ("$(b,odoc)", "Documentation generator.");
+          `I ("$(b,merlin)", "Editor backend for type and error reporting.");
+          `I ("$(b,ocaml-lsp-server)", "Language server for editors.");
+          `I ("$(b,mdx)", "When $(b,dune-project) uses it.");
+          `I
+            ( "$(b,ocamlformat)",
+              "Pinned to the version $(b,.ocamlformat) requests." );
+          `P "$(b,oi config) lists the tools the next sync will install.";
+          `S "OPTIONS";
+          `I
+            ( "$(b,--with=PKG)",
+              "Add an extra dep to the solve (same forms as $(b,oi run))." );
+          `I
+            ( "$(b,--with-repo=URL|HANDLE)",
+              "Layer an extra opam repository onto the solve." );
+          `I
+            ( "$(b,--toolchain=NAME)",
+              "Pin the compiler. Project overlays tagged for a different \
+               toolchain are dropped from scope." );
+          `I ("$(b,-j N)", "Cap parallel builds (default 4).");
+          `I
+            ( "$(b,--refresh)",
+              "Force-refetch repos, pins, and URL clones. Caches refresh on \
+               their own after 24h." );
+        ]
+  in
+  Cmd.v info
+    Term.(
+      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
+      $ Terms.registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
+      $ Terms.toolchain)

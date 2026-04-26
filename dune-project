@@ -2,6 +2,8 @@
 
 (name oi)
 
+(version 0.5.2)
+
 (generate_opam_files true)
 
 (maintainers "Anil Madhavapeddy <anil@recoil.org>")

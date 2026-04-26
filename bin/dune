@@ -4,10 +4,12 @@
  (package oi)
  (libraries
   oi
+  oi_cmd
   d10
   osrel
   eio_posix
   cmdliner
+  dune-build-info
   xdge
   fmt
   fmt.cli
