@@ -59,8 +59,8 @@ type info = {
 
 val opam_ctx_of_info : info -> Solver.Ctx.toolchain
 (** Project a {!info} down to the {!Solver.Ctx.toolchain} subset that
-    [Solver.Ctx.create] / [Solver.solve] / [Prefix.make_env] need. Single source of
-    truth for the conversion, used by all the CLI commands that thread a
+    [Solver.Ctx.create] / [Solver.solve] / [Prefix.make_env] need. Single source
+    of truth for the conversion, used by all the CLI commands that thread a
     toolchain through. *)
 
 val apply_conf : info option -> Solver.Ctx.conf -> Solver.Ctx.conf

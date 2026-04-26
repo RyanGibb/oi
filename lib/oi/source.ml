@@ -191,8 +191,8 @@ module Reporepo = struct
   let assert_clone path =
     if not (Sys.file_exists (path / ".git")) then
       Error.config_error
-        "reporepo at %s is not a git working copy — run an [oi repo] subcommand \
-         first to bootstrap the clone"
+        "reporepo at %s is not a git working copy — run an [oi repo] \
+         subcommand first to bootstrap the clone"
         path
 
   let set_push_url ~sys ~path url =
@@ -572,9 +572,7 @@ module Reporepo = struct
         Log.debug (fun m ->
             m "base overlays (highest priority first): %s"
               (String.concat ", "
-                 (List.map
-                    (fun (e : entry) -> e.handle ^ "." ^ e.version)
-                    base)));
+                 (List.map (fun (e : entry) -> e.handle ^ "." ^ e.version) base)));
         List.map
           (fun (e : entry) ->
             materialize_one ~fs ~refresh ~data_dir ~handle:e.handle
@@ -595,8 +593,7 @@ module Reporepo = struct
   let try_ls_remote ~sys url args =
     try
       Retry.with_attempts ~label:(Fmt.str "git ls-remote %s" url) (fun () ->
-          D10.Sysops.Cmd.run_out_quiet sys
-            ("git" :: "ls-remote" :: url :: args))
+          D10.Sysops.Cmd.run_out_quiet sys ("git" :: "ls-remote" :: url :: args))
     with exn ->
       Error.config_error "git ls-remote %s failed: %s" url
         (Printexc.to_string exn)
@@ -728,8 +725,7 @@ module Reporepo = struct
           (escape_string td.td_name);
         Stdlib.Option.iter
           (fun s ->
-            Printf.bprintf buf "x-oi-toolchain-compiler: %s\n"
-              (escape_string s))
+            Printf.bprintf buf "x-oi-toolchain-compiler: %s\n" (escape_string s))
           td.td_compiler;
         Stdlib.Option.iter
           (fun b -> Printf.bprintf buf "x-oi-relocatable: %b\n" b)
@@ -774,8 +770,9 @@ module Reporepo = struct
     in
     if handle_exists && not force then
       Error.config_error
-        "overlay %s already exists in reporepo; use 'oi repo bump' to add a new \
-         version, or pass --force to register a new entry with a different URL"
+        "overlay %s already exists in reporepo; use 'oi repo bump' to add a \
+         new version, or pass --force to register a new entry with a different \
+         URL"
         handle;
     let base_handles =
       Stdlib.Option.value base_handles ~default:default_base_handles
@@ -952,8 +949,7 @@ module Pin = struct
       in
       match result with
       | OpamTypes.Result _ | OpamTypes.Up_to_date _ ->
-          Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / sentinel)
-            "";
+          Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / sentinel) "";
           src_dir
       | OpamTypes.Not_available (_, msg) ->
           Error.config_error "pin %s: fetch failed (%s): %s"
@@ -1053,12 +1049,9 @@ module Pin = struct
         let root = Cache.pins_dir cache in
         let set_root = root / "sets" / set_hash in
         let packages_dir = set_root / "packages" in
-        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
-          Eio.Path.(fs / packages_dir);
+        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / packages_dir);
         write_repo_marker ~fs ~dir:set_root;
-        List.iter
-          (fun r -> write_pin_opam ~packages_dir r.pin r.opam)
-          resolved;
+        List.iter (fun r -> write_pin_opam ~packages_dir r.pin r.opam) resolved;
         Log.info (fun m ->
             m "Materialized %d pin(s) at %s" (List.length pins) packages_dir);
         Some packages_dir
@@ -1146,7 +1139,8 @@ module Mirror = struct
     Fmt.str "'%s'" s
 
   let file_size path =
-    try Int64.of_int (Unix.stat path).Unix.st_size with Unix.Unix_error _ -> 0L
+    try Int64.of_int (Unix.stat path).Unix.st_size
+    with Unix.Unix_error _ -> 0L
 
   let resolve_symlink path =
     try
@@ -1194,8 +1188,7 @@ module Mirror = struct
         loop ()
       end;
       try Unix.rename tmp dst
-      with Unix.Unix_error _ -> (
-        try Sys.remove tmp with Sys_error _ -> ())
+      with Unix.Unix_error _ -> ( try Sys.remove tmp with Sys_error _ -> ())
     end
 
   let opam_cache_root () =
@@ -1258,8 +1251,7 @@ module Mirror = struct
                       sha256) VALUES (%s, %s, %s)"
                      (quote algo) (quote value) (quote sha256)))
               checksums;
-            if not (List.exists (fun (a, _) -> a = "sha256") !declared) then
-            begin
+            if not (List.exists (fun (a, _) -> a = "sha256") !declared) then begin
               let dst = path_of_checksum ~cache sha256_hash in
               link_or_copy ~fs ~src:src_path ~dst;
               exec db
@@ -1269,9 +1261,7 @@ module Mirror = struct
                    (quote sha256) (quote sha256))
             end;
             let extra_name, kind_s =
-              match kind with
-              | `Main -> ("", "main")
-              | `Extra n -> (n, "extra")
+              match kind with `Main -> ("", "main") | `Extra n -> (n, "extra")
             in
             exec db
               (Fmt.str
@@ -1279,8 +1269,7 @@ module Mirror = struct
                   package_version, url, kind, extra_name) VALUES (%s, %s, %s, \
                   %s, %s, %s)"
                  (quote sha256)
-                 (quote
-                    (OpamPackage.Name.to_string (OpamPackage.name package)))
+                 (quote (OpamPackage.Name.to_string (OpamPackage.name package)))
                  (quote
                     (OpamPackage.Version.to_string
                        (OpamPackage.version package)))
@@ -1391,8 +1380,8 @@ module Mirror = struct
       in
       ignore
         (Sqlite3.exec_not_null_no_headers db ~cb
-           "SELECT s.sha256 FROM sources s LEFT JOIN source_refs r ON \
-            r.sha256 = s.sha256 WHERE r.sha256 IS NULL");
+           "SELECT s.sha256 FROM sources s LEFT JOIN source_refs r ON r.sha256 \
+            = s.sha256 WHERE r.sha256 IS NULL");
       let removed = ref 0 in
       List.iter
         (fun sha ->
@@ -1400,8 +1389,7 @@ module Mirror = struct
           List.iter
             (fun (algo, value) ->
               let shard =
-                if String.length value >= 2 then String.sub value 0 2
-                else value
+                if String.length value >= 2 then String.sub value 0 2 else value
               in
               let path = dir ~cache / algo / shard / value in
               try

@@ -25,8 +25,8 @@ val compute_for_conf :
 (** [compute_for_conf ~conf ~packages_dirs solved] is like {!compute} but
     evaluates depext filters against a synthetic [conf] rather than the platform
     the host opam state picked up. Intended for cross-platform queries such as
-    "what would the depexts be on alpine?" without rebuilding an {!Solver.Ctx.t}.
-*)
+    "what would the depexts be on alpine?" without rebuilding an
+    {!Solver.Ctx.t}. *)
 
 (** {1 Host installation status} *)
 

@@ -153,8 +153,7 @@ let load ~fs dir =
   let files =
     Eio.Path.read_dir Eio.Path.(fs / dir)
     |> List.filter (fun f ->
-        Filename.check_suffix f ".opam"
-        && Filename.chop_suffix f ".opam" <> "")
+        Filename.check_suffix f ".opam" && Filename.chop_suffix f ".opam" <> "")
     |> List.sort String.compare
   in
   let local_packages =
@@ -218,8 +217,7 @@ module Script = struct
     let n = String.length s in
     let rec loop i =
       if i >= n then None
-      else
-        match s.[i] with '<' | '>' | '=' | '!' -> Some i | _ -> loop (i + 1)
+      else match s.[i] with '<' | '>' | '=' | '!' -> Some i | _ -> loop (i + 1)
     in
     match loop 0 with
     | None -> (s, "")
@@ -267,7 +265,8 @@ module Script = struct
         |> List.map String.trim
         |> List.map (fun s ->
             if
-              String.length s >= 2 && s.[0] = '"'
+              String.length s >= 2
+              && s.[0] = '"'
               && s.[String.length s - 1] = '"'
             then String.sub s 1 (String.length s - 2)
             else s)
@@ -307,8 +306,7 @@ module Script = struct
           let c =
             match d.constraint_ with
             | Some (op, v) ->
-                OpamFormula.string_of_relop op
-                ^ OpamPackage.Version.to_string v
+                OpamFormula.string_of_relop op ^ OpamPackage.Version.to_string v
             | None -> ""
           in
           name_s d ^ c)
@@ -326,8 +324,7 @@ module Script = struct
         | Some c -> OpamPackage.Name.Map.add d.name c acc)
       OpamPackage.Name.Map.empty deps
 
-  let is_ppx name =
-    String.length name >= 4 && String.sub name 0 4 = "ppx_"
+  let is_ppx name = String.length name >= 4 && String.sub name 0 4 = "ppx_"
 
   let generate_project ~script ~deps ~dir =
     let content = In_channel.with_open_bin script In_channel.input_all in
@@ -457,11 +454,7 @@ module Url = struct
         (OpamPackage.Name.of_string name)
         (OpamPackage.Version.of_string version)
     in
-    {
-      pkg;
-      url;
-      declared_in = Fmt.str "--with=%s" (OpamUrl.to_string url);
-    }
+    { pkg; url; declared_in = Fmt.str "--with=%s" (OpamUrl.to_string url) }
 
   let fallback_from_plain_opam ~fs ~src_dir url =
     let opam_path = src_dir / "opam" in
@@ -578,8 +571,7 @@ module Dune = struct
                   had_depends := true;
                   if List.exists (dep_matches ~name) existing then orig
                   else
-                    Sexp.List
-                      ((Sexp.Atom "depends" :: existing) @ [ new_dep ])
+                    Sexp.List ((Sexp.Atom "depends" :: existing) @ [ new_dep ])
               | other -> other)
             items
         in
@@ -610,9 +602,7 @@ module Dune = struct
     let sexps' =
       List.map
         (fun s ->
-          if
-            is_form "package" s
-            && package_name_of_stanza s = Some target_name
+          if is_form "package" s && package_name_of_stanza s = Some target_name
           then begin
             found := true;
             add_to_stanza ~new_dep ~name s
@@ -635,11 +625,7 @@ end
 (* -- Dev-tool probes (was lib/oi/tool.ml) -------------------------------- *)
 
 module Tool = struct
-  type trigger =
-    | Always
-    | Ocamlformat_file
-    | Dune_project_using of string
-
+  type trigger = Always | Ocamlformat_file | Dune_project_using of string
   type spec = { name : string; binary : string; trigger : trigger }
 
   let registry =
@@ -647,11 +633,7 @@ module Tool = struct
       { name = "odoc"; binary = "odoc"; trigger = Always };
       { name = "merlin"; binary = "ocamlmerlin"; trigger = Always };
       { name = "ocaml-lsp-server"; binary = "ocamllsp"; trigger = Always };
-      {
-        name = "mdx";
-        binary = "ocaml-mdx";
-        trigger = Dune_project_using "mdx";
-      };
+      { name = "mdx"; binary = "ocaml-mdx"; trigger = Dune_project_using "mdx" };
       {
         name = "ocamlformat";
         binary = "ocamlformat";
@@ -685,8 +667,7 @@ module Tool = struct
         | Some i ->
             let k = String.trim (String.sub line 0 i) in
             let v =
-              String.trim
-                (String.sub line (i + 1) (String.length line - i - 1))
+              String.trim (String.sub line (i + 1) (String.length line - i - 1))
             in
             if k = "version" && v <> "" then Some v else None
     in

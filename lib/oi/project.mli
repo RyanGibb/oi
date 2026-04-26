@@ -1,11 +1,11 @@
 (** Project metadata: read [*.opam] files in a directory, parse script-style
-    dependency annotations, edit [dune-project] files, probe for dev tools,
-    and clone remote URL-projects into the pin cache.
+    dependency annotations, edit [dune-project] files, probe for dev tools, and
+    clone remote URL-projects into the pin cache.
 
-    The top-level module reads a project directory's [*.opam] files and
-    surfaces the deps, pin-depends, and [x-repos:] declarations a CLI driver
-    needs to drive the solver. The submodules cover the adjacent project
-    concerns ({!Url}, {!Dune}, {!Script}, {!Tool}). *)
+    The top-level module reads a project directory's [*.opam] files and surfaces
+    the deps, pin-depends, and [x-repos:] declarations a CLI driver needs to
+    drive the solver. The submodules cover the adjacent project concerns
+    ({!Url}, {!Dune}, {!Script}, {!Tool}). *)
 
 (** {1 Project metadata from a directory} *)
 
@@ -35,8 +35,8 @@ val load : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> t
 
     OCaml scripts declare deps via [[\@\@\@opam ...]] on the first line.
     Dependency strings accept an opam package name plus an optional version
-    constraint ([pkg>=1.0]) and an optional findlib sub-library
-    ([pkg.sub] or [pkg.sub>=1.0]). *)
+    constraint ([pkg>=1.0]) and an optional findlib sub-library ([pkg.sub] or
+    [pkg.sub>=1.0]). *)
 
 module Script : sig
   type dep = {
@@ -51,31 +51,33 @@ module Script : sig
   (** Script-style dep spec: [.] is a findlib sub-library separator. *)
 
   val parse_cli_dep : string -> dep
-  (** CLI-style dep spec: [.] after the package name is opam's
-      [pkg.version] shorthand. *)
+  (** CLI-style dep spec: [.] after the package name is opam's [pkg.version]
+      shorthand. *)
 
   val name_s : dep -> string
   val dedup : dep list -> dep list
   val script_hash : string -> dep list -> string
-  val constraints : dep list -> OpamFormula.version_constraint OpamTypes.name_map
+
+  val constraints :
+    dep list -> OpamFormula.version_constraint OpamTypes.name_map
 
   val generate_project : script:string -> deps:dep list -> dir:string -> unit
 end
 
 (** {1 URL-supplied projects}
 
-    CLI callers pass [--with=URL] to pull a whole upstream opam project into
-    the current solve. oi clones [URL] into the pin cache (sharing the
-    sentinel-based freshness machinery with {!Source.Pin}), reads every
-    [*.opam] at the clone's root, and synthesises one {!pin} per local
-    package so the existing pin-depends pipeline can realise them through
+    CLI callers pass [--with=URL] to pull a whole upstream opam project into the
+    current solve. oi clones [URL] into the pin cache (sharing the
+    sentinel-based freshness machinery with {!Source.Pin}), reads every [*.opam]
+    at the clone's root, and synthesises one {!pin} per local package so the
+    existing pin-depends pipeline can realise them through
     {!Source.Pin.materialize}. *)
 
 module Url : sig
   type nonrec t = {
     pins : pin list;
-        (** One synthetic pin per local package, plus every [pin-depends:]
-            entry the URL project itself declared. *)
+        (** One synthetic pin per local package, plus every [pin-depends:] entry
+            the URL project itself declared. *)
     roots : string list;
         (** Package names that should enter the solve as roots: the local
             packages provided by each URL project. *)
@@ -89,8 +91,8 @@ module Url : sig
 
   val classify : string -> with_arg
   (** Strings whose scheme is [http(s)://], [git+…], [git@…], [git://], or
-      [ssh://] become {!Url}. Everything else is parsed as an opam package
-      spec via {!Script.parse_cli_dep} and returned as {!Dep}. *)
+      [ssh://] become {!Url}. Everything else is parsed as an opam package spec
+      via {!Script.parse_cli_dep} and returned as {!Dep}. *)
 
   val materialize :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -126,15 +128,11 @@ end
 (** {1 Dev-tool probes}
 
     Tools are opam packages whose binaries are useful during development but
-    whose [lib/<pkg>/] trees must not leak into the main project's OCaml
-    search path. *)
+    whose [lib/<pkg>/] trees must not leak into the main project's OCaml search
+    path. *)
 
 module Tool : sig
-  type trigger =
-    | Always
-    | Ocamlformat_file
-    | Dune_project_using of string
-
+  type trigger = Always | Ocamlformat_file | Dune_project_using of string
   type spec = { name : string; binary : string; trigger : trigger }
 
   val registry : spec list

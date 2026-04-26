@@ -130,8 +130,8 @@ module Dir_context = struct
             match user_constraints with
             | Some test
               when not
-                     (OpamFormula.check_version_formula
-                        (OpamFormula.Atom test) v) ->
+                     (OpamFormula.check_version_formula (OpamFormula.Atom test)
+                        v) ->
                 (v, Error (UserConstraint (name, Some test)))
             | _ -> (v, Ok opam))
 
@@ -263,8 +263,7 @@ module Ctx = struct
         ( "CAML_LD_LIBRARY_PATH",
           String.concat ":"
             [
-              prefix / "lib" / "stublibs";
-              prefix / "lib" / "ocaml" / "stublibs";
+              prefix / "lib" / "stublibs"; prefix / "lib" / "ocaml" / "stublibs";
             ] );
         ("OCAMLFIND_CONF", prefix / "lib" / "findlib.conf");
         ("OCAMLFIND_DESTDIR", prefix / "lib");
@@ -450,8 +449,7 @@ module Ctx = struct
                       OpamPackage.Map.add pkg opam st.installed_opams;
                     conf_files =
                       (match config with
-                      | Some c ->
-                          OpamPackage.Name.Map.add name c st.conf_files
+                      | Some c -> OpamPackage.Name.Map.add name c st.conf_files
                       | None -> st.conf_files);
                   })
             tc.packages st
@@ -550,8 +548,7 @@ module Ctx = struct
         [
           (OpamVariable.of_string "with-test", Some (OpamTypes.B test));
           (OpamVariable.of_string "with-doc", Some (OpamTypes.B doc));
-          ( OpamVariable.of_string "with-dev-setup",
-            Some (OpamTypes.B dev_setup) );
+          (OpamVariable.of_string "with-dev-setup", Some (OpamTypes.B dev_setup));
         ]
       in
       let with_build =
@@ -634,8 +631,8 @@ module Env = struct
     in
     let path_adds =
       (match tools with
-      | None -> []
-      | Some _ -> [ "PATH_add \"$OI_TOOLS/bin\"" ])
+        | None -> []
+        | Some _ -> [ "PATH_add \"$OI_TOOLS/bin\"" ])
       @ [ "PATH_add \"$OI_PREFIX/bin\"" ]
       @
       match toolchain with
@@ -677,8 +674,7 @@ module Env = struct
       | Some (tc : Ctx.toolchain) -> Some (tc.install_prefix / "bin")
     in
     let path_components =
-      List.filter_map Fun.id
-        [ tools_bin; Some (prefix / "bin"); toolchain_bin ]
+      List.filter_map Fun.id [ tools_bin; Some (prefix / "bin"); toolchain_bin ]
     in
     let path_entry =
       "PATH=" ^ String.concat ":" path_components ^ ":" ^ current_path
@@ -695,7 +691,6 @@ module Cache = struct
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
   let schema_version = "v5"
-
   let head_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
 
   let compute_git_head repo =
@@ -824,8 +819,7 @@ module Cache = struct
 
   let lookup_layers ~cache_root ~key =
     match
-      read_marshal ~label:"layer-cache"
-        (key_path ~cache_root ~sub:"layers" key)
+      read_marshal ~label:"layer-cache" (key_path ~cache_root ~sub:"layers" key)
     with
     | Some v -> Some (v : string list)
     | None -> None

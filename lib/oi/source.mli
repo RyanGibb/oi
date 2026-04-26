@@ -5,18 +5,18 @@
 (** Source acquisition: opam repositories, the reporepo (overlay-of-overlays
     metadata), pin-depends realisation, and the registry source mirror.
 
-    Every package the solver sees comes from a [packages/] tree on disk.
-    {!Repo} clones individual remotes; {!Reporepo} resolves and materialises
-    a pinned set of overlays; {!Pin} synthesises a [packages/] tree from
-    [pin-depends:] entries; {!Mirror} keeps a sqlite-indexed source-tarball
-    cache for the registry. *)
+    Every package the solver sees comes from a [packages/] tree on disk. {!Repo}
+    clones individual remotes; {!Reporepo} resolves and materialises a pinned
+    set of overlays; {!Pin} synthesises a [packages/] tree from [pin-depends:]
+    entries; {!Mirror} keeps a sqlite-indexed source-tarball cache for the
+    registry. *)
 
 (** {1 Opam repository clones} *)
 
 module Repo : sig
   val repo_dir : data_dir:string -> string -> string
-  (** [repo_dir ~data_dir name] is the local clone path for a repo named
-      [name]. *)
+  (** [repo_dir ~data_dir name] is the local clone path for a repo named [name].
+  *)
 
   val ensure_extra :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -26,9 +26,9 @@ module Repo : sig
     string list
   (** [ensure_extra ~fs ~data_dir extras] clones/updates each entry using the
       same age/force semantics as {!ensure_one}. Each entry is cloned into
-      [data_dir/repos/<name>] — two entries with the same name collide by
-      design (callers should deduplicate). Returns one [packages/] directory
-      per entry in input order. *)
+      [data_dir/repos/<name>] — two entries with the same name collide by design
+      (callers should deduplicate). Returns one [packages/] directory per entry
+      in input order. *)
 
   val ensure_one :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -47,16 +47,16 @@ end
     A reporepo is an opam-layout directory where each package represents an
     overlay: a handle (the package name) points at a specific commit of an
     upstream opam repository. Dependencies between overlay packages express
-    transitive overlay composition, giving a lockfile-like view of the full
-    repo set needed by a consumer. oi never solves or builds packages from a
+    transitive overlay composition, giving a lockfile-like view of the full repo
+    set needed by a consumer. oi never solves or builds packages from a
     reporepo; it mines the pinned URLs out of them and threads those as
     additional opam remotes into the normal solver. *)
 
 module Reporepo : sig
   type entry = {
     handle : string;
-        (** Opam package name for the overlay (must be opam-valid, so no
-            dots). *)
+        (** Opam package name for the overlay (must be opam-valid, so no dots).
+        *)
     version : string;  (** Full opam version string, e.g. [20250418.0]. *)
     url : string;
         (** Upstream git URL (without commit fragment). Empty for
@@ -69,28 +69,28 @@ module Reporepo : sig
         (** Upstream git ref this entry tracks (typically a branch like
             [refs/heads/relocatable]). *)
     toolchain : string option;
-        (** [x-oi-toolchain]: this overlay targets the named toolchain
-            (use-site relationship). *)
+        (** [x-oi-toolchain]: this overlay targets the named toolchain (use-site
+            relationship). *)
     toolchain_name : string option;
-        (** [x-oi-toolchain-name]: when set, this entry DEFINES a toolchain
-            with the given CLI name. The reporepo handle and the toolchain
-            CLI name live in separate namespaces. *)
+        (** [x-oi-toolchain-name]: when set, this entry DEFINES a toolchain with
+            the given CLI name. The reporepo handle and the toolchain CLI name
+            live in separate namespaces. *)
     toolchain_compiler : string option;
-        (** [x-oi-toolchain-compiler]: the primary compiler package spec,
-            e.g. ["ocaml-variants.5.2.0+ox"]. Only meaningful when
-            {!toolchain_name} is set. *)
+        (** [x-oi-toolchain-compiler]: the primary compiler package spec, e.g.
+            ["ocaml-variants.5.2.0+ox"]. Only meaningful when {!toolchain_name}
+            is set. *)
     relocatable : bool option;
-        (** [x-oi-relocatable]: build mode for the toolchain this entry
-            defines. *)
+        (** [x-oi-relocatable]: build mode for the toolchain this entry defines.
+        *)
     toolchain_roots : string list list;
         (** [x-oi-toolchain-roots]: solver root specs for the toolchain. *)
     depends : (string * string option) list;
-        (** Other overlay handles this one depends on, optionally with an
-            exact version. *)
+        (** Other overlay handles this one depends on, optionally with an exact
+            version. *)
     root_packages : string list list;
-        (** Package sets to pre-build when priming this overlay into a
-            registry. Each outer entry is a solve group: a list of package
-            specs fed to the solver together. *)
+        (** Package sets to pre-build when priming this overlay into a registry.
+            Each outer entry is a solve group: a list of package specs fed to
+            the solver together. *)
     opam_path : string;  (** Absolute path to the source opam file. *)
   }
 
@@ -106,8 +106,8 @@ module Reporepo : sig
   type root = { handle : string; version : string option }
 
   val resolve : entry list -> roots:root list -> entry list
-  (** Transitive closure in dependency order (deps before dependents). If a
-      root has no [version], the highest version is picked. *)
+  (** Transitive closure in dependency order (deps before dependents). If a root
+      has no [version], the highest version is picked. *)
 
   val materialize :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -117,8 +117,8 @@ module Reporepo : sig
     entry list ->
     string list
   (** For each entry, ensure its upstream opam repo is cloned at the pinned
-      commit under [{data_dir}/repos/overlay-<handle>-<version>/]. Returns
-      the list of [packages/] directories in the order supplied. *)
+      commit under [{data_dir}/repos/overlay-<handle>-<version>/]. Returns the
+      list of [packages/] directories in the order supplied. *)
 
   val materialize_one :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -141,19 +141,18 @@ module Reporepo : sig
     string list
   (** Resolves the [relocatable] overlay (and its transitive deps) from the
       reporepo, clones each at its pinned commit, and returns [packages/]
-      directories in solver priority order. Auto-clones the reporepo itself
-      if it doesn't already exist on disk. *)
+      directories in solver priority order. Auto-clones the reporepo itself if
+      it doesn't already exist on disk. *)
 
   val base_entries : unit -> entry list
-  (** Resolved base overlays without cloning. Useful for display in
-      [oi config]. Empty list when the reporepo is missing or has no
-      [relocatable] entry. *)
+  (** Resolved base overlays without cloning. Useful for display in [oi config].
+      Empty list when the reporepo is missing or has no [relocatable] entry. *)
 
   (** {2 Paths and bootstrapping} *)
 
   val default_path : string
-  (** [$OI_DATA_DIR/reporepo], falling back to
-      [$XDG_DATA_HOME/oi/reporepo] and then [~/.local/share/oi/reporepo]. *)
+  (** [$OI_DATA_DIR/reporepo], falling back to [$XDG_DATA_HOME/oi/reporepo] and
+      then [~/.local/share/oi/reporepo]. *)
 
   val env_path : unit -> string
   val default_url : string
@@ -182,8 +181,8 @@ module Reporepo : sig
     path:string ->
     unit ->
     push_outcome
-  (** Stage and commit any uncommitted changes, [git pull --rebase] to bring
-      in upstream history, then [git push] if local is ahead. *)
+  (** Stage and commit any uncommitted changes, [git pull --rebase] to bring in
+      upstream history, then [git push] if local is ahead. *)
 
   val add :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -241,16 +240,16 @@ module Pin : sig
     ?refresh:bool ->
     Project.pin list ->
     string option
-  (** Returns [Some packages_dir] (an absolute path to a synthesized
-      [packages/] tree) when [pins] is non-empty, [None] when [pins = []]. *)
+  (** Returns [Some packages_dir] (an absolute path to a synthesized [packages/]
+      tree) when [pins] is non-empty, [None] when [pins = []]. *)
 end
 
 (** {1 Source tarball mirror}
 
-    Populated automatically during [oi registry build] as a side-effect of
-    each successful source fetch; exported to the registry's top-level
-    [sources/] directory by [oi registry export]. The on-disk layout is what
-    opam expects for a [cache_url]:
+    Populated automatically during [oi registry build] as a side-effect of each
+    successful source fetch; exported to the registry's top-level [sources/]
+    directory by [oi registry export]. The on-disk layout is what opam expects
+    for a [cache_url]:
 
     <mirror>/<algo>/<first-2-chars>/<full-hash>
 
@@ -295,14 +294,13 @@ module Mirror : sig
   }
 
   val list : cache:Cache.t -> ?package:string -> unit -> entry list
-
   val gc : cache:Cache.t -> int
-
   val verify : sys:D10.Sysops.t -> cache:Cache.t -> (string * string) list
-
   val export : cache:Cache.t -> dst:Eio.Fs.dir_ty Eio.Path.t -> int
 
   val merge_remote :
-    fs:Eio.Fs.dir_ty Eio.Path.t -> index_path:string -> remote_path:string ->
+    fs:Eio.Fs.dir_ty Eio.Path.t ->
+    index_path:string ->
+    remote_path:string ->
     unit
 end

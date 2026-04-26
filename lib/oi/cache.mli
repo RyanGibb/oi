@@ -33,13 +33,13 @@ val pins_dir : t -> string
 val toolchains_root : unit -> string
 (** [toolchains_root ()] is the XDG-derived directory under which fixed-prefix
     toolchains are installed ([$XDG_CACHE_HOME/oi/toolchains]). Independent of
-    the cache root so {!Toolchain} can compute install prefixes without taking
-    a [t]. *)
+    the cache root so {!Toolchain} can compute install prefixes without taking a
+    [t]. *)
 
 (** {1 Sentinel-based freshness}
 
-    Shared by pin and URL-project clones. A sentinel file proves the cache
-    entry was populated cleanly (partial fetches don't leave one behind). *)
+    Shared by pin and URL-project clones. A sentinel file proves the cache entry
+    was populated cleanly (partial fetches don't leave one behind). *)
 
 val refresh_max_age : float
 (** Seconds. Default [86_400.0] (24h). A clone older than this is pulled again
@@ -47,9 +47,8 @@ val refresh_max_age : float
 
 val fresh : refresh:bool -> sentinel:string -> max_age:float -> bool
 (** [fresh ~refresh ~sentinel ~max_age] is [true] when a cache entry guarded by
-    [sentinel] is still fresh: the sentinel exists and is younger than
-    [max_age] seconds. Returns [false] unconditionally when [refresh] is
-    [true]. *)
+    [sentinel] is still fresh: the sentinel exists and is younger than [max_age]
+    seconds. Returns [false] unconditionally when [refresh] is [true]. *)
 
 (** {1 Build logs}
 

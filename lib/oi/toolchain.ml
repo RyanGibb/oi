@@ -254,14 +254,16 @@ let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
      works on a fresh machine — the toolchain definitions live there
      now, not in oi's binary. *)
   let path = Source.Reporepo.env_path () in
-  Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path ~url:(Source.Reporepo.env_url ());
+  Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path
+    ~url:(Source.Reporepo.env_url ());
   let entry =
     match find_entry_by_toolchain_name ~name:handle with
     | Some e -> e
     | None ->
         let known =
           load_entries ()
-          |> List.filter_map (fun (e : Source.Reporepo.entry) -> e.toolchain_name)
+          |> List.filter_map (fun (e : Source.Reporepo.entry) ->
+              e.toolchain_name)
           |> List.sort_uniq String.compare
         in
         Error.config_error

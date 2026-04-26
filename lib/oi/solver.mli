@@ -7,9 +7,9 @@
 
 (** {1 Synthetic opam switch state}
 
-    Owned by {!Ctx}. Builds an [OpamSwitchState.t] backed by a build prefix
-    and package repositories without using ~/.opam, plus the platform
-    configuration ({!Ctx.conf}) the rest of the pipeline keys off. *)
+    Owned by {!Ctx}. Builds an [OpamSwitchState.t] backed by a build prefix and
+    package repositories without using ~/.opam, plus the platform configuration
+    ({!Ctx.conf}) the rest of the pipeline keys off. *)
 
 module Ctx : sig
   (** {2 Platform configuration} *)
@@ -34,28 +34,28 @@ module Ctx : sig
     install_prefix : string;
     hash : string;
         (** Content hash of the toolchain's solved opam files + platform conf,
-            used by {!Cache} to key consumer solves on the toolchain
-            identity without enumerating its full package set. *)
+            used by {!Cache} to key consumer solves on the toolchain identity
+            without enumerating its full package set. *)
     relocatable : bool;
         (** [true] when the compiler can be installed into the consumer prefix
             rather than at [install_prefix]. {!create} skips the
-            [mark_installed] pre-population in that case so the consumer
-            solve actually builds the compiler, and {!switch_env} skips the
-            toolchain PATH/lib layering — the binary cache then matches what
-            no-toolchain mode would produce. The version pinning via
-            [packages]/[root_names] still applies. *)
+            [mark_installed] pre-population in that case so the consumer solve
+            actually builds the compiler, and {!switch_env} skips the toolchain
+            PATH/lib layering — the binary cache then matches what no-toolchain
+            mode would produce. The version pinning via [packages]/[root_names]
+            still applies. *)
     packages : OpamPackage.Set.t;
     root_names : OpamPackage.Name.Set.t;
         (** Solver-root subset of [packages]. The consumer solve uses this to
             force the originally-specified toolchain roots into the solution
-            (via [conflict-class] those then exclude the wrong compiler)
-            without dragging in every transitive dep — adding the full
-            [packages] set as roots pulls in oxcaml meta packages that
-            conflict with each other. *)
+            (via [conflict-class] those then exclude the wrong compiler) without
+            dragging in every transitive dep — adding the full [packages] set as
+            roots pulls in oxcaml meta packages that conflict with each other.
+        *)
   }
   (** Subset of {!Toolchain.info} that the solver subsystem actually needs.
-      Keeps {!Ctx} independent of the toolchain resolution pipeline while
-      still letting {!create} layer env vars and mark toolchain packages as
+      Keeps {!Ctx} independent of the toolchain resolution pipeline while still
+      letting {!create} layer env vars and mark toolchain packages as
       pre-installed. *)
 
   val create :
@@ -67,11 +67,11 @@ module Ctx : sig
     t
   (** [?toolchain] pins a fixed-prefix OCaml toolchain (compiler, ocamlfind,
       ocamlbuild, ...) to this context. When set:
-      - the switch env prepends toolchain [bin], [lib], and [lib/stublibs]
-        to [PATH], [OCAMLPATH], and [CAML_LD_LIBRARY_PATH] so consumer
-        builds resolve the compiler from the toolchain prefix;
-      - toolchain packages are recorded so downstream code (solver
-        constraints, execute-skip) can special-case them. *)
+      - the switch env prepends toolchain [bin], [lib], and [lib/stublibs] to
+        [PATH], [OCAMLPATH], and [CAML_LD_LIBRARY_PATH] so consumer builds
+        resolve the compiler from the toolchain prefix;
+      - toolchain packages are recorded so downstream code (solver constraints,
+        execute-skip) can special-case them. *)
 
   val conf : t -> conf
   val prefix : t -> string
@@ -92,26 +92,30 @@ module Ctx : sig
     ?build_dir:string ->
     OpamFile.OPAM.t ->
     string list list
-  (** Returns the fully resolved build commands with all opam variables
-      expanded and filters evaluated. When [?build_dir] is given, it
-      overrides [%{build}%] to that path. *)
+  (** Returns the fully resolved build commands with all opam variables expanded
+      and filters evaluated. When [?build_dir] is given, it overrides
+      [%{build}%] to that path. *)
 
   val compilation_env : t -> OpamFile.OPAM.t -> string array
-  (** Full build environment: sanitized MAKEFLAGS, package-specific vars,
-      and the switch environment. *)
+  (** Full build environment: sanitized MAKEFLAGS, package-specific vars, and
+      the switch environment. *)
 
   val resolve_substs : t -> OpamFile.OPAM.t -> (string * string) list
   (** Sorted association list mapping opam variable names to their resolved
       values, for expanding [.in] files at execution time. *)
 
   val mark_installed :
-    t -> OpamPackage.t -> OpamFile.OPAM.t -> OpamFile.Dot_config.t option -> unit
+    t ->
+    OpamPackage.t ->
+    OpamFile.OPAM.t ->
+    OpamFile.Dot_config.t option ->
+    unit
 
   val synthetic_config :
     t -> OpamPackage.t -> OpamFile.OPAM.t -> OpamFile.Dot_config.t option
-  (** Hard-coded .config for well-known compiler packages (currently
-      [ocaml]) so that variables like [ocaml:native] can be resolved at
-      plan time, before the package has actually been built. *)
+  (** Hard-coded .config for well-known compiler packages (currently [ocaml]) so
+      that variables like [ocaml:native] can be resolved at plan time, before
+      the package has actually been built. *)
 
   val switch_state : t -> OpamStateTypes.unlocked OpamStateTypes.switch_state
 
@@ -124,8 +128,8 @@ module Ctx : sig
     ?toolchain:toolchain -> prefix:string -> unit -> (string * string) list
   (** OCaml switch environment for [prefix]. With [?toolchain] set, the
       toolchain's [bin]/[lib]/[lib/stublibs] are prepended and OCAMLLIB /
-      OCAMLFIND_CONF are dropped so the non-relocatable compiler picks up
-      stdlib via its baked-in path. *)
+      OCAMLFIND_CONF are dropped so the non-relocatable compiler picks up stdlib
+      via its baked-in path. *)
 
   val init_opam : root:string -> unit
   (** Initialise opam's global config with an isolated root directory. *)
@@ -151,9 +155,9 @@ module Env : sig
     dune_cache_root:string ->
     unit ->
     string
-  (** [.envrc] contents activating [prefix]. When [tools] is given, its
-      [bin/] subdirectory is prepended to [PATH] ahead of [prefix/bin]. The
-      tools [lib/] is intentionally NOT wired into OCAMLLIB / OCAMLPATH /
+  (** [.envrc] contents activating [prefix]. When [tools] is given, its [bin/]
+      subdirectory is prepended to [PATH] ahead of [prefix/bin]. The tools
+      [lib/] is intentionally NOT wired into OCAMLLIB / OCAMLPATH /
       OCAMLFIND_DESTDIR — dev tools stay visible as binaries on PATH but
       invisible to the main project's compiler. *)
 
@@ -170,15 +174,15 @@ end
 
 (** {1 Persistent solve cache}
 
-    Memoises {!solve} by digesting [conf], every [packages_dir] paired with
-    its containing repository's [HEAD] commit, the constraints, and the
-    target names. On a hit the stored result is loaded with [Marshal]
-    instead of re-running 0install. Only successful solves are cached.
+    Memoises {!solve} by digesting [conf], every [packages_dir] paired with its
+    containing repository's [HEAD] commit, the constraints, and the target
+    names. On a hit the stored result is loaded with [Marshal] instead of
+    re-running 0install. Only successful solves are cached.
 
     A parallel "layer hashes" cache stores the topo-sorted list of d10 layer
-    hashes a successful solve produced; a subsequent identical [oi run] can
-    skip {!Ctx.create} / {!solve} / {!Plan.build} entirely when every cached
-    layer is still in the d10 cache. *)
+    hashes a successful solve produced; a subsequent identical [oi run] can skip
+    {!Ctx.create} / {!solve} / {!Plan.build} entirely when every cached layer is
+    still in the d10 cache. *)
 
 module Cache : sig
   val key :
@@ -189,12 +193,13 @@ module Cache : sig
     ?toolchain:Ctx.toolchain ->
     unit ->
     string option
-  (** MD5 hex digest used as the cache key, or [None] if any [packages_dir]
-      is not under a git working tree (in which case the caller should skip
-      both {!lookup} and {!store}). [git rev-parse HEAD] results are
-      memoised process-wide. *)
+  (** MD5 hex digest used as the cache key, or [None] if any [packages_dir] is
+      not under a git working tree (in which case the caller should skip both
+      {!lookup} and {!store}). [git rev-parse HEAD] results are memoised
+      process-wide. *)
 
   val lookup : cache_root:string -> key:string -> OpamPackage.t list option
+
   val store :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     cache_root:string ->
@@ -203,6 +208,7 @@ module Cache : sig
     unit
 
   val lookup_layers : cache_root:string -> key:string -> string list option
+
   val store_layers :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     cache_root:string ->
@@ -221,9 +227,9 @@ val solve :
   constraints:OpamFormula.version_constraint OpamTypes.name_map ->
   OpamPackage.Name.t list ->
   (OpamPackage.t list, string) result
-(** Resolve the dependency closure for [names]. Returns packages in
-    topological order. Successful solves are persisted to {!Cache} and
-    re-used when an identical input is presented again. *)
+(** Resolve the dependency closure for [names]. Returns packages in topological
+    order. Successful solves are persisted to {!Cache} and re-used when an
+    identical input is presented again. *)
 
 val solve_dir :
   env:(string -> OpamVariable.variable_contents option) ->
@@ -232,8 +238,8 @@ val solve_dir :
   OpamPackage.Name.t list ->
   (OpamPackage.t list, string) result
 (** Lower-level entrypoint. Runs [opam-0install] over [packages_dirs] with
-    exactly the [constraints] and [env] supplied — no auto-pinning, no
-    {!Ctx}, no solve cache. *)
+    exactly the [constraints] and [env] supplied — no auto-pinning, no {!Ctx},
+    no solve cache. *)
 
 val dep_names :
   packages_dirs:string list ->

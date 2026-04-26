@@ -54,8 +54,7 @@ let filter_compatible_overlays ~reporepo_path ~toolchain handles =
   | None -> handles
   | Some info ->
       let entries =
-        try Source.Reporepo.load ~path:reporepo_path
-        with Error.E _ -> []
+        try Source.Reporepo.load ~path:reporepo_path with Error.E _ -> []
       in
       List.filter
         (fun h ->
@@ -98,8 +97,8 @@ let record_sources ~sys ~cache (exec_plan : Plan.t) =
               (fun (src : Plan.source_info) ->
                 let checksums = List.map OpamHash.of_string src.checksums in
                 let url = OpamUrl.parse ~handle_suffix:true src.url in
-                Source.Mirror.record ~sys ~cache ~package ?overlay
-                  ~kind:`Main ~url ~checksums ())
+                Source.Mirror.record ~sys ~cache ~package ?overlay ~kind:`Main
+                  ~url ~checksums ())
               p.source;
             List.iter
               (fun (name, (src : Plan.source_info)) ->
@@ -171,8 +170,7 @@ let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
 
 let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
-    ?remote ?jobs ?toolchain
-    ?(constraints = OpamPackage.Name.Map.empty) names =
+    ?remote ?jobs ?toolchain ?(constraints = OpamPackage.Name.Map.empty) names =
   let extra_pkg_dirs =
     Source.Repo.ensure_extra ~fs ~data_dir ~refresh extra_repos
   in
@@ -197,9 +195,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         (String.concat ""
            (List.map (fun d -> Fmt.str "\n  %s" d) packages_dirs)));
   let cache_root = Cache.root_s cache in
-  let d10 =
-    make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
-  in
+  let d10 = make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key in
   (* Fast-path: if we've seen these exact inputs before AND every layer
      hash we stored is still present in the d10 cache, skip
      [Solver.Ctx.create] + [Solver.solve] + [Plan.build] entirely. The
@@ -221,8 +217,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         match Solver.Cache.lookup_layers ~cache_root ~key:k with
         | None -> None
         | Some hashes
-          when List.for_all (fun h -> D10.Layer.succeeded d10 ~hash:h) hashes
-          ->
+          when List.for_all (fun h -> D10.Layer.succeeded d10 ~hash:h) hashes ->
             Some hashes
         | Some _ ->
             Logs.info (fun m ->
@@ -320,8 +315,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
             end;
             if not (OpamSysPkg.Set.is_empty st.not_found) then
               Fmt.epr
-                "%a system packages are not known to the host package \
-                 manager: %s@."
+                "%a system packages are not known to the host package manager: \
+                 %s@."
                 Fmt.(styled `Yellow string)
                 "warning:"
                 (st.not_found |> OpamSysPkg.Set.elements
@@ -348,7 +343,5 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
       end
 
 let assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes =
-  let d10 =
-    make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
-  in
+  let d10 = make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key in
   D10.Prefix.assemble_cached d10 ~layer_hashes

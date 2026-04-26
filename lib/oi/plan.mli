@@ -10,20 +10,20 @@
       decided per package). This is the structural plan suitable for dry-run
       output, parallel-group inspection, and layer-cache lookups.
     - {!resolve} expands a {!graph} into a {!t} with all opam variables,
-      filters, and commands turned into concrete shell commands grouped by
-      stage — what {!Execute.run} consumes.
+      filters, and commands turned into concrete shell commands grouped by stage
+      — what {!Execute.run} consumes.
 
     Build directories are deterministic under the oi cache root at
     [{cache_root}/build/_build/{pkg}-{short_hash}/], with the shared prefix at
-    [{cache_root}/build/prefix/]. Each package lists the dependency layers
-    that must be hardlinked into the prefix before building. *)
+    [{cache_root}/build/prefix/]. Each package lists the dependency layers that
+    must be hardlinked into the prefix before building. *)
 
 (** {1 Action graph}
 
     Captures the full dependency DAG with per-package build phases, preserving
-    the parallel structure from the solver. When [~d10] is provided to
-    {!build}, packages whose layers already exist in the cache are marked as
-    {!Binary} and restored directly instead of being built from source. *)
+    the parallel structure from the solver. When [~d10] is provided to {!build},
+    packages whose layers already exist in the cache are marked as {!Binary} and
+    restored directly instead of being built from source. *)
 
 (** How a package will be installed. *)
 type method_ =
@@ -156,7 +156,7 @@ val resolve :
   graph ->
   t
 (** [resolve ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version ?build_prefix
-    g] turns an action graph into a fully-resolved execution plan.
+     g] turns an action graph into a fully-resolved execution plan.
 
     [packages_dirs] is the same list passed to the solver, used to attribute
     each package to its source directory so the resulting plan (and any layer

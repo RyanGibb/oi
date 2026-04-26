@@ -136,7 +136,8 @@ let getenv_or ~default name =
 (* Reporepo path + clone URL, honouring [OI_REPOREPO] / [OI_REPOREPO_URL]
    env overrides. Looked up fresh per call so tests can set the env per
    invocation. *)
-let reporepo_path () = getenv_or ~default:Oi.Source.Reporepo.default_path "OI_REPOREPO"
+let reporepo_path () =
+  getenv_or ~default:Oi.Source.Reporepo.default_path "OI_REPOREPO"
 
 let reporepo_url () =
   getenv_or ~default:Oi.Source.Reporepo.default_url "OI_REPOREPO_URL"
@@ -169,7 +170,8 @@ let overlay_extras_of_handles ~fs ~sys handles =
     let entries = Oi.Source.Reporepo.load ~path in
     let roots =
       List.rev handles
-      |> List.map (fun h : Oi.Source.Reporepo.root -> { handle = h; version = None })
+      |> List.map (fun h : Oi.Source.Reporepo.root ->
+          { handle = h; version = None })
     in
     let resolved =
       Oi.Source.Reporepo.resolve entries ~roots
@@ -759,7 +761,6 @@ let parse_pkg_target s =
 
 let ocaml_version = "5.4.1"
 
-
 (* -- run ----------------------------------------------------------------- *)
 
 let run_script ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
@@ -821,9 +822,11 @@ let run_script ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
     end;
     let build_dir = run_dir_s in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / build_dir);
-    Oi.Project.Script.generate_project ~script:script_path ~deps:all_deps ~dir:build_dir;
+    Oi.Project.Script.generate_project ~script:script_path ~deps:all_deps
+      ~dir:build_dir;
     let build_env =
-      Oi.Solver.Env.make_env ~prefix ~dune_cache_root:(Oi.Cache.dune_root cache) ()
+      Oi.Solver.Env.make_env ~prefix ~dune_cache_root:(Oi.Cache.dune_root cache)
+        ()
     in
     Eio.Process.run proc_mgr ~env:build_env
       [ "/bin/sh"; "-c"; Fmt.str "cd %s && dune build main.exe 2>&1" build_dir ];
@@ -850,7 +853,8 @@ let run_cmd =
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
     let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version in
     let toolchain =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true toolchain
+      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+        toolchain
     in
     let remote = remote_of_registry registry in
     let dune_cache_root = Oi.Cache.dune_root cache in
@@ -915,7 +919,8 @@ let run_cmd =
        atop). When [--toolchain] is set, drop any project overlays
        tagged for a different toolchain — the explicit flag wins. *)
     let project_overlays =
-      Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ()) ~toolchain project_overlays
+      Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ())
+        ~toolchain project_overlays
     in
     let with_repos = project_overlays @ with_repos in
     let cli_extras = cli_extra_repos ~fs ~sys with_repos in
@@ -942,8 +947,7 @@ let run_cmd =
       let layer_hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
-          ?remote ?jobs ?toolchain
-          ~constraints:extra_constraints names
+          ?remote ?jobs ?toolchain ~constraints:extra_constraints names
       in
       Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
       let prefix =
@@ -1034,9 +1038,9 @@ let run_cmd =
       let layer_hashes =
         if dep_opam_names = [] then []
         else
-          Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir
-            ~conf ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins
-            ~refresh ?remote ?jobs ?toolchain ~constraints dep_opam_names
+          Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+            ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
+            ?remote ?jobs ?toolchain ~constraints dep_opam_names
       in
       if dry_run && dep_opam_names = [] then
         (* No deps to solve, but still in dry-run mode — just exit *)
@@ -1498,7 +1502,8 @@ let show_package_binaries ~cache_root ~os_key ~layer_hash =
    handle. *)
 let show_repositories ?toolchain ~with_repos () =
   let entries =
-    try Oi.Source.Reporepo.load ~path:(reporepo_path ()) with Oi.Error.E _ -> []
+    try Oi.Source.Reporepo.load ~path:(reporepo_path ())
+    with Oi.Error.E _ -> []
   in
   let base_handles =
     match toolchain with
@@ -1710,7 +1715,8 @@ let show_cmd =
     let project_pins = project_pins @ url_project.pins in
     let project_overlays = project_overlays @ url_project.overlays in
     let project_overlays =
-      Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ()) ~toolchain project_overlays
+      Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ())
+        ~toolchain project_overlays
     in
     let with_repos = project_overlays @ with_repos in
     let cli_extras = cli_extra_repos ~fs ~sys with_repos in
@@ -1718,7 +1724,9 @@ let show_cmd =
     let extra_pkg_dirs =
       Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
     in
-    let pin_dir = Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins in
+    let pin_dir =
+      Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
+    in
     let base_pkg_dirs =
       match tc_pkg_dirs with
       | Some dirs -> dirs
@@ -1827,7 +1835,9 @@ let show_cmd =
           Oi.Error.no_solution (msg ^ hint)
     in
     let d10 =
-      Oi.Pipeline.make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
+      Oi.Pipeline.make_d10 ~sys ~fs
+        ~clock:(clock :> D10.Config.clk)
+        ~cache ~os_key
     in
     let action_plan = Oi.Plan.build ctx ~d10 ~packages_dirs pkgs in
     if tree then begin
@@ -1987,7 +1997,9 @@ let env_cmd =
           Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
         in
         let url_overlays =
-          Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ()) ~toolchain:tc_info url_project.overlays
+          Oi.Pipeline.filter_compatible_overlays
+            ~reporepo_path:(reporepo_path ()) ~toolchain:tc_info
+            url_project.overlays
         in
         let extras =
           merge_extras
@@ -2004,9 +2016,9 @@ let env_cmd =
           @ List.map OpamPackage.Name.of_string url_project.roots
         in
         let layer_hashes =
-          Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir
-            ~conf ~os_key ~refresh ~extra_repos:extras ~pins:url_project.pins
-            ?jobs ?toolchain:tc_info ~constraints:extra_constraints
+          Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+            ~os_key ~refresh ~extra_repos:extras ~pins:url_project.pins ?jobs
+            ?toolchain:tc_info ~constraints:extra_constraints
             (OpamPackage.Name.of_string "ocaml" :: extra_names)
         in
         Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
@@ -2613,11 +2625,13 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   (* Resolve the toolchain before assembling the overlay list so the
      overlay-compatibility filter below can see what was requested. *)
   let toolchain =
-    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true toolchain
+    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+      toolchain
   in
   let conf = Oi.Toolchain.apply_conf toolchain conf in
   let project_overlays =
-    Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ()) ~toolchain
+    Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ())
+      ~toolchain
       (project.overlays @ url_project.overlays)
   in
   if project_overlays <> [] then
@@ -2649,11 +2663,10 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
     List.map OpamPackage.Name.of_string deps @ extra_names @ url_names
   in
   let layer_hashes =
-    Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-      ~os_key ~extra_repos:all_extras
+    Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
+      ~extra_repos:all_extras
       ~pins:(project.pins @ url_project.pins)
-      ~refresh ~constraints:extra_constraints ?remote ?jobs
-      ?toolchain names
+      ~refresh ~constraints:extra_constraints ?remote ?jobs ?toolchain names
   in
   let oi_dir = cwd / "_oi" in
   let prefix = oi_dir / "prefix" in
@@ -2919,7 +2932,8 @@ let exec_cmd =
     let tools = tools_dir_for ~cwd in
     let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version in
     let tc_info =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false toolchain
+      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false
+        toolchain
     in
     let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info tc_info in
     let env_arr =
@@ -3867,7 +3881,8 @@ let registry_build_cmd =
       if not all then []
       else begin
         let path = reporepo_path () in
-        Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path ~url:(reporepo_url ());
+        Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
+          ~url:(reporepo_url ());
         let entries = Oi.Source.Reporepo.load ~path in
         let only_set =
           if only = [] then None else Some (List.sort_uniq compare only)
@@ -4184,14 +4199,17 @@ let registry_build_cmd =
         let resolved =
           let roots =
             List.map
-              (fun h : Oi.Source.Reporepo.root -> { handle = h; version = None })
+              (fun h : Oi.Source.Reporepo.root ->
+                { handle = h; version = None })
               eff
           in
-          try Oi.Source.Reporepo.resolve entries ~roots with Oi.Error.E _ -> []
+          try Oi.Source.Reporepo.resolve entries ~roots
+          with Oi.Error.E _ -> []
         in
         String.concat ", "
           (List.map
-             (fun (e : Oi.Source.Reporepo.entry) -> "@" ^ e.handle ^ "." ^ e.version)
+             (fun (e : Oi.Source.Reporepo.entry) ->
+               "@" ^ e.handle ^ "." ^ e.version)
              resolved)
       in
       let group_label handles =
@@ -4237,7 +4255,9 @@ let registry_build_cmd =
     let cache_root = Oi.Cache.root_s cache in
     let build_prefix = cache_root / "build" / "prefix" in
     let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
-    let base_packages_dirs = Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir () in
+    let base_packages_dirs =
+      Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ()
+    in
     (* Per-group packages_dirs: each solve group sees ONLY the overlay
        handles it actually uses (plus its transitive base deps via
        reporepo [depends:] resolution, plus any globally-scoped handles
@@ -4275,7 +4295,9 @@ let registry_build_cmd =
           let names =
             List.filter_map
               (fun h ->
-                match Oi.Source.Reporepo.latest reporepo_entries_cache ~handle:h with
+                match
+                  Oi.Source.Reporepo.latest reporepo_entries_cache ~handle:h
+                with
                 | Some (e : Oi.Source.Reporepo.entry) -> e.toolchain
                 | None -> None)
               handles
@@ -4293,7 +4315,8 @@ let registry_build_cmd =
     let overlay_entries_for_handles handles =
       let roots =
         List.rev handles
-        |> List.map (fun h : Oi.Source.Reporepo.root -> { handle = h; version = None })
+        |> List.map (fun h : Oi.Source.Reporepo.root ->
+            { handle = h; version = None })
       in
       try
         Oi.Source.Reporepo.resolve reporepo_entries_cache ~roots
@@ -4308,7 +4331,8 @@ let registry_build_cmd =
          handles are kept verbatim — the user named those explicitly
          via [@h/pkg] and expects them in scope regardless. *)
       let global_handles =
-        Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ()) ~toolchain global_handles
+        Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(reporepo_path ())
+          ~toolchain global_handles
       in
       let effective =
         global_handles @ handles |> List.sort_uniq String.compare
@@ -4619,9 +4643,7 @@ let registry_build_cmd =
         let count_by f =
           List.length (List.filter f (Oi.Plan.nodes build_plan))
         in
-        let n_build =
-          count_by (fun (n : Oi.Plan.node) -> n.method_ = Source)
-        in
+        let n_build = count_by (fun (n : Oi.Plan.node) -> n.method_ = Source) in
         let n_cached =
           count_by (fun (n : Oi.Plan.node) -> n.method_ = Binary)
         in
@@ -4767,14 +4789,16 @@ let registry_build_cmd =
               let build_outcome :
                   [ `Ok | `Fail of string * (string * string) list ] =
                 let build_plan =
-                  Oi.Pipeline.fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs:pkg_dirs
-                    ~ctx:group_ctx ~pkgs:sorted_pkgs build_plan
+                  Oi.Pipeline.fetch_remote_layers ?jobs ~remote ~d10
+                    ~packages_dirs:pkg_dirs ~ctx:group_ctx ~pkgs:sorted_pkgs
+                    build_plan
                 in
                 let exec_plan_ref = ref None in
                 try
                   let exec_plan =
-                    Oi.Plan.resolve group_ctx ~packages_dirs:pkg_dirs ~cache_root
-                      ~os_key ~ocaml_version:conf.ocaml_version build_plan
+                    Oi.Plan.resolve group_ctx ~packages_dirs:pkg_dirs
+                      ~cache_root ~os_key ~ocaml_version:conf.ocaml_version
+                      build_plan
                   in
                   exec_plan_ref := Some exec_plan;
                   let cache_urls = Oi.Pipeline.cache_urls ~cache ~remote in
@@ -4963,8 +4987,7 @@ let overlay_root_targets reporepo_entries =
       if h = "default" then None
       else
         match Oi.Source.Reporepo.latest reporepo_entries ~handle:h with
-        | Some e
-          when e.toolchain_name = None && e.root_packages <> [] ->
+        | Some e when e.toolchain_name = None && e.root_packages <> [] ->
             Some (h, e.root_packages)
         | _ -> None)
 
@@ -5008,7 +5031,9 @@ let packages_dirs_for_overlay ~data_dir ~base_packages_dirs ~reporepo_entries
 let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
     ~platform ~distros =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
-  let base_packages_dirs = Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh () in
+  let base_packages_dirs =
+    Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
+  in
   let path = reporepo_path () in
   Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path ~url:(reporepo_url ());
   let reporepo_entries = try Oi.Source.Reporepo.load ~path with _ -> [] in
@@ -5620,7 +5645,8 @@ let repo_list_cmd =
           entries
           |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
           |> List.sort_uniq String.compare
-          |> List.filter_map (fun handle -> Oi.Source.Reporepo.latest entries ~handle)
+          |> List.filter_map (fun handle ->
+              Oi.Source.Reporepo.latest entries ~handle)
         in
         let tc_w =
           List.fold_left
@@ -5691,11 +5717,14 @@ let repo_show_cmd =
       ~url:reporepo_url;
     let entries = Oi.Source.Reporepo.load ~path:reporepo in
     let matches =
-      List.filter (fun (e : Oi.Source.Reporepo.entry) -> e.handle = handle) entries
-      |> List.sort (fun (a : Oi.Source.Reporepo.entry) (b : Oi.Source.Reporepo.entry) ->
-          OpamPackage.Version.compare
-            (OpamPackage.Version.of_string b.version)
-            (OpamPackage.Version.of_string a.version))
+      List.filter
+        (fun (e : Oi.Source.Reporepo.entry) -> e.handle = handle)
+        entries
+      |> List.sort
+           (fun (a : Oi.Source.Reporepo.entry) (b : Oi.Source.Reporepo.entry) ->
+             OpamPackage.Version.compare
+               (OpamPackage.Version.of_string b.version)
+               (OpamPackage.Version.of_string a.version))
     in
     if matches = [] then
       Oi.Error.not_found handle "no overlay %s in reporepo %s" handle reporepo;
@@ -5818,8 +5847,8 @@ let repo_add_cmd =
     in
     let base_handles = base_handles_of_toolchain toolchain in
     let e =
-      Oi.Source.Reporepo.add ~fs ~sys ~path:reporepo ~handle ~url ?ref_ ?toolchain
-        ?base_handles ?depends ~force ()
+      Oi.Source.Reporepo.add ~fs ~sys ~path:reporepo ~handle ~url ?ref_
+        ?toolchain ?base_handles ?depends ~force ()
     in
     Fmt.pr "Added %s.%s@ url=%s@ commit=%s@ at %s@." e.handle e.version e.url
       e.commit e.opam_path;
@@ -5924,8 +5953,8 @@ let repo_bump_cmd =
     in
     let base_handles = base_handles_of_toolchain effective_toolchain in
     match
-      Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle ?url ?ref_ ?toolchain
-        ?base_handles ?depends ()
+      Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle ?url ?ref_
+        ?toolchain ?base_handles ?depends ()
     with
     | `Bumped e ->
         Fmt.pr "Bumped %s to %s@ commit=%s@ at %s@." e.handle e.version e.commit
@@ -6003,7 +6032,8 @@ let repo_set_roots_cmd =
         pkgs
     in
     match
-      Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle ~root_packages:groups ()
+      Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle
+        ~root_packages:groups ()
     with
     | `Bumped e ->
         Fmt.pr "Bumped %s to %s (root-packages: %d entr%s)@." e.handle e.version
@@ -6141,7 +6171,9 @@ let repo_push_cmd =
     let on_step_start n title =
       Fmt.pr "@.%a %s@." Fmt.(styled `Bold string) (Fmt.str "[%d/3]" n) title
     in
-    let outcome = Oi.Source.Reporepo.push ~on_step_start ~sys ~path:reporepo () in
+    let outcome =
+      Oi.Source.Reporepo.push ~on_step_start ~sys ~path:reporepo ()
+    in
     Fmt.pr "@.%a@." Fmt.(styled `Bold string) "summary:";
     List.iter
       (function
