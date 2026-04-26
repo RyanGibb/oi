@@ -585,7 +585,17 @@ let cmd =
       match toolchain_override with
       | Some h -> Some (resolve_toolchain h)
       | None -> (
-          let names =
+          (* Two ways an overlay handle picks a toolchain implicitly:
+             1. The overlay's [x-oi-toolchain] field names one explicitly
+                ([oi repo add/bump --toolchain=NAME] sets this).
+             2. The handle name itself matches a reporepo toolchain
+                definition ([x-oi-toolchain-name: NAME] in some entry's
+                opam file). Without (2) the user has to either set
+                [x-oi-toolchain] on every overlay or pass
+                [--toolchain=NAME] every time, which breaks
+                [oi registry build --all] across overlays that each
+                want their own toolchain. *)
+          let from_x_oi_toolchain =
             List.filter_map
               (fun h ->
                 match
@@ -594,6 +604,14 @@ let cmd =
                 | Some (e : Oi.Source.Reporepo.entry) -> e.toolchain
                 | None -> None)
               handles
+          in
+          let from_handle_name =
+            List.filter
+              (fun h -> Oi.Toolchain.depends_of ~handle:h <> None)
+              handles
+          in
+          let names =
+            from_x_oi_toolchain @ from_handle_name
             |> List.sort_uniq String.compare
           in
           match names with
@@ -601,8 +619,8 @@ let cmd =
           | [ n ] -> Some (resolve_toolchain n)
           | many ->
               Oi.Error.config_error
-                "overlays in scope declare conflicting x-oi-toolchain values: \
-                 %s — pass --toolchain=NAME to disambiguate"
+                "overlays in scope declare conflicting toolchains: %s — pass \
+                 --toolchain=NAME to disambiguate"
                 (String.concat ", " many))
     in
     let overlay_entries_for_handles handles =
@@ -618,6 +636,21 @@ let cmd =
         |> List.rev
       with Oi.Error.E _ -> []
     in
+    (* Direct (non-transitive) lookup of an explicit handle's latest
+       reporepo entry. Used in place of {!overlay_entries_for_handles}
+       when a toolchain is active so the consumer solve doesn't end up
+       seeing the same opam-repository at two different commits — once
+       at the toolchain's pinned commit (via [info.packages_dirs]) and
+       once at the overlay's transitively-resolved commit (via
+       [Reporepo.resolve]'s closure). With both visible, a 5.5.0
+       toolchain would still let the solver pick [ocaml.5.4.1] from
+       the overlay's older default-repo pin and the conflict-class
+       chain on [ocaml-base-compiler] would explode. *)
+    let overlay_entries_direct handles =
+      List.filter_map
+        (fun h -> Oi.Source.Reporepo.latest reporepo_entries_cache ~handle:h)
+        handles
+    in
     let packages_dirs_for_handles ?toolchain handles =
       (* Drop globally-scoped overlays whose [x-oi-toolchain] is
          incompatible with this group's toolchain. Per-group token
@@ -630,7 +663,11 @@ let cmd =
       let effective =
         global_handles @ handles |> List.sort_uniq String.compare
       in
-      let overlay_entries = overlay_entries_for_handles effective in
+      let overlay_entries =
+        match (toolchain : Oi.Toolchain.info option) with
+        | None -> overlay_entries_for_handles effective
+        | Some _ -> overlay_entries_direct effective
+      in
       let overlay_dirs =
         List.map
           (fun (e : Oi.Source.Reporepo.entry) ->
@@ -737,6 +774,32 @@ let cmd =
     let solutions =
       let n_groups = List.length target_groups in
       let group_label group = String.concat " " group in
+      (* Compiler-family package names that should yield to the
+         [--toolchain=NAME] override when the user is testing an
+         overlay against a different compiler. Without this filter,
+         an overlay's [x-root-packages] entry like [oxcaml-compiler]
+         would still enter the solve alongside the override
+         toolchain's roots ([ocaml-base-compiler] from
+         [--toolchain=ocaml-5.5], say) and the conflict-class chain
+         on the [ocaml-core-compiler] virtual would reject both. *)
+      let compiler_family =
+        [
+          "ocaml";
+          "ocaml-base-compiler";
+          "ocaml-variants";
+          "ocaml-compiler";
+          "ocaml-system";
+          "oxcaml-compiler";
+          "dkml-base-compiler";
+        ]
+      in
+      let drop_compiler_family group =
+        List.filter
+          (fun pkg ->
+            let name, _ = Target.parse_pkg_target pkg in
+            not (List.mem (OpamPackage.Name.to_string name) compiler_family))
+          group
+      in
       let solve_one (group, handles) =
         let toolchain = toolchain_for_handles handles in
         let pkg_dirs = packages_dirs_for_handles ?toolchain handles in
@@ -745,6 +808,24 @@ let cmd =
           Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
             ~conf:group_conf ?toolchain:tc_ctx ()
         in
+        (* When [--toolchain=NAME] is explicit, strip any compiler-family
+           entries the overlay's [x-root-packages] declares so the
+           override's compiler pins land cleanly. The overlay's other
+           packages still get solved against the override toolchain — that's
+           exactly the "test this overlay against ocaml-5.5" workflow the
+           flag is for. *)
+        let group =
+          if toolchain_override <> None then drop_compiler_family group
+          else group
+        in
+        if group = [] then begin
+          Log.info (fun m ->
+              m
+                "Skipping solve group: every entry was a compiler-family \
+                 package replaced by --toolchain");
+          None
+        end
+        else
         let items = List.map Target.parse_pkg_target group in
         let names = List.map fst items in
         let constraints =

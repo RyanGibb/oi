@@ -220,6 +220,7 @@ end
 (** {1 Solving} *)
 
 val solve :
+  ?pin_compiler:bool ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   cache_root:string ->
   Ctx.t ->
@@ -229,7 +230,18 @@ val solve :
   (OpamPackage.t list, string) result
 (** Resolve the dependency closure for [names]. Returns packages in topological
     order. Successful solves are persisted to {!Cache} and re-used when an
-    identical input is presented again. *)
+    identical input is presented again.
+
+    [pin_compiler] (default [true]) controls whether the solver pins
+    [ocaml]/[ocaml-base-compiler]/[ocaml-compiler] to {!Ctx.conf}'s
+    [ocaml_version]. The default suits {!oi run} and the consumer flow,
+    where the host's expected ocaml version drives package selection.
+    {!oi registry build} passes [false] so each overlay's own
+    [packages_dirs] (e.g. an oxcaml overlay shipping
+    [ocaml-variants.5.2.0+ox]) drives the compiler choice instead of
+    falling back to the hardcoded host version. Toolchain pins are
+    always applied — they're a hard requirement of the toolchain's
+    identity, not a host default. *)
 
 val solve_dir :
   env:(string -> OpamVariable.variable_contents option) ->

@@ -984,16 +984,28 @@ let augment_compiler_constraints ctx ~ocaml_version constraints =
       |> add "ocaml-base-compiler" ocaml_version
       |> add "ocaml-compiler" ocaml_version
 
-let solve_with_dir_context ctx ~packages_dirs ~constraints ~ocaml_version names
-    =
+let solve_with_dir_context ?(pin_compiler = true) ctx ~packages_dirs
+    ~constraints ~ocaml_version names =
   let constraints =
-    augment_compiler_constraints ctx ~ocaml_version constraints
+    if pin_compiler then
+      augment_compiler_constraints ctx ~ocaml_version constraints
+    else
+      (* Toolchain pins are still applied — they're not "the host's
+         default ocaml" but a hard requirement of the toolchain's
+         identity. Only the no-toolchain default fall-through (below
+         in [augment_compiler_constraints]) gets skipped, which is
+         what lets each overlay's own [packages_dirs] drive the
+         solver's compiler choice. *)
+      match Ctx.toolchain ctx with
+      | None -> constraints
+      | Some _ -> augment_compiler_constraints ctx ~ocaml_version constraints
   in
   Log.info (fun m ->
-      m "Solving for %a (ocaml = %s)"
+      m "Solving for %a (ocaml %s)"
         Fmt.(list ~sep:comma string)
         (List.map OpamPackage.Name.to_string names)
-        ocaml_version);
+        (if pin_compiler then Fmt.str "= %s" ocaml_version
+         else "= overlay-driven"));
   match solve_dir ~env:(ctx_env ctx) ~packages_dirs ~constraints names with
   | Ok pkgs ->
       Log.info (fun m -> m "Solution: %d packages to build" (List.length pkgs));
@@ -1030,7 +1042,8 @@ let log_package_sources ~packages_dirs pkgs =
       end)
     packages_dirs
 
-let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
+let solve ?(pin_compiler = true) ~fs ~cache_root ctx ~packages_dirs
+    ~constraints names =
   let conf = Ctx.conf ctx in
   let ocaml_version =
     match String.index_opt conf.ocaml_version '+' with
@@ -1085,8 +1098,8 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
   in
   let run_solve () =
     match
-      solve_with_dir_context ctx ~packages_dirs ~constraints ~ocaml_version
-        names
+      solve_with_dir_context ~pin_compiler ctx ~packages_dirs ~constraints
+        ~ocaml_version names
     with
     | Ok (pkgs, _) ->
         let pkgs = topo_sort ~packages_dirs ~conf:(Ctx.conf ctx) pkgs in
