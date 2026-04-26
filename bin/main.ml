@@ -5113,7 +5113,6 @@ let registry_docker_cmd =
     [
       `Alpine `Latest;
       `Debian `Stable;
-      `Ubuntu `V22_04;
       `Ubuntu `V24_04;
       `Ubuntu `V25_10;
       `Fedora `Latest;
