@@ -60,8 +60,13 @@ jobs:
         run: oi repo list
 
       - name: Generate Dockerfiles + compose
+        # --refresh forces the depext computation to pull a fresh
+        # reporepo + base overlays before solving each overlay's
+        # x-root-packages — silent solve failures here would otherwise
+        # leave the generated install line short of the depexts the
+        # in-container build needs.
         run: |
-          oi registry docker -o "$GITHUB_WORKSPACE"
+          oi registry docker --refresh -o "$GITHUB_WORKSPACE"
 
       - name: docker compose up --build
         working-directory: ${{ github.workspace }}
@@ -107,8 +112,13 @@ jobs:
         run: oi repo list
 
       - name: Generate Dockerfiles + compose
+        # --refresh forces the depext computation to pull a fresh
+        # reporepo + base overlays before solving each overlay's
+        # x-root-packages — silent solve failures here would otherwise
+        # leave the generated install line short of the depexts the
+        # in-container build needs.
         run: |
-          oi registry docker -o "$GITHUB_WORKSPACE"
+          oi registry docker --refresh -o "$GITHUB_WORKSPACE"
 
       - name: docker compose up --build
         working-directory: ${{ github.workspace }}
@@ -156,6 +166,20 @@ jobs:
 
       - name: Bootstrap reporepo
         run: oi repo list
+
+      - name: Install Homebrew depexts
+        # Mirrors the per-distro RUN apk/apt/dnf install lines that
+        # `oi registry docker` bakes into every Linux Dockerfile.
+        # `oi registry depexts` solves every overlay's x-root-packages
+        # under the host platform and prints the resulting Homebrew
+        # package list one per line.
+        run: |
+          deps=$(oi registry depexts --refresh)
+          echo "Homebrew depexts:"
+          printf '  %s\n' $deps
+          if [ -n "$deps" ]; then
+            brew install $deps
+          fi
 
       - name: oi registry build --all
         run: oi registry build --refresh --all

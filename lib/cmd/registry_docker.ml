@@ -29,6 +29,49 @@ let build_depexts = function
        capnproto-devel ncurses-devel"
   | _ -> failwith "unsupported package manager"
 
+(* -- Hardcoded depexts for common opam [conf-*] probe packages ---------- *)
+
+(* Apache Arrow's apt source per https://arrow.apache.org/install/.
+   Required for [libarrow-dev] on Debian and Ubuntu — Apache ships a
+   third-party apt repository whose [deb] meta-package configures
+   the canonical Arrow URLs and signing key. Fedora has [libarrow-devel]
+   in its main repos; Alpine has [apache-arrow-dev] in community, so
+   neither needs extra setup. *)
+let arrow_apt_source_setup =
+  "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+   --no-install-recommends ca-certificates lsb-release wget gpg && wget -O \
+   /tmp/arrow.deb \
+   \"https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | \
+   tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename \
+   --short).deb\" && apt-get install -y --no-install-recommends \
+   /tmp/arrow.deb && rm /tmp/arrow.deb && apt-get update -qq"
+
+(* Pre-install repository / source setup commands. Run before the main
+   install line of each per-distro stage. *)
+let extra_setup_cmds mgr =
+  match mgr with `Apt -> [ arrow_apt_source_setup ] | _ -> []
+
+(* Hardcoded -dev packages that the upstream [compute_overlay_depexts]
+   pre-pass tends to miss — either because the conf-* probe package
+   isn't part of any overlay's solved root closure, or because the
+   solve fails silently and the union ends up empty. Listing them
+   inline keeps the corresponding [conf-*] probe packages
+   (conf-arrow, conf-blosc, conf-gdal, conf-libcurl, conf-libpcre,
+   conf-pam, conf-binaryen, conf-zstd, conf-oniguruma, conf-netsnmp)
+   compiling without the user having to chase them down one at a
+   time. *)
+let extra_depexts = function
+  | `Apk ->
+      "apache-arrow-dev binaryen blosc-dev curl-dev gdal-dev linux-pam-dev \
+       net-snmp-dev oniguruma-dev pcre2-dev zstd-dev"
+  | `Apt ->
+      "binaryen libarrow-dev libblosc-dev libcurl4-openssl-dev libgdal-dev \
+       libonig-dev libpam0g-dev libpcre2-dev libsnmp-dev libzstd-dev"
+  | `Yum ->
+      "binaryen blosc-devel gdal-devel libarrow-devel libcurl-devel \
+       libzstd-devel net-snmp-devel oniguruma-devel pam-devel pcre2-devel"
+  | _ -> ""
+
 (* -- Distro → opam platform variables ----------------------------------- *)
 
 type opam_vars = {
@@ -149,13 +192,41 @@ let distro_stage ?(overlay_depexts = []) d =
       release_repo
   in
   let base = build_depexts mgr in
-  let combined =
-    match List.sort_uniq String.compare overlay_depexts with
-    | [] -> base
-    | xs -> base ^ " " ^ String.concat " " xs
+  let extra = extra_depexts mgr in
+  let combined_base =
+    if extra = "" then base else base ^ " " ^ extra
   in
-  DF.comment "=== Stage: %s ===" human
-  @@ DF.from ~alias ~tag img
+  (* Dedup against the base + hardcoded-extras list: overlay depexts
+     often repeat libs already covered (gmp-devel, libev-devel, …)
+     and a duplicated install command is both ugly and wastes
+     [apt-get update] / [dnf metadata] time on some package
+     managers. *)
+  let base_words =
+    String.split_on_char ' ' combined_base
+    |> List.filter (fun s -> s <> "")
+  in
+  let overlay_extras =
+    overlay_depexts
+    |> List.filter (fun p -> not (List.mem p base_words))
+    |> List.sort_uniq String.compare
+  in
+  let combined =
+    match overlay_extras with
+    | [] -> combined_base
+    | xs -> combined_base ^ " " ^ String.concat " " xs
+  in
+  let stage_init =
+    DF.comment "=== Stage: %s ===" human @@ DF.from ~alias ~tag img
+  in
+  (* Add per-distro source-setup steps before the main install line —
+     e.g. add Apache Arrow's apt source on Debian/Ubuntu so
+     [libarrow-dev] resolves on the next [apt-get install]. *)
+  let stage_with_setup =
+    List.fold_left
+      (fun acc cmd -> acc @@ DF.run "%s" cmd)
+      stage_init (extra_setup_cmds mgr)
+  in
+  stage_with_setup
   @@ DF.run "%s" (install_cmd mgr combined)
   @@ DF.run "%s" fetch_oi @@ DF.workdir "/work"
 

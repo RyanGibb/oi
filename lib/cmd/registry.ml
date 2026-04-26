@@ -28,6 +28,7 @@ let cmd =
       Registry_index.cmd;
       Registry_export.cmd;
       Registry_build.cmd;
+      Registry_depexts.cmd;
       Registry_docker_cmd.cmd;
       Registry_mirror.cmd;
     ]

@@ -973,13 +973,19 @@ let cmd =
         end
         else begin
           Log.info (fun m -> m "%d to build, %d cached" n_build n_cached);
-          (* Depext pre-flight: classify a group as [depext-fail] when
-             its source-built packages need system packages the host is
-             missing. Cheaper and clearer than letting the build start
-             and fail mid-compile, and lets the user [apt install] the
-             listed packages and re-run. Only runs when there is at
-             least one source build in this group; pure restore groups
-             never need depexts. *)
+          (* Depext pre-flight: warn (do not skip) when the host's
+             package manager reports any of this group's depexts as
+             missing. We used to mark the group [depext-fail] and skip
+             the build, but [OpamSysInteract.packages_status] returns
+             false positives inside containers (alpine in particular —
+             [pkgconf], [linux-headers], [gmp-dev] all report missing
+             when they're in the just-completed [apk add]), so the
+             skip throws away groups that would have built fine. The
+             only true cost of letting the build proceed is that
+             genuinely-missing depexts surface as compile failures of
+             the [conf-*] probe packages rather than a precise list
+             upfront — those packages already log their failure log
+             paths individually. *)
           let depext_classify () =
             let source_pkgs =
               Oi.Plan.nodes build_plan
@@ -1013,7 +1019,7 @@ let cmd =
                   in
                   Some (st.missing, per_pkg)
           in
-          match depext_classify () with
+          (match depext_classify () with
           | Some (missing, per_pkg) ->
               let log_path =
                 Oi.Cache.Logs.path ~cache_root ~kind:"depext"
@@ -1024,7 +1030,8 @@ let cmd =
                 let buf = Buffer.create 512 in
                 Buffer.add_string buf "Group: ";
                 Buffer.add_string buf group_targets;
-                Buffer.add_string buf "\n\nMissing system packages:\n";
+                Buffer.add_string buf
+                  "\n\nSystem packages reported missing by opam:\n";
                 OpamSysPkg.Set.iter
                   (fun p ->
                     Buffer.add_string buf "  ";
@@ -1046,85 +1053,84 @@ let cmd =
                 Buffer.contents buf
               in
               Oi.Cache.Logs.write ~fs ~cache_root log_path body;
-              Log.info (fun m ->
-                  m "depext-fail: %d missing system package(s); see %s"
+              Log.warn (fun m ->
+                  m
+                    "%s: opam reports %d missing system package(s); \
+                     proceeding with the build anyway. See %s"
+                    group_targets
                     (OpamSysPkg.Set.cardinal missing)
-                    log_path);
-              Hashtbl.replace group_results gi
-                (`Depext_fail
-                   (n_pkgs, n_build, n_cached, missing, per_pkg, log_path))
-          | None ->
+                    log_path)
+          | None -> ());
+          let exec_plan =
+            Oi.Plan.resolve group_ctx ~packages_dirs:pkg_dirs ~cache_root
+              ~os_key ~ocaml_version:conf.ocaml_version build_plan
+          in
+          (* After the build, any package in this group's plan whose
+             layer hash is in [failed_layers] with a non-empty path
+             either failed directly (its own build log) or inherited a
+             log from a failed upstream dep (cascaded). Dedup by log
+             path so a single upstream failure doesn't produce N
+             repeated summary lines for its dependents. *)
+          let collect_failures (exec_plan : Oi.Plan.t) =
+            let seen = Hashtbl.create 16 in
+            List.concat_map
+              (fun (g : Oi.Plan.group) ->
+                List.filter_map
+                  (fun (p : Oi.Plan.package_plan) ->
+                    match Hashtbl.find_opt failed_layers p.layer_hash with
+                    | Some path
+                      when path <> "" && not (Hashtbl.mem seen path) ->
+                        Hashtbl.replace seen path ();
+                        Some (p.pkg, path)
+                    | _ -> None)
+                  g.packages)
+              exec_plan.groups
+          in
+          let build_outcome :
+              [ `Ok | `Fail of string * (string * string) list ] =
+            let build_plan =
+              Oi.Pipeline.fetch_remote_layers ?jobs ~remote ~d10
+                ~packages_dirs:pkg_dirs ~ctx:group_ctx ~pkgs:sorted_pkgs
+                build_plan
+            in
+            let exec_plan_ref = ref None in
+            try
               let exec_plan =
                 Oi.Plan.resolve group_ctx ~packages_dirs:pkg_dirs ~cache_root
                   ~os_key ~ocaml_version:conf.ocaml_version build_plan
               in
-              (* After the build, any package in this group's plan whose
-             layer hash is in [failed_layers] with a non-empty path
-             either failed directly (its own build log) or inherited
-             a log from a failed upstream dep (cascaded). Dedup by
-             log path so a single upstream failure doesn't produce N
-             repeated summary lines for its dependents. *)
-              let collect_failures (exec_plan : Oi.Plan.t) =
-                let seen = Hashtbl.create 16 in
-                List.concat_map
-                  (fun (g : Oi.Plan.group) ->
-                    List.filter_map
-                      (fun (p : Oi.Plan.package_plan) ->
-                        match Hashtbl.find_opt failed_layers p.layer_hash with
-                        | Some path
-                          when path <> "" && not (Hashtbl.mem seen path) ->
-                            Hashtbl.replace seen path ();
-                            Some (p.pkg, path)
-                        | _ -> None)
-                      g.packages)
-                  exec_plan.groups
-              in
-              let build_outcome :
-                  [ `Ok | `Fail of string * (string * string) list ] =
-                let build_plan =
-                  Oi.Pipeline.fetch_remote_layers ?jobs ~remote ~d10
-                    ~packages_dirs:pkg_dirs ~ctx:group_ctx ~pkgs:sorted_pkgs
-                    build_plan
+              exec_plan_ref := Some exec_plan;
+              let cache_urls = Oi.Pipeline.cache_urls ~cache ~remote in
+              Oi.Execute.run ~cache_urls ?jobs ~failed_layers ?reporter
+                ~proc_mgr ~fs
+                ~clock:(clock :> D10.Config.clk)
+                ~sys ~os_key exec_plan;
+              `Ok
+            with
+            | Oi.Error.E e ->
+                let failures =
+                  match !exec_plan_ref with
+                  | Some p -> collect_failures p
+                  | None -> []
                 in
-                let exec_plan_ref = ref None in
-                try
-                  let exec_plan =
-                    Oi.Plan.resolve group_ctx ~packages_dirs:pkg_dirs
-                      ~cache_root ~os_key ~ocaml_version:conf.ocaml_version
-                      build_plan
-                  in
-                  exec_plan_ref := Some exec_plan;
-                  let cache_urls = Oi.Pipeline.cache_urls ~cache ~remote in
-                  Oi.Execute.run ~cache_urls ?jobs ~failed_layers ?reporter
-                    ~proc_mgr ~fs
-                    ~clock:(clock :> D10.Config.clk)
-                    ~sys ~os_key exec_plan;
-                  `Ok
-                with
-                | Oi.Error.E e ->
-                    let failures =
-                      match !exec_plan_ref with
-                      | Some p -> collect_failures p
-                      | None -> []
-                    in
-                    `Fail (Fmt.str "%a" Oi.Error.pp e, failures)
-                | Failure msg ->
-                    let failures =
-                      match !exec_plan_ref with
-                      | Some p -> collect_failures p
-                      | None -> []
-                    in
-                    `Fail (msg, failures)
-              in
-              Hashtbl.replace group_results gi
-                (match build_outcome with
-                | `Ok -> `Ok (n_pkgs, n_build, n_cached)
-                | `Fail (msg, failures) ->
-                    `Fail (n_pkgs, n_build, n_cached, msg, failures));
-              (* Write-side mirror: only useful when we actually built
+                `Fail (Fmt.str "%a" Oi.Error.pp e, failures)
+            | Failure msg ->
+                let failures =
+                  match !exec_plan_ref with
+                  | Some p -> collect_failures p
+                  | None -> []
+                in
+                `Fail (msg, failures)
+          in
+          Hashtbl.replace group_results gi
+            (match build_outcome with
+            | `Ok -> `Ok (n_pkgs, n_build, n_cached)
+            | `Fail (msg, failures) ->
+                `Fail (n_pkgs, n_build, n_cached, msg, failures));
+          (* Write-side mirror: only useful when we actually built
              something new; fully-cached groups have no fresh sources
              to promote. *)
-              Oi.Pipeline.record_sources ~sys ~cache exec_plan
+          Oi.Pipeline.record_sources ~sys ~cache exec_plan
         end)
       solutions;
     if not dry_run then begin
@@ -1315,61 +1321,100 @@ let packages_dirs_for_overlay ~data_dir ~base_packages_dirs ~reporepo_entries
   in
   dedup (overlay_dirs @ base_packages_dirs)
 
-(* For each target distro, compute the union of depexts declared by
-   every overlay's [x-root-packages]. Solves happen once per overlay
-   root group under the host conf (all target distros are linux so
-   the solve output is the same); depexts are then re-evaluated per
-   distro using {!Oi.Depexts.compute_for_conf}, which only rewrites
-   the filter env and does not require a fresh switch state. *)
-let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
-    ~platform ~distros =
+(* Solve every overlay's [x-root-packages] under [host_conf] and return
+   the resulting [(pkg_dirs, solved)] pairs. Solves happen once and are
+   shared across every per-platform depext evaluation, since every
+   target only differs in opam filter variables (os, os-family, …) —
+   those don't influence the solver picks here. *)
+let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   let base_packages_dirs =
     Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
   in
   let path = Terms.reporepo_path () in
-  Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path ~url:(Terms.reporepo_url ());
+  Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
+    ~url:(Terms.reporepo_url ());
   let reporepo_entries = try Oi.Source.Reporepo.load ~path with _ -> [] in
   let targets = overlay_root_targets reporepo_entries in
   let cache_root = Oi.Cache.root_s cache in
   let build_prefix = cache_root / "build" / "prefix" in
-  let host_conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
-  (* Solve each root group once. Failures are tolerated (overlay may
-     be broken); that group simply contributes no depexts. *)
-  let solves =
-    List.concat_map
-      (fun (handle, groups) ->
-        let pkg_dirs =
-          packages_dirs_for_overlay ~data_dir ~base_packages_dirs
-            ~reporepo_entries handle
+  List.concat_map
+    (fun (handle, groups) ->
+      let pkg_dirs =
+        packages_dirs_for_overlay ~data_dir ~base_packages_dirs
+          ~reporepo_entries handle
+      in
+      List.filter_map
+        (fun group ->
+          let ctx =
+            Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
+              ~conf:host_conf ()
+          in
+          let items = List.map Target.parse_pkg_target group in
+          let names = List.map fst items in
+          let constraints =
+            List.fold_left
+              (fun acc (name, c) ->
+                match c with
+                | None -> acc
+                | Some c -> OpamPackage.Name.Map.add name c acc)
+              OpamPackage.Name.Map.empty items
+          in
+          match
+            Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs:pkg_dirs
+              ~constraints names
+          with
+          | Ok solved -> Some (pkg_dirs, solved)
+          | Error msg ->
+              (* Bumping to [Log.warn] (not [Log.info]) on purpose: a
+                 silent solve failure here means the resulting docker
+                 install line lacks whatever depexts that group's
+                 packages need, so [oi registry build] inside the
+                 container later fails on a [conf-*] probe. Surfacing
+                 the failure makes that connection visible without
+                 needing -vv. *)
+              Log.warn (fun m ->
+                  m "overlay depexts: %s group failed to solve: %s" handle
+                    msg);
+              None)
+        groups)
+    targets
+
+(* Union every overlay's depexts under [conf]. *)
+let depexts_union ~conf solves =
+  let all =
+    List.fold_left
+      (fun acc (pkg_dirs, solved) ->
+        let entries =
+          Oi.Depexts.compute_for_conf ~conf ~packages_dirs:pkg_dirs solved
         in
-        List.filter_map
-          (fun group ->
-            let ctx =
-              Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
-                ~conf:host_conf ()
-            in
-            let items = List.map Target.parse_pkg_target group in
-            let names = List.map fst items in
-            let constraints =
-              List.fold_left
-                (fun acc (name, c) ->
-                  match c with
-                  | None -> acc
-                  | Some c -> OpamPackage.Name.Map.add name c acc)
-                OpamPackage.Name.Map.empty items
-            in
-            match
-              Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs:pkg_dirs
-                ~constraints names
-            with
-            | Ok solved -> Some (pkg_dirs, solved)
-            | Error msg ->
-                Logs.info (fun m ->
-                    m "docker depexts: %s group failed to solve: %s" handle msg);
-                None)
-          groups)
-      targets
+        List.fold_left
+          (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
+          acc entries)
+      OpamSysPkg.Set.empty solves
+  in
+  OpamSysPkg.Set.elements all |> List.map OpamSysPkg.to_string
+
+(* Public: per-conf overlay depexts. Used by the [oi registry depexts]
+   command (host or [--os=]-overridden conf) and indirectly by
+   [oi registry docker] via {!compute_overlay_depexts_per_distro}. *)
+let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf =
+  let solves =
+    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh
+      ~host_conf:conf
+  in
+  depexts_union ~conf solves
+
+(* For each target distro, compute the union of depexts declared by
+   every overlay's [x-root-packages]. Reuses one solver pass for all
+   target distros since they only differ in opam filter variables. *)
+let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
+    ~platform ~distros =
+  let host_conf =
+    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
+  let solves =
+    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
   in
   List.map
     (fun distro ->
@@ -1383,21 +1428,6 @@ let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
           os_version = vars.os_version;
         }
       in
-      let all =
-        List.fold_left
-          (fun acc (pkg_dirs, solved) ->
-            let entries =
-              Oi.Depexts.compute_for_conf ~conf:distro_conf
-                ~packages_dirs:pkg_dirs solved
-            in
-            List.fold_left
-              (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
-              acc entries)
-          OpamSysPkg.Set.empty solves
-      in
-      let names =
-        OpamSysPkg.Set.elements all |> List.map OpamSysPkg.to_string
-      in
-      (distro, names))
+      (distro, depexts_union ~conf:distro_conf solves))
     distros
 

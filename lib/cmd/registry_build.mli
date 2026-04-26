@@ -1,5 +1,18 @@
 (** [oi registry build]: bulk-build packages and overlays into the registry. *)
 
+val compute_overlay_depexts_for_conf :
+  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  sys:D10.Sysops.t ->
+  cache:Oi.Cache.t ->
+  data_dir:string ->
+  refresh:bool ->
+  conf:Oi.Solver.Ctx.conf ->
+  string list
+(** Solve every overlay's [x-root-packages] and return the union of
+    depexts declared by the resulting packages, evaluated under [conf]'s
+    opam filter variables (os, os-family, os-distribution, os-version).
+    Backs the [oi registry depexts] command. *)
+
 val compute_overlay_depexts_per_distro :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   sys:D10.Sysops.t ->
