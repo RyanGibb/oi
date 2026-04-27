@@ -63,15 +63,25 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "Run $(b,CMD) in the same environment $(b,oi sync) sets up: \
-             $(b,_oi/prefix/bin) first on $(b,PATH), OCaml env vars pointing \
-             at the prefix, dev tools ($(b,ocamlformat), \
-             $(b,ocaml-lsp-server), $(b,odoc), $(b,merlin), $(b,mdx)) on \
-             $(b,PATH).";
+            "Run $(b,CMD) with $(b,_oi/tools/bin) and $(b,_oi/prefix/bin) \
+             prepended to $(b,PATH) and the OCaml environment variables \
+             pointing at $(b,_oi/prefix/).";
           `P
-            "Auto-syncs first when the prefix is missing or older than any \
-             $(b,*.opam). $(b,--with), $(b,--with-repo), and $(b,--toolchain) \
-             force a re-sync.";
+            "Auto-syncs first when $(b,_oi/prefix/) is missing or older than \
+             any $(b,*.opam). $(b,--with), $(b,--with-repo), and \
+             $(b,--toolchain) force a re-sync.";
+          `S "TOOLCHAIN";
+          `P "The active toolchain is picked in this order:";
+          `I ("1.", "$(b,--toolchain=NAME), if given.");
+          `I
+            ( "2.",
+              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — \
+               from $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
+               $(b,x-repos:). Conflicting tags are an error." );
+          `I
+            ( "3.",
+              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)."
+            );
           `Pre
             "  oi exec dune build\n\
             \  oi exec -- ocamlformat --check .\n\

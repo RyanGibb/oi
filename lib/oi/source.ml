@@ -276,7 +276,7 @@ module Reporepo = struct
         (String.sub s 0 i, String.sub s (i + 1) (String.length s - i - 1))
 
   let is_overlay_extension extensions =
-    match OpamStd.String.Map.find_opt "x-oi-overlay" extensions with
+    match OpamStd.String.Map.find_opt Keys.overlay extensions with
     | None -> false
     | Some v -> (
         match v.OpamParserTypes.FullPos.pelem with
@@ -388,43 +388,48 @@ module Reporepo = struct
           | None -> ("", "")
         in
         let toolchain_name =
-          read_string_extension extensions "x-oi-toolchain-name"
+          read_string_extension extensions Keys.toolchain_name
         in
         if url_bare = "" && toolchain_name = None then
           Error.config_error
-            "%s: entry needs either a [url:] block or [x-oi-toolchain-name]"
-            path;
+            "%s: entry needs either a [url:] block or [%s]"
+            path Keys.toolchain_name;
         let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
-        let ref_ = read_string_extension extensions "x-oi-ref" in
-        let toolchain = read_string_extension extensions "x-oi-toolchain" in
+        let ref_ = read_string_extension extensions Keys.ref in
+        let toolchain = read_string_extension extensions Keys.toolchain in
         let toolchain_compiler =
-          read_string_extension extensions "x-oi-toolchain-compiler"
+          read_string_extension extensions Keys.toolchain_compiler
         in
         if toolchain_name <> None && toolchain_compiler = None then
           Error.config_error
-            "%s: x-oi-toolchain-name is set but x-oi-toolchain-compiler is \
-             missing — every toolchain definition must declare its compiler \
-             package (e.g. \"ocaml-base-compiler.5.4.1\")"
-            path;
-        let relocatable = read_bool_extension ~path extensions "x-oi-relocatable" in
+            "%s: %s is set but %s is missing — every toolchain definition \
+             must declare its compiler package (e.g. \
+             \"ocaml-base-compiler.5.4.1\")"
+            path Keys.toolchain_name Keys.toolchain_compiler;
+        let relocatable =
+          read_bool_extension ~path extensions Keys.relocatable
+        in
         let toolchain_roots =
-          read_root_packages_extension ~path extensions "x-oi-toolchain-roots"
+          read_root_packages_extension ~path extensions
+            Keys.toolchain_roots
         in
         let toolchain_tools =
-          read_string_list_extension ~path extensions "x-oi-toolchain-tools"
+          read_string_list_extension ~path extensions Keys.toolchain_tools
         in
         let default_toolchain =
-          match read_bool_extension ~path extensions "x-oi-default-toolchain" with
+          match
+            read_bool_extension ~path extensions Keys.default_toolchain
+          with
           | Some b -> b
           | None -> false
         in
         if default_toolchain && toolchain_name = None then
           Error.config_error
-            "%s: x-oi-default-toolchain is only meaningful on toolchain \
-             definitions (entries with x-oi-toolchain-name set)"
-            path;
+            "%s: %s is only meaningful on toolchain definitions (entries \
+             with %s set)"
+            path Keys.default_toolchain Keys.toolchain_name;
         let root_packages =
-          read_root_packages_extension ~path extensions "x-root-packages"
+          read_root_packages_extension ~path extensions Keys.root_packages
         in
         Some
           {
@@ -499,9 +504,10 @@ module Reporepo = struct
       | many ->
           Error.config_error
             "reporepo at %s has %d toolchains marked as default \
-             (x-oi-default-toolchain: true): %s. Exactly one toolchain may \
-             be the default — clear the flag on the others."
-            path (List.length many) (String.concat ", " many));
+             (%s: true): %s. Exactly one toolchain may be the default — \
+             clear the flag on the others."
+            path (List.length many) Keys.default_toolchain
+            (String.concat ", " many));
       entries
 
   let latest entries ~handle =
@@ -807,37 +813,41 @@ module Reporepo = struct
             | None -> Printf.bprintf buf "  %s\n" (escape_string h))
           ds;
         Buffer.add_string buf "]\n");
-    Printf.bprintf buf "x-oi-overlay: true\n";
+    Printf.bprintf buf "%s: true\n" Keys.overlay;
     Stdlib.Option.iter
-      (fun s -> Printf.bprintf buf "x-oi-ref: %s\n" (escape_string s))
+      (fun s ->
+        Printf.bprintf buf "%s: %s\n" Keys.ref (escape_string s))
       ref_;
     Stdlib.Option.iter
-      (fun s -> Printf.bprintf buf "x-oi-toolchain: %s\n" (escape_string s))
+      (fun s ->
+        Printf.bprintf buf "%s: %s\n" Keys.toolchain (escape_string s))
       toolchain;
     Stdlib.Option.iter
       (fun (td : toolchain_def) ->
-        Printf.bprintf buf "x-oi-toolchain-name: %s\n"
+        Printf.bprintf buf "%s: %s\n" Keys.toolchain_name
           (escape_string td.td_name);
         Stdlib.Option.iter
           (fun s ->
-            Printf.bprintf buf "x-oi-toolchain-compiler: %s\n" (escape_string s))
+            Printf.bprintf buf "%s: %s\n" Keys.toolchain_compiler
+              (escape_string s))
           td.td_compiler;
         Stdlib.Option.iter
-          (fun b -> Printf.bprintf buf "x-oi-relocatable: %b\n" b)
+          (fun b ->
+            Printf.bprintf buf "%s: %b\n" Keys.relocatable b)
           td.td_relocatable;
         if td.td_default then
-          Printf.bprintf buf "x-oi-default-toolchain: true\n";
-        render_root_groups buf "x-oi-toolchain-roots" td.td_roots;
+          Printf.bprintf buf "%s: true\n" Keys.default_toolchain;
+        render_root_groups buf Keys.toolchain_roots td.td_roots;
         (match td.td_tools with
         | [] -> ()
         | tools ->
-            Buffer.add_string buf "x-oi-toolchain-tools: [\n";
+            Printf.bprintf buf "%s: [\n" Keys.toolchain_tools;
             List.iter
               (fun t -> Printf.bprintf buf "  %s\n" (escape_string t))
               tools;
             Buffer.add_string buf "]\n"))
       toolchain_def;
-    render_root_groups buf "x-root-packages" root_packages;
+    render_root_groups buf Keys.root_packages root_packages;
     Buffer.contents buf
 
   let write_entry ~fs ~path ~handle ~version content =
@@ -931,9 +941,9 @@ module Reporepo = struct
     in
     if default <> None && prev.toolchain_name = None then
       Error.config_error
-        "overlay %s is not a toolchain definition (no x-oi-toolchain-name) — \
-         the --default flag only applies to toolchain entries"
-        handle;
+        "overlay %s is not a toolchain definition (no %s) — the --default \
+         flag only applies to toolchain entries"
+        handle Keys.toolchain_name;
     let default_toolchain =
       Stdlib.Option.value default ~default:prev.default_toolchain
     in

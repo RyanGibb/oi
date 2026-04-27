@@ -299,16 +299,18 @@ let cmd =
              sync) is for after a manifest edit.";
           `S "DEV TOOLS";
           `P
-            "Sync also installs editor tooling into $(b,_oi/tools/bin/), \
-             prepended to $(b,PATH):";
-          `I ("$(b,odoc)", "Documentation generator.");
-          `I ("$(b,merlin)", "Editor backend for type and error reporting.");
-          `I ("$(b,ocaml-lsp-server)", "Language server for editors.");
-          `I ("$(b,mdx)", "When $(b,dune-project) uses it.");
+            "Editor tooling is installed into $(b,_oi/tools/bin/), prepended \
+             to $(b,PATH). Two sources:";
           `I
-            ( "$(b,ocamlformat)",
-              "Pinned to the version $(b,.ocamlformat) requests." );
-          `P "$(b,oi config) lists the tools the next sync will install.";
+            ( "Toolchain",
+              "Packages listed in the active toolchain's \
+               $(b,x-oi-toolchain-tools) field. Shipped toolchains include \
+               $(b,odoc), $(b,merlin), and $(b,ocaml-lsp-server)." );
+          `I
+            ( "Project probe",
+              "$(b,mdx) when $(b,dune-project) uses it. $(b,ocamlformat) \
+               pinned to the version $(b,.ocamlformat) requests." );
+          `P "$(b,oi config) lists both sets for the current project.";
           `S "OPTIONS";
           `I
             ( "$(b,--with=PKG)",

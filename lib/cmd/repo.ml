@@ -84,6 +84,27 @@ let pp_commit ppf commit =
   in
   Fmt.(styled `Faint string) ppf short
 
+let pp_header_cell ppf (label, width) =
+  Fmt.pf ppf "%a%s"
+    Fmt.(styled `Bold string)
+    label
+    (String.make (max 0 (width - String.length label)) ' ')
+
+let print_header ~tc_w ~with_status =
+  pp_header_cell Fmt.stdout ("HANDLE", 24);
+  Fmt.pr "  ";
+  pp_header_cell Fmt.stdout ("VERSION", 16);
+  Fmt.pr "  ";
+  pp_header_cell Fmt.stdout ("COMMIT", 8);
+  Fmt.pr "  ";
+  pp_header_cell Fmt.stdout ("TOOLCHAIN", tc_w);
+  Fmt.pr "  ";
+  if with_status then begin
+    pp_header_cell Fmt.stdout ("STATUS", 28);
+    Fmt.pr "  "
+  end;
+  Fmt.pr "%a@." Fmt.(styled `Bold string) "URL"
+
 let print_entry_oneline ~tc_w (e : Oi.Source.Reporepo.entry) =
   pp_padded_to ~width:24 ~visible:(String.length e.handle) pp_handle e;
   Fmt.pr "  %-16s  " e.version;
@@ -149,6 +170,48 @@ let print_entry_with_upstream ~tc_w (e : Oi.Source.Reporepo.entry) status =
     pp_status_tag status;
   Fmt.pr "  %a@." Fmt.(styled `Faint string) e.url
 
+(* Toolchain section: definitions ([toolchain_name] set) printed under
+   their CLI-facing name (the [x-oi-toolchain-name] field) rather than
+   the [toolchain-*] reporepo handle. *)
+let toolchain_cli_name (e : Oi.Source.Reporepo.entry) =
+  match e.toolchain_name with Some n -> n | None -> e.handle
+
+let mode_of (e : Oi.Source.Reporepo.entry) =
+  match e.relocatable with
+  | Some true -> ("relocatable", `Green)
+  | Some false -> ("fixed-prefix", `Yellow)
+  | None -> ("?", `Faint)
+
+let print_toolchain_header ~name_w ~mode_w =
+  pp_header_cell Fmt.stdout ("NAME", name_w);
+  Fmt.pr "  ";
+  pp_header_cell Fmt.stdout ("VERSION", 16);
+  Fmt.pr "  ";
+  pp_header_cell Fmt.stdout ("MODE", mode_w);
+  Fmt.pr "  ";
+  pp_header_cell Fmt.stdout ("DEFAULT", 7);
+  Fmt.pr "  ";
+  Fmt.pr "%a@." Fmt.(styled `Bold string) "COMPILER"
+
+let print_toolchain_entry ~name_w ~mode_w (e : Oi.Source.Reporepo.entry) =
+  let name = toolchain_cli_name e in
+  let pp_name ppf s = Fmt.(styled `Bold string) ppf s in
+  pp_padded_to ~width:name_w ~visible:(String.length name) pp_name name;
+  Fmt.pr "  %-16s  " e.version;
+  let mode, mode_color = mode_of e in
+  let pp_mode ppf s = Fmt.(styled mode_color string) ppf s in
+  pp_padded_to ~width:mode_w ~visible:(String.length mode) pp_mode mode;
+  Fmt.pr "  ";
+  let default_text = if e.default_toolchain then "yes" else "" in
+  let pp_default ppf s =
+    if e.default_toolchain then
+      Fmt.(styled `Bold (styled `Cyan string)) ppf s
+    else Fmt.string ppf s
+  in
+  pp_padded_to ~width:7
+    ~visible:(String.length default_text)
+    pp_default default_text;
+  Fmt.pr "  %s@." (Stdlib.Option.value ~default:"" e.toolchain_compiler)
 
 let ref_term =
   Arg.(
@@ -216,26 +279,75 @@ let cmd =
           |> List.filter_map (fun handle ->
               Oi.Source.Reporepo.latest entries ~handle)
         in
+        (* Split toolchain definitions out of the overlay table — they
+           don't have a URL of their own and their reporepo handle
+           ([toolchain-*]) is an implementation detail; users address
+           them by their CLI name (e.g. [ocaml-5.4]). Within overlays,
+           base entries (no [x-oi-toolchain] tag, e.g. [default],
+           [relocatable]) sort first since they're not user-supplied. *)
+        let toolchains, overlays =
+          List.partition
+            (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain_name <> None)
+            latest_entries
+        in
+        let overlays =
+          let untagged, tagged =
+            List.partition
+              (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain = None)
+              overlays
+          in
+          untagged @ tagged
+        in
         let tc_w =
           List.fold_left
             (fun w e -> max w (toolchain_width e))
-            (String.length "toolchain")
-            latest_entries
+            (String.length "TOOLCHAIN")
+            overlays
         in
-        if no_check then List.iter (print_entry_oneline ~tc_w) latest_entries
-        else begin
-          (* Parallel [git ls-remote] per entry. Four at a time keeps
-             the pipe/fd footprint small without making a 30-entry
-             reporepo serial. Failures downgrade to [Unknown] — a
-             flaky network must not make [oi repo list] unusable. *)
-          let indexed = List.mapi (fun i e -> (i, e)) latest_entries in
-          let statuses = Array.make (List.length indexed) Unknown in
-          Eio.Fiber.List.iter ~max_fibers:4
-            (fun (i, e) -> statuses.(i) <- check_upstream ~sys e)
-            indexed;
-          List.iteri
-            (fun i e -> print_entry_with_upstream ~tc_w e statuses.(i))
-            latest_entries
+        let pp_subtitle ppf s = Fmt.(styled `Faint string) ppf s in
+        if overlays <> [] then begin
+          Fmt.pr "%a@." Fmt.(styled `Bold string) "OVERLAYS";
+          Fmt.pr "%a@.@." pp_subtitle
+            "Curated opam packages pinned to git commits. Use as \
+             --with-repo=@HANDLE, --with=@HANDLE/PKG, or 'x-repos:' in *.opam.";
+          if no_check then begin
+            print_header ~tc_w ~with_status:false;
+            List.iter (print_entry_oneline ~tc_w) overlays
+          end
+          else begin
+            (* Parallel [git ls-remote] per entry. Four at a time keeps
+               the pipe/fd footprint small without making a 30-entry
+               reporepo serial. Failures downgrade to [Unknown] — a
+               flaky network must not make [oi repo list] unusable. *)
+            let indexed = List.mapi (fun i e -> (i, e)) overlays in
+            let statuses = Array.make (List.length indexed) Unknown in
+            Eio.Fiber.List.iter ~max_fibers:4
+              (fun (i, e) -> statuses.(i) <- check_upstream ~sys e)
+              indexed;
+            print_header ~tc_w ~with_status:true;
+            List.iteri
+              (fun i e -> print_entry_with_upstream ~tc_w e statuses.(i))
+              overlays
+          end
+        end;
+        if toolchains <> [] then begin
+          let name_w =
+            List.fold_left
+              (fun w e -> max w (String.length (toolchain_cli_name e)))
+              (String.length "NAME") toolchains
+          in
+          let mode_w =
+            List.fold_left
+              (fun w e -> max w (String.length (fst (mode_of e))))
+              (String.length "MODE") toolchains
+          in
+          if overlays <> [] then Fmt.pr "@.";
+          Fmt.pr "%a@." Fmt.(styled `Bold string) "TOOLCHAINS";
+          Fmt.pr "%a@.@." pp_subtitle
+            "Compiler bundles. Select with --toolchain=NAME; the DEFAULT \
+             entry is used otherwise.";
+          print_toolchain_header ~name_w ~mode_w;
+          List.iter (print_toolchain_entry ~name_w ~mode_w) toolchains
         end
   in
   let no_check =
@@ -248,24 +360,51 @@ let cmd =
           [ "no-check" ])
   in
   let info =
-    Cmd.info "list" ~doc:"List overlays registered in the reporepo"
+    Cmd.info "list" ~doc:"List overlays and toolchains in the reporepo"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "One line per overlay handle: pinned commit, toolchain target \
-             (from $(b,x-oi-toolchain)), upstream-status tag, source URL.";
-          `P "Status is computed by $(b,git ls-remote) (four in parallel):";
+            "Two sections: $(b,OVERLAYS) (base repos and user overlays, with \
+             upstream status) and $(b,TOOLCHAINS) (toolchain definitions).";
+          `S "OVERLAYS";
+          `P
+            "An overlay is a curated set of opam packages pinned to a \
+             specific git commit. Pull one into a solve with \
+             $(b,--with-repo=@HANDLE) or $(b,--with=@HANDLE/PKG), or \
+             declare $(b,x-repos: [\"@HANDLE\"]) in a project's $(b,*.opam) \
+             to apply it automatically.";
+          `P
+            "Base repos ($(b,default), $(b,relocatable)) are pulled in by \
+             every solve and listed first. User overlays follow in handle \
+             order. Add new entries with $(b,oi repo add); fast-forward \
+             stale ones with $(b,oi repo bump HANDLE).";
+          `P
+            "Columns: $(b,HANDLE), $(b,VERSION), pinned $(b,COMMIT), \
+             $(b,TOOLCHAIN) target (from $(b,x-oi-toolchain), $(b,—) for \
+             base repos), $(b,STATUS), source $(b,URL).";
+          `P
+            "Status is computed by $(b,git ls-remote) (four in parallel):";
           `I ("$(b,up-to-date)", "Pinned commit matches the upstream branch.");
           `I ("$(b,stale)", "Upstream has moved past the pin.");
           `I ("$(b,unreachable)", "Remote could not be contacted.");
-          `I
-            ( "$(b,toolchain)",
-              "Definition-only entry (no own URL); composes other overlays via \
-               $(b,depends:)." );
+          `P "$(b,--no-check) skips the check and drops the column.";
+          `S "TOOLCHAINS";
           `P
-            "$(b,oi repo bump HANDLE) fast-forwards a stale entry. \
-             $(b,--no-check) skips the network round trip.";
+            "A toolchain is a compiler plus its supporting overlays. Pass \
+             $(b,--toolchain=NAME) to any oi command to select one; \
+             otherwise the entry flagged $(b,DEFAULT) is used. An overlay \
+             tagged $(b,x-oi-toolchain: NAME) implies that toolchain when \
+             pulled into a solve.";
+          `P
+            "$(b,relocatable) toolchains build into $(b,_oi/prefix/) like \
+             any other package; $(b,fixed-prefix) toolchains install into \
+             a shared root under $(b,\\$XDG_CACHE_HOME/oi/toolchains) \
+             (visible under $(b,oi config)).";
+          `P
+            "Columns: $(b,NAME) (the value to pass to $(b,--toolchain)), \
+             $(b,VERSION), $(b,MODE), $(b,DEFAULT), and the primary \
+             $(b,COMPILER) package.";
         ]
   in
   Cmd.v info
@@ -892,33 +1031,36 @@ let collect_problems (entries : Oi.Source.Reporepo.entry list) : problem list =
        | None ->
            if e.relocatable <> None then
              here
-               "[x-oi-relocatable] is set but [x-oi-toolchain-name] is not — \
-                only toolchain definitions take this field";
+               "[%s] is set but [%s] is not — only toolchain definitions \
+                take this field"
+               Oi.Keys.relocatable Oi.Keys.toolchain_name;
            if e.toolchain_roots <> [] then
              here
-               "[x-oi-toolchain-roots] is set but [x-oi-toolchain-name] is \
-                not — only toolchain definitions take this field"
+               "[%s] is set but [%s] is not — only toolchain definitions \
+                take this field"
+               Oi.Keys.toolchain_roots Oi.Keys.toolchain_name
        | Some name ->
-           if name = "" then here "[x-oi-toolchain-name] is empty";
+           if name = "" then
+             here "[%s] is empty" Oi.Keys.toolchain_name;
            if e.relocatable = None then
-             here
-               "toolchain %S missing [x-oi-relocatable] (must be true or false)"
-               name;
+             here "toolchain %S missing [%s] (must be true or false)" name
+               Oi.Keys.relocatable;
            if e.toolchain_roots = [] then
-             here "toolchain %S has empty [x-oi-toolchain-roots]" name;
+             here "toolchain %S has empty [%s]" name
+               Oi.Keys.toolchain_roots;
            if e.toolchain_compiler = None then
              here
-               "toolchain %S missing [x-oi-toolchain-compiler] (e.g. \
+               "toolchain %S missing [%s] (e.g. \
                 \"ocaml-base-compiler.5.4.1\")"
-               name);
+               name Oi.Keys.toolchain_compiler);
       (match e.toolchain with
        | None -> ()
        | Some t ->
            if not (known_toolchain t) then
              here
-               "[x-oi-toolchain: %s] does not match any [x-oi-toolchain-name] \
-                in this reporepo (known: %s)"
-               t
+               "[%s: %s] does not match any [%s] in this reporepo (known: \
+                %s)"
+               Oi.Keys.toolchain t Oi.Keys.toolchain_name
                (if toolchain_names = [] then "none"
                 else String.concat ", " toolchain_names)))
     entries;
@@ -936,10 +1078,9 @@ let collect_problems (entries : Oi.Source.Reporepo.entry list) : problem list =
              (String.concat ", " toolchain_names)
        in
        here
-         "no entry has [x-oi-default-toolchain: true] — %s. Without a \
-          default, [oi run] / [oi sync] / etc. hard-error when the user \
-          omits [--toolchain]."
-         hint
+         "no entry has [%s: true] — %s. Without a default, [oi run] / \
+          [oi sync] / etc. hard-error when the user omits [--toolchain]."
+         Oi.Keys.default_toolchain hint
    | many ->
        let labels =
          List.map
@@ -948,10 +1089,10 @@ let collect_problems (entries : Oi.Source.Reporepo.entry list) : problem list =
            many
        in
        here
-         "multiple entries flagged [x-oi-default-toolchain: true]: %s — \
-          only one toolchain handle may be the default. Clear the flag on \
-          stale versions and on the losing handle."
-         (String.concat ", " labels));
+         "multiple entries flagged [%s: true]: %s — only one toolchain \
+          handle may be the default. Clear the flag on stale versions and \
+          on the losing handle."
+         Oi.Keys.default_toolchain (String.concat ", " labels));
   List.rev !problems
 
 let cmd =

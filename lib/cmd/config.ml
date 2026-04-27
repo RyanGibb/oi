@@ -166,9 +166,12 @@ let cmd =
                one is present." );
           `I
             ( "$(b,Dev tools)",
-              "The editor and documentation tools that the next $(b,oi sync) \
-               would install. A $(b,hit) means the tool has been requested by \
-               the project; a $(b,miss) means it will not be installed." );
+              "Project-probed tools the next $(b,oi sync) would install. \
+               $(b,hit) means the trigger fired ($(b,.ocamlformat) for \
+               $(b,ocamlformat), $(b,dune-project) for $(b,mdx)); $(b,miss) \
+               skips that tool. Tools from the active toolchain's \
+               $(b,x-oi-toolchain-tools) field appear under $(b,Toolchains) \
+               above and install unconditionally." );
         ]
   in
   Cmd.v info Term.(const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir)

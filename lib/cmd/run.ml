@@ -538,6 +538,19 @@ let cmd =
              overlay apply automatically to every $(b,oi) command run in that \
              project. The same field also accepts plain repository URLs as an \
              unpinned escape hatch; a leading $(b,@) marks reporepo handles.";
+          `S "TOOLCHAIN";
+          `P "The active toolchain is picked in this order:";
+          `I ("1.", "$(b,--toolchain=NAME), if given.");
+          `I
+            ( "2.",
+              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — \
+               from a $(b,@h/pkg) target, $(b,--with-repo=@h), \
+               $(b,--with=@h/pkg), or the project's $(b,x-repos:). \
+               Conflicting tags are an error." );
+          `I
+            ( "3.",
+              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)."
+            );
           `S "GIT URLS";
           `P
             "Passing $(b,--with=URL) clones the repository and treats every \

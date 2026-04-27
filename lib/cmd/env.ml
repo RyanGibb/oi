@@ -90,15 +90,28 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "Print $(b,export) statements pointing $(b,PATH), $(b,OCAMLLIB), \
-             and the other OCaml env vars at the project prefix. The \
-             non-$(b,direnv) equivalent of the $(b,.envrc) $(b,oi sync) \
-             writes.";
+            "Print $(b,export) statements for $(b,PATH), $(b,OCAMLLIB), and \
+             the other OCaml environment variables, pointing at \
+             $(b,_oi/prefix/). The non-$(b,direnv) equivalent of $(b,.envrc).";
           `Pre "  eval \"\\$(oi env)\"";
           `P
-            "Implicitly syncs first if $(b,_oi/prefix/) is missing or stale. \
-             Passing $(b,--with), $(b,--with-repo), or $(b,--toolchain) forces \
-             a re-sync with those extras folded in.";
+            "Reuses $(b,_oi/prefix/) when it exists and no extras are \
+             requested. With $(b,--with), $(b,--with-repo), $(b,--toolchain), \
+             or when $(b,_oi/prefix/) is missing, builds a one-shot prefix in \
+             process; $(b,.envrc) and dev tools are not updated. Run \
+             $(b,oi sync) for that.";
+          `S "TOOLCHAIN";
+          `P "The active toolchain is picked in this order:";
+          `I ("1.", "$(b,--toolchain=NAME), if given.");
+          `I
+            ( "2.",
+              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — \
+               from $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
+               $(b,x-repos:). Conflicting tags are an error." );
+          `I
+            ( "3.",
+              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)."
+            );
         ]
   in
   Cmd.v info

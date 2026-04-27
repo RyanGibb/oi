@@ -74,16 +74,16 @@ let load_one ~filename (opam : OpamFile.OPAM.t) : raw =
   in
   let raw_extra_repos, raw_overlays =
     match
-      OpamStd.String.Map.find_opt "x-repos" (OpamFile.OPAM.extensions opam)
+      OpamStd.String.Map.find_opt Keys.repos (OpamFile.OPAM.extensions opam)
     with
     | None -> ([], [])
     | Some v -> (
         match parse_repos_value v with
         | None ->
             Error.config_error
-              "%s: x-repos must be a string or a list of strings (each entry \
-               is a [@HANDLE] reporepo handle or a repository URL)"
-              filename
+              "%s: %s must be a string or a list of strings (each entry is \
+               a [@HANDLE] reporepo handle or a repository URL)"
+              filename Keys.repos
         | Some toks ->
             List.fold_left
               (fun (urls, handles) -> function
@@ -125,8 +125,8 @@ let merge_extra_repos entries =
       let prev_file, _, prev_url = prev in
       let declared_in, _, url = curr in
       Error.config_error
-        "package %s and %s disagree on x-repos entry %s: %s vs %s" prev_file
-        declared_in name prev_url url)
+        "package %s and %s disagree on %s entry %s: %s vs %s" prev_file
+        declared_in Keys.repos name prev_url url)
     entries
   |> List.map (fun (_, name, url) -> { name; url })
 
