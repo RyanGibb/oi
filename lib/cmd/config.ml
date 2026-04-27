@@ -147,9 +147,7 @@ let cmd =
       ~man:
         [
           `S Manpage.s_description;
-          `P
-            "Print how $(b,oi) sees the current machine and project. First \
-             stop when a solve behaves unexpectedly.";
+          `P "Print how $(b,oi) sees the current machine and project.";
           `I
             ( "$(b,Platform)",
               "OS, arch, distribution. The solve picks different packages per \

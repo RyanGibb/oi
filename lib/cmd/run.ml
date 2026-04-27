@@ -484,16 +484,13 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "$(b,oi run) resolves the dependencies of $(b,TARGET), installs \
-             them into a shared local cache, and executes $(b,TARGET) with the \
-             right environment. The first invocation of a given target does \
-             the work; every subsequent invocation with the same dependency \
-             set reuses the cache and starts in a few milliseconds.";
+            "Resolve $(b,TARGET)'s dependencies, install them into the shared \
+             cache, and run $(b,TARGET). Repeat invocations with the same \
+             dependency set reuse the cache.";
           `P
-            "$(b,TARGET) is one of three things: the name of a binary \
-             installed by some opam package, the path to a local OCaml \
-             $(b,.ml) script, or an $(b,http) or $(b,https) URL pointing at a \
-             remote OCaml script.";
+            "$(b,TARGET) is one of: the name of a binary installed by some \
+             opam package, the path to a local $(b,.ml) script, or an \
+             $(b,http)/$(b,https) URL pointing at a remote script.";
           `S "BINARY TARGETS";
           `P
             "When $(b,TARGET) names a binary, $(b,oi) looks up the opam \

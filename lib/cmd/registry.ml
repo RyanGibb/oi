@@ -10,16 +10,12 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "$(b,oi) keeps a local cache of pre-built OCaml packages so it can \
-             avoid repeated work, and it can pull pre-built packages from a \
-             remote registry instead of compiling them. This group of commands \
-             inspects and manages both sides of that arrangement.";
+            "Inspect and manage the local cache of pre-built packages and the \
+             remote registry it pulls from.";
           `P
-            "Most users only need $(b,oi registry list) to inspect the local \
-             cache. The $(b,build) and $(b,export) subcommands come in when \
-             you are running your own registry for a team or a set of \
-             machines. The $(b,mirror) subgroup handles the companion mirror \
-             of upstream source tarballs.";
+            "$(b,list) inspects the local cache. $(b,build) and $(b,export) \
+             populate a registry you serve to others. $(b,mirror) handles the \
+             companion mirror of upstream source tarballs.";
         ]
   in
   Cmd.group info

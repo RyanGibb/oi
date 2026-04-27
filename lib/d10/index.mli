@@ -107,6 +107,21 @@ val stats : db -> os_key:string -> int * int * int
 (** [stats db ~os_key] returns [(num_layers, num_binaries, num_files)] for the
     given platform. *)
 
+(** {1 Invalidation} *)
+
+val dependents : db -> hashes:string list -> os_key:string -> string list
+(** [dependents db ~hashes ~os_key] returns the hashes of layers in [os_key]
+    that directly depend on any layer in [hashes]. Apply iteratively to compute
+    the transitive set of layers poisoned by an invalidated package. Returns
+    [[]] when [hashes] is empty. *)
+
+val delete_layers : db -> hashes:string list -> unit
+(** [delete_layers db ~hashes] removes the layers and their associated rows from
+    [layers], [layer_deps], [layer_binaries], and [layer_files]. The on-disk
+    layer directories are not touched — the caller must
+    [rmtree <root>/layers/<os_key>/<hash>/] for each entry. No-op when [hashes]
+    is empty. *)
+
 (** {1 Remote merge} *)
 
 val merge_remote : db -> remote_path:string -> unit

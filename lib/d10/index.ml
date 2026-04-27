@@ -448,6 +448,40 @@ let stats db ~os_key =
   in
   (n_layers, n_binaries, n_files)
 
+(* -- Invalidation --------------------------------------------------------- *)
+
+let in_clause hashes = String.concat ", " (List.map quote hashes)
+
+let dependents db ~hashes ~os_key =
+  match hashes with
+  | [] -> []
+  | _ ->
+      let results = ref [] in
+      let cb row =
+        match row with [| h |] -> results := h :: !results | _ -> ()
+      in
+      ignore
+        (Sqlite3.exec_not_null_no_headers db ~cb
+           (Fmt.str
+              "SELECT DISTINCT d.layer_hash FROM layer_deps d JOIN layers l ON \
+               d.layer_hash = l.hash WHERE d.dep_hash IN (%s) AND l.os_key = \
+               %s"
+              (in_clause hashes) (quote os_key)));
+      List.rev !results
+
+let delete_layers db ~hashes =
+  match hashes with
+  | [] -> ()
+  | _ ->
+      let in_ = in_clause hashes in
+      exec db "BEGIN TRANSACTION";
+      exec db (Fmt.str "DELETE FROM layer_files WHERE layer_hash IN (%s)" in_);
+      exec db
+        (Fmt.str "DELETE FROM layer_binaries WHERE layer_hash IN (%s)" in_);
+      exec db (Fmt.str "DELETE FROM layer_deps WHERE layer_hash IN (%s)" in_);
+      exec db (Fmt.str "DELETE FROM layers WHERE hash IN (%s)" in_);
+      exec db "COMMIT"
+
 (* -- Remote merge --------------------------------------------------------- *)
 
 let merge_remote db ~remote_path =
