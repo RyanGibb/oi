@@ -1,6 +1,7 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
+
 [@@@warning "-32"]
 
 let cmd =
@@ -15,7 +16,15 @@ let cmd =
   in
   let run () data_dir cache_dir output_dir src_context refresh =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = _clock; sys = sys; platform = platform; os_key = _os_key; cache = cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock = _clock;
+      sys;
+      platform;
+      os_key = _os_key;
+      cache;
+    } =
       Harness.bootstrap env cache_dir
     in
     (try Unix.mkdir output_dir 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
@@ -26,8 +35,8 @@ let cmd =
       (List.length default_distros);
     let per_distro_depexts =
       try
-        Registry_build.compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
-          ~platform ~distros:default_distros
+        Registry_build.compute_overlay_depexts_per_distro ~fs ~sys ~cache
+          ~data_dir ~refresh ~platform ~distros:default_distros
       with _ -> List.map (fun d -> (d, [])) default_distros
     in
     let per_distro_paths =
@@ -137,4 +146,3 @@ let cmd =
       $ src_context $ Terms.refresh)
 
 (* -- registry mirror ------------------------------------------------------ *)
-

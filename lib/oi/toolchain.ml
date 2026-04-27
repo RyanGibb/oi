@@ -289,8 +289,8 @@ let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
   in
   let root_specs = List.flatten entry.toolchain_roots in
   if root_specs = [] then
-    Error.config_error "toolchain %s: %s.%s declares no %s"
-      handle entry.handle entry.version Keys.toolchain_roots;
+    Error.config_error "toolchain %s: %s.%s declares no %s" handle entry.handle
+      entry.version Keys.toolchain_roots;
   let constraints =
     List.fold_left
       (fun m spec ->
@@ -329,15 +329,15 @@ let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
         (* Source.Reporepo.parse_entry_file guarantees a toolchain
            entry has [x-oi-toolchain-compiler] set. If we hit this
            branch the reporepo bypassed validation. *)
-        Error.config_error "toolchain %s: %s.%s has no %s" handle
-          entry.handle entry.version Keys.toolchain_compiler
+        Error.config_error "toolchain %s: %s.%s has no %s" handle entry.handle
+          entry.version Keys.toolchain_compiler
   in
   let ocaml_version =
     match pick_ocaml_version ~explicit_compiler pkgs with
     | Some v -> v
     | None ->
-        Error.config_error
-          "toolchain %s: solved set contains no %s package" handle
+        Error.config_error "toolchain %s: solved set contains no %s package"
+          handle
           (fst (parse_spec explicit_compiler))
   in
   let relocatable_flag = Stdlib.Option.value entry.relocatable ~default:true in

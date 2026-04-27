@@ -1,12 +1,21 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
+
 [@@@warning "-32"]
 
 let cmd =
   let run () cache_dir data_dir =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = _clock; sys = sys; platform = _platform; os_key = os_key; cache = _cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock = _clock;
+      sys;
+      platform = _platform;
+      os_key;
+      cache = _cache;
+    } =
       Harness.bootstrap env cache_dir
     in
     Fmt.pr "@[<v>%a@," Fmt.(styled `Bold string) "Platform";
@@ -179,4 +188,3 @@ let cmd =
 (* -- clean --------------------------------------------------------------- *)
 
 (* dir_size and pp_size are now in Oi.Cache *)
-

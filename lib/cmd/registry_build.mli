@@ -10,13 +10,13 @@ val compute_overlay_depexts_for_conf :
   ?override:string ->
   unit ->
   string list
-(** Solve every overlay's [x-root-packages] and return the union of
-    depexts declared by the resulting packages, evaluated under [conf]'s
-    opam filter variables (os, os-family, os-distribution, os-version).
-    Backs the [oi registry depexts] command. [?override] passes through
-    a [--toolchain=NAME] flag, overriding each overlay's implicit
-    toolchain selection — useful for "what would the depexts be if I
-    forced ocaml-5.5 across the board?". *)
+(** Solve every overlay's [x-root-packages] and return the union of depexts
+    declared by the resulting packages, evaluated under [conf]'s opam filter
+    variables (os, os-family, os-distribution, os-version). Backs the
+    [oi registry depexts] command. [?override] passes through a
+    [--toolchain=NAME] flag, overriding each overlay's implicit toolchain
+    selection — useful for "what would the depexts be if I forced ocaml-5.5
+    across the board?". *)
 
 val compute_overlay_depexts_per_distro :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -27,9 +27,8 @@ val compute_overlay_depexts_per_distro :
   platform:Osrel.t ->
   distros:Registry_docker.Distro.t list ->
   (Registry_docker.Distro.t * string list) list
-(** Solve every overlay's root packages on each [distros] entry and return
-    the per-distro union of declared depexts. Shared with
-    [oi registry docker] which needs the same data to parametrise the
-    generated Dockerfiles. *)
+(** Solve every overlay's root packages on each [distros] entry and return the
+    per-distro union of declared depexts. Shared with [oi registry docker] which
+    needs the same data to parametrise the generated Dockerfiles. *)
 
 val cmd : unit Cmdliner.Cmd.t

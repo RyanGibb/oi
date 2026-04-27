@@ -11,7 +11,9 @@ let cmd =
     in
     let cwd, _ = Workspace.resolved_cwd fs in
     let prefix = cwd / "_oi" / "prefix" in
-    let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+    let conf =
+      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    in
     (* Any --with-repo / --with / --toolchain flag forces a re-sync
        even if the prefix is fresh, so the extras and toolchain make
        it into the build. The toolchain we use for env vars is the one
@@ -75,13 +77,12 @@ let cmd =
           `I ("1.", "$(b,--toolchain=NAME), if given.");
           `I
             ( "2.",
-              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — \
-               from $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
+              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — from \
+               $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
                $(b,x-repos:). Conflicting tags are an error." );
           `I
             ( "3.",
-              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)."
-            );
+              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
           `Pre
             "  oi exec dune build\n\
             \  oi exec -- ocamlformat --check .\n\
@@ -95,4 +96,3 @@ let cmd =
       $ Terms.toolchain $ cmd $ args)
 
 (* -- config -------------------------------------------------------------- *)
-

@@ -1,10 +1,10 @@
 (** Cmdliner term builders for shared CLI flags.
 
     Every command picks up at least [--data-dir], [--cache-dir], and the log
-    level. Most pick up [--refresh], [--with-repo], [--with], [-j]; the
-    solving commands additionally take [--toolchain] and [--registry].
-    Repo-specific terms ([--reporepo], [--depend], …) live with the [oi
-    repo] command since they don't appear elsewhere. *)
+    level. Most pick up [--refresh], [--with-repo], [--with], [-j]; the solving
+    commands additionally take [--toolchain] and [--registry]. Repo-specific
+    terms ([--reporepo], [--depend], …) live with the [oi repo] command since
+    they don't appear elsewhere. *)
 
 val log : unit Cmdliner.Term.t
 (** Wires [Fmt_cli], [Logs_cli], and the progress-aware logs reporter. *)
@@ -40,7 +40,8 @@ val getenv_or : default:string -> string -> string
 (** Returns the env-var value if set and non-empty, else [default]. *)
 
 val reporepo_path : unit -> string
-(** Active reporepo path: [$OI_REPOREPO] or {!Oi.Source.Reporepo.default_path}. *)
+(** Active reporepo path: [$OI_REPOREPO] or {!Oi.Source.Reporepo.default_path}.
+*)
 
 val reporepo_url : unit -> string
 (** Active reporepo URL: [$OI_REPOREPO_URL] or
@@ -50,5 +51,5 @@ val default_registry : string
 (** [https://oi.ci.dev]. *)
 
 val remote_of_registry : string -> D10.Layer.remote option
-(** Convert a registry URL string to a {!D10.Layer.remote}. Empty string
-    returns [None] (registry disabled). *)
+(** Convert a registry URL string to a {!D10.Layer.remote}. Empty string returns
+    [None] (registry disabled). *)

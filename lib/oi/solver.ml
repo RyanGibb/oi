@@ -965,8 +965,8 @@ let augment_compiler_constraints ctx constraints =
          constructed a Ctx without a toolchain and tried to solve —
          a bug rather than a configuration question. *)
       Error.config_error
-        "Solver.augment_compiler_constraints: no toolchain set on Solver.Ctx \
-         — every solve must thread a toolchain through (default or \
+        "Solver.augment_compiler_constraints: no toolchain set on Solver.Ctx — \
+         every solve must thread a toolchain through (default or \
          --toolchain=NAME). Construct the Ctx via Pipeline.resolve_toolchain."
   | Some tc ->
       let add name version_s m =

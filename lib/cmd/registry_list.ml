@@ -1,12 +1,21 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
+
 [@@@warning "-32"]
 
 let cmd =
   let run () cache_dir _data_dir target =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = _clock; sys = sys; platform = _platform; os_key = os_key; cache = _cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock = _clock;
+      sys;
+      platform = _platform;
+      os_key;
+      cache = _cache;
+    } =
       Harness.bootstrap env cache_dir
     in
     let layers_dir = cache_dir / "layers" / os_key in
@@ -165,4 +174,3 @@ let cmd =
     Term.(const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir $ target)
 
 (* -- registry index ------------------------------------------------------ *)
-

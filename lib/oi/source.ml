@@ -311,12 +311,11 @@ module Reporepo = struct
                 match it.pelem with
                 | OpamParserTypes.FullPos.String s -> s
                 | _ ->
-                    Error.config_error
-                      "%s: %s items must be strings" path name)
+                    Error.config_error "%s: %s items must be strings" path name)
               items
         | _ ->
-            Error.config_error
-              "%s: %s must be a string or a list of strings" path name)
+            Error.config_error "%s: %s must be a string or a list of strings"
+              path name)
 
   let read_root_packages_extension ~path extensions name =
     let as_string_item (v : OpamParserTypes.FullPos.value) =
@@ -391,8 +390,7 @@ module Reporepo = struct
           read_string_extension extensions Keys.toolchain_name
         in
         if url_bare = "" && toolchain_name = None then
-          Error.config_error
-            "%s: entry needs either a [url:] block or [%s]"
+          Error.config_error "%s: entry needs either a [url:] block or [%s]"
             path Keys.toolchain_name;
         let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
         let ref_ = read_string_extension extensions Keys.ref in
@@ -402,31 +400,27 @@ module Reporepo = struct
         in
         if toolchain_name <> None && toolchain_compiler = None then
           Error.config_error
-            "%s: %s is set but %s is missing — every toolchain definition \
-             must declare its compiler package (e.g. \
-             \"ocaml-base-compiler.5.4.1\")"
+            "%s: %s is set but %s is missing — every toolchain definition must \
+             declare its compiler package (e.g. \"ocaml-base-compiler.5.4.1\")"
             path Keys.toolchain_name Keys.toolchain_compiler;
         let relocatable =
           read_bool_extension ~path extensions Keys.relocatable
         in
         let toolchain_roots =
-          read_root_packages_extension ~path extensions
-            Keys.toolchain_roots
+          read_root_packages_extension ~path extensions Keys.toolchain_roots
         in
         let toolchain_tools =
           read_string_list_extension ~path extensions Keys.toolchain_tools
         in
         let default_toolchain =
-          match
-            read_bool_extension ~path extensions Keys.default_toolchain
-          with
+          match read_bool_extension ~path extensions Keys.default_toolchain with
           | Some b -> b
           | None -> false
         in
         if default_toolchain && toolchain_name = None then
           Error.config_error
-            "%s: %s is only meaningful on toolchain definitions (entries \
-             with %s set)"
+            "%s: %s is only meaningful on toolchain definitions (entries with \
+             %s set)"
             path Keys.default_toolchain Keys.toolchain_name;
         let root_packages =
           read_root_packages_extension ~path extensions Keys.root_packages
@@ -485,13 +479,13 @@ module Reporepo = struct
       let latest_per_handle =
         entries
         |> List.fold_left
-            (fun acc (e : entry) ->
-              match List.assoc_opt e.handle acc with
-              | None -> (e.handle, e) :: acc
-              | Some prev when version_compare e.version prev.version > 0 ->
-                  (e.handle, e) :: List.remove_assoc e.handle acc
-              | Some _ -> acc)
-            []
+             (fun acc (e : entry) ->
+               match List.assoc_opt e.handle acc with
+               | None -> (e.handle, e) :: acc
+               | Some prev when version_compare e.version prev.version > 0 ->
+                   (e.handle, e) :: List.remove_assoc e.handle acc
+               | Some _ -> acc)
+             []
       in
       let defaults =
         latest_per_handle
@@ -503,9 +497,9 @@ module Reporepo = struct
       | [] | [ _ ] -> ()
       | many ->
           Error.config_error
-            "reporepo at %s has %d toolchains marked as default \
-             (%s: true): %s. Exactly one toolchain may be the default — \
-             clear the flag on the others."
+            "reporepo at %s has %d toolchains marked as default (%s: true): \
+             %s. Exactly one toolchain may be the default — clear the flag on \
+             the others."
             path (List.length many) Keys.default_toolchain
             (String.concat ", " many));
       entries
@@ -529,13 +523,13 @@ module Reporepo = struct
       entries
       |> List.filter (fun (e : entry) -> e.toolchain_name <> None)
       |> List.fold_left
-          (fun acc (e : entry) ->
-            match List.assoc_opt e.handle acc with
-            | None -> (e.handle, e) :: acc
-            | Some prev when version_compare e.version prev.version > 0 ->
-                (e.handle, e) :: List.remove_assoc e.handle acc
-            | Some _ -> acc)
-          []
+           (fun acc (e : entry) ->
+             match List.assoc_opt e.handle acc with
+             | None -> (e.handle, e) :: acc
+             | Some prev when version_compare e.version prev.version > 0 ->
+                 (e.handle, e) :: List.remove_assoc e.handle acc
+             | Some _ -> acc)
+           []
     in
     candidates
     |> List.filter_map (fun (_, (e : entry)) ->
@@ -815,12 +809,10 @@ module Reporepo = struct
         Buffer.add_string buf "]\n");
     Printf.bprintf buf "%s: true\n" Keys.overlay;
     Stdlib.Option.iter
-      (fun s ->
-        Printf.bprintf buf "%s: %s\n" Keys.ref (escape_string s))
+      (fun s -> Printf.bprintf buf "%s: %s\n" Keys.ref (escape_string s))
       ref_;
     Stdlib.Option.iter
-      (fun s ->
-        Printf.bprintf buf "%s: %s\n" Keys.toolchain (escape_string s))
+      (fun s -> Printf.bprintf buf "%s: %s\n" Keys.toolchain (escape_string s))
       toolchain;
     Stdlib.Option.iter
       (fun (td : toolchain_def) ->
@@ -832,20 +824,19 @@ module Reporepo = struct
               (escape_string s))
           td.td_compiler;
         Stdlib.Option.iter
-          (fun b ->
-            Printf.bprintf buf "%s: %b\n" Keys.relocatable b)
+          (fun b -> Printf.bprintf buf "%s: %b\n" Keys.relocatable b)
           td.td_relocatable;
         if td.td_default then
           Printf.bprintf buf "%s: true\n" Keys.default_toolchain;
         render_root_groups buf Keys.toolchain_roots td.td_roots;
-        (match td.td_tools with
+        match td.td_tools with
         | [] -> ()
         | tools ->
             Printf.bprintf buf "%s: [\n" Keys.toolchain_tools;
             List.iter
               (fun t -> Printf.bprintf buf "  %s\n" (escape_string t))
               tools;
-            Buffer.add_string buf "]\n"))
+            Buffer.add_string buf "]\n")
       toolchain_def;
     render_root_groups buf Keys.root_packages root_packages;
     Buffer.contents buf
@@ -941,8 +932,8 @@ module Reporepo = struct
     in
     if default <> None && prev.toolchain_name = None then
       Error.config_error
-        "overlay %s is not a toolchain definition (no %s) — the --default \
-         flag only applies to toolchain entries"
+        "overlay %s is not a toolchain definition (no %s) — the --default flag \
+         only applies to toolchain entries"
         handle Keys.toolchain_name;
     let default_toolchain =
       Stdlib.Option.value default ~default:prev.default_toolchain

@@ -65,7 +65,7 @@ let resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
     | Some h ->
         Log.debug (fun m -> m "Using --toolchain=%s" h);
         h
-    | None ->
+    | None -> (
         let from_scope =
           List.concat_map (toolchain_names_of_handle entries) handles
           |> List.sort_uniq String.compare
@@ -79,32 +79,34 @@ let resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
               "overlays in scope declare conflicting toolchains: %s — pass \
                --toolchain=NAME to disambiguate"
               (String.concat ", " many)
-        | _ ->
-            (match Source.Reporepo.default_toolchain entries with
-             | Some e ->
-                 let n = Stdlib.Option.value e.toolchain_name ~default:e.handle in
-                 Log.debug (fun m -> m "Using default toolchain %s" n);
-                 n
-             | None ->
-                 let known =
-                   entries
-                   |> List.filter_map (fun (e : Source.Reporepo.entry) ->
-                        e.toolchain_name)
-                   |> List.sort_uniq String.compare
-                 in
-                 let hint =
-                   if known = [] then
-                     "the reporepo has no toolchain definitions yet"
-                   else
-                     Fmt.str
-                       "mark one with: oi repo bump <handle> --default. Known \
-                        toolchains: %s"
-                       (String.concat ", " known)
-                 in
-                 Error.config_error
-                   "no default toolchain set in reporepo at %s — %s. Or pass \
-                    --toolchain=NAME explicitly."
-                   path hint)
+        | _ -> (
+            match Source.Reporepo.default_toolchain entries with
+            | Some e ->
+                let n =
+                  Stdlib.Option.value e.toolchain_name ~default:e.handle
+                in
+                Log.debug (fun m -> m "Using default toolchain %s" n);
+                n
+            | None ->
+                let known =
+                  entries
+                  |> List.filter_map (fun (e : Source.Reporepo.entry) ->
+                      e.toolchain_name)
+                  |> List.sort_uniq String.compare
+                in
+                let hint =
+                  if known = [] then
+                    "the reporepo has no toolchain definitions yet"
+                  else
+                    Fmt.str
+                      "mark one with: oi repo bump <handle> --default. Known \
+                       toolchains: %s"
+                      (String.concat ", " known)
+                in
+                Error.config_error
+                  "no default toolchain set in reporepo at %s — %s. Or pass \
+                   --toolchain=NAME explicitly."
+                  path hint))
   in
   let info = Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle:(pick ()) in
   if install then Toolchain.ensure_installed ~fs info;
@@ -114,7 +116,9 @@ let drop_override_compiler_roots ~override ~toolchain names =
   match (override, (toolchain : Toolchain.info option)) with
   | None, _ | _, None -> names
   | Some _, Some info ->
-      List.filter (fun n -> not (OpamPackage.Name.Set.mem n info.root_names)) names
+      List.filter
+        (fun n -> not (OpamPackage.Name.Set.mem n info.root_names))
+        names
 
 (* -- Sources ------------------------------------------------------------- *)
 

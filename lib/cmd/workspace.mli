@@ -12,16 +12,16 @@ val app_name : string
     cmdliner program info. *)
 
 val path_exists : Eio.Fs.dir_ty Eio.Path.t -> string -> bool
-(** [path_exists fs path] returns [true] iff [path] resolves to something
-    Eio can stat (follows symlinks). *)
+(** [path_exists fs path] returns [true] iff [path] resolves to something Eio
+    can stat (follows symlinks). *)
 
 val resolved_cwd : Eio.Fs.dir_ty Eio.Path.t -> string * Eio.Fs.dir_ty Eio.Path.t
-(** Canonical absolute path of the current working directory. Returns the
-    string form (for env vars and opam APIs that take strings) and an
-    [Eio.Path.t] rooted at [fs] (for filesystem operations).
-    [Unix.realpath] up front avoids the relative ["."] that
-    [Eio.Stdenv.cwd] would yield via [Eio.Path.native_exn]. *)
+(** Canonical absolute path of the current working directory. Returns the string
+    form (for env vars and opam APIs that take strings) and an [Eio.Path.t]
+    rooted at [fs] (for filesystem operations). [Unix.realpath] up front avoids
+    the relative ["."] that [Eio.Stdenv.cwd] would yield via
+    [Eio.Path.native_exn]. *)
 
 val tools_dir_for : cwd:string -> string option
-(** [tools_dir_for ~cwd] is [Some path] when [cwd/_oi/tools/bin/] exists, so
-    a caller can prepend it to PATH without adding a dangling directory. *)
+(** [tools_dir_for ~cwd] is [Some path] when [cwd/_oi/tools/bin/] exists, so a
+    caller can prepend it to PATH without adding a dangling directory. *)

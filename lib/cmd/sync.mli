@@ -1,16 +1,16 @@
 (** [oi sync]: install a project's dependencies into [_oi/prefix/].
 
-    Solves [*.opam] in the cwd, builds/fetches every layer, hardlink-
-    assembles them into [_oi/prefix/], probes for dev tools and installs
-    them into [_oi/tools/], and writes [.envrc] for direnv.
+    Solves [*.opam] in the cwd, builds/fetches every layer, hardlink- assembles
+    them into [_oi/prefix/], probes for dev tools and installs them into
+    [_oi/tools/], and writes [.envrc] for direnv.
 
-    The two helpers exposed below are reused by {!Exec}: [oi exec]
-    auto-syncs when the prefix is older than any [*.opam], and shares the
-    same staleness check + sync routine. *)
+    The two helpers exposed below are reused by {!Exec}: [oi exec] auto-syncs
+    when the prefix is older than any [*.opam], and shares the same staleness
+    check + sync routine. *)
 
 val needs_sync : cwd:string -> prefix:string -> bool
-(** [needs_sync ~cwd ~prefix] is [true] when [prefix] is missing or any
-    [*.opam] in [cwd] has been modified more recently than [prefix]. *)
+(** [needs_sync ~cwd ~prefix] is [true] when [prefix] is missing or any [*.opam]
+    in [cwd] has been modified more recently than [prefix]. *)
 
 val resolve_project_toolchain :
   ?refresh:bool ->
@@ -26,12 +26,12 @@ val resolve_project_toolchain :
   cwd:string ->
   unit ->
   Oi.Toolchain.info option
-(** Resolve the toolchain a project-aware command should use, with the
-    same handle scope [oi sync] uses: project [x-repos:], URL-project
-    overlays from [--with], and [--with-repo=@h] handles. Used by
-    [oi exec] / [oi env] to pick the same toolchain [oi sync] would
-    have, without doing a full sync. [install] controls whether
-    non-relocatable toolchains get prepared on disk. *)
+(** Resolve the toolchain a project-aware command should use, with the same
+    handle scope [oi sync] uses: project [x-repos:], URL-project overlays from
+    [--with], and [--with-repo=@h] handles. Used by [oi exec] / [oi env] to pick
+    the same toolchain [oi sync] would have, without doing a full sync.
+    [install] controls whether non-relocatable toolchains get prepared on disk.
+*)
 
 val do_sync :
   ?quiet:bool ->
@@ -52,9 +52,9 @@ val do_sync :
   cwd:string ->
   unit ->
   string * Oi.Toolchain.info option
-(** Run a full sync in [cwd] and return the assembled [_oi/prefix/]
-    path along with the resolved toolchain so callers can reuse it
-    (e.g. [oi exec] reading env vars without re-resolving). [quiet]
-    (default [false]) routes narration to [Logs.info] instead of stdout. *)
+(** Run a full sync in [cwd] and return the assembled [_oi/prefix/] path along
+    with the resolved toolchain so callers can reuse it (e.g. [oi exec] reading
+    env vars without re-resolving). [quiet] (default [false]) routes narration
+    to [Logs.info] instead of stdout. *)
 
 val cmd : unit Cmdliner.Cmd.t

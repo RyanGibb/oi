@@ -42,8 +42,9 @@ let cmd =
     Fmt.pr "Solving %s%s into the project...@." dep_name
       (render_constraint op_ver);
     ignore
-      (Sync.do_sync ~refresh ~with_repos ~with_deps:[ pkg_spec ] ?toolchain ~proc_mgr
-         ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry ~cwd ());
+      (Sync.do_sync ~refresh ~with_repos ~with_deps:[ pkg_spec ] ?toolchain
+         ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
+         ~cwd ());
     (* Phase 2: edit dune-project. Reload in case something touched it
        during the sync (shouldn't, but cheap to be defensive). *)
     let dp = Oi.Project.Dune.load ~fs ~cwd in
@@ -80,9 +81,9 @@ let cmd =
     (* Phase 4: re-sync so the prefix reflects the committed *.opam. *)
     Fmt.pr "Re-syncing to pick up regenerated *.opam...@.";
     ignore
-      (Sync.do_sync ~quiet:true ~refresh:false ~with_repos ~with_deps:[] ?toolchain
-         ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
-         ~cwd ());
+      (Sync.do_sync ~quiet:true ~refresh:false ~with_repos ~with_deps:[]
+         ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
+         ~registry ~cwd ());
     Fmt.pr "Done.@."
   in
   let pkg_spec =
@@ -132,4 +133,3 @@ let cmd =
       $ Terms.registry $ Terms.with_repos $ Terms.toolchain $ package $ pkg_spec)
 
 (* -- exec ---------------------------------------------------------------- *)
-

@@ -230,10 +230,10 @@ module Reporepo : sig
     [ `Bumped of entry | `Unchanged of entry ]
   (** [?default] flips the [x-oi-default-toolchain] flag on the bumped entry.
       Only valid for entries that already carry [x-oi-toolchain-name] (the
-      function errors otherwise). Callers that want to switch the default
-      from one toolchain to another are responsible for clearing the flag
-      on the previous default before setting it on the new one — {!load}
-      otherwise refuses to load a multi-default reporepo. *)
+      function errors otherwise). Callers that want to switch the default from
+      one toolchain to another are responsible for clearing the flag on the
+      previous default before setting it on the new one — {!load} otherwise
+      refuses to load a multi-default reporepo. *)
 
   val remove :
     fs:Eio.Fs.dir_ty Eio.Path.t ->

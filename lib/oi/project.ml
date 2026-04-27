@@ -81,8 +81,8 @@ let load_one ~filename (opam : OpamFile.OPAM.t) : raw =
         match parse_repos_value v with
         | None ->
             Error.config_error
-              "%s: %s must be a string or a list of strings (each entry is \
-               a [@HANDLE] reporepo handle or a repository URL)"
+              "%s: %s must be a string or a list of strings (each entry is a \
+               [@HANDLE] reporepo handle or a repository URL)"
               filename Keys.repos
         | Some toks ->
             List.fold_left
@@ -124,9 +124,8 @@ let merge_extra_repos entries =
     ~on_conflict:(fun ~prev ~curr name ->
       let prev_file, _, prev_url = prev in
       let declared_in, _, url = curr in
-      Error.config_error
-        "package %s and %s disagree on %s entry %s: %s vs %s" prev_file
-        declared_in Keys.repos name prev_url url)
+      Error.config_error "package %s and %s disagree on %s entry %s: %s vs %s"
+        prev_file declared_in Keys.repos name prev_url url)
     entries
   |> List.map (fun (_, name, url) -> { name; url })
 

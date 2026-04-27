@@ -32,4 +32,3 @@ let cmd =
       Registry_docker_cmd.cmd;
       Registry_mirror.cmd;
     ]
-

@@ -1,17 +1,27 @@
 open Cmdliner
 
-
 let log_src = Logs.Src.create "oi.cmd.registry_export"
+
 module Log = (val Logs.src_log log_src : Logs.LOG)
+
 [@@@warning "-32"]
 
 let cmd =
   let run () cache_dir registry output =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = clock; sys = sys; platform = _platform; os_key = os_key; cache = cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform = _platform;
+      os_key;
+      cache;
+    } =
       Harness.bootstrap env cache_dir
     in
-    Registry_index.do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output
+    Registry_index.do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry
+      ~output
   in
   let output =
     Arg.(

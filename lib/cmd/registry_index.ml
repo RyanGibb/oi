@@ -1,12 +1,21 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
+
 [@@@warning "-32"]
 
 let cmd =
   let run () cache_dir =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = clock; sys = sys; platform = _platform; os_key = _os_key; cache = _cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform = _platform;
+      os_key = _os_key;
+      cache = _cache;
+    } =
       Harness.bootstrap env cache_dir
     in
     let layers_root = cache_dir / "layers" in
@@ -101,7 +110,8 @@ let fetch_remote_to ~sys ~fs ~registry ~rel ~dst =
   else begin
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
       Eio.Path.(fs / Filename.dirname dst);
-    D10.Sysops.Curl.fetch sys ~url:(Layer_index.url_join registry rel)
+    D10.Sysops.Curl.fetch sys
+      ~url:(Layer_index.url_join registry rel)
       ~dst:Eio.Path.(fs / dst)
   end
 
@@ -173,4 +183,3 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   finalize_sqlite_for_publish (output / "sources" / "index.db");
   if n_sources > 0 then
     Fmt.pr "  sources: %d blob(s) at %s/sources/@." n_sources output
-

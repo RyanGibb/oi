@@ -1,12 +1,12 @@
 (** Run an OCaml script via [oi run path/to/script.ml].
 
-    Parses [[\@\@\@opam pkg1 pkg2 …]] on the first line, generates a tiny
-    dune project under the cache, solves and builds the deps, compiles the
-    script, caches the resulting binary keyed on the script's content hash,
-    and execs it with the assembled prefix's env.
+    Parses [[\@\@\@opam pkg1 pkg2 …]] on the first line, generates a tiny dune
+    project under the cache, solves and builds the deps, compiles the script,
+    caches the resulting binary keyed on the script's content hash, and execs it
+    with the assembled prefix's env.
 
-    The [oi run] command in {!Run} dispatches here when [TARGET] resolves
-    to a file ending in [.ml]. *)
+    The [oi run] command in {!Run} dispatches here when [TARGET] resolves to a
+    file ending in [.ml]. *)
 
 val run :
   sys:D10.Sysops.t ->

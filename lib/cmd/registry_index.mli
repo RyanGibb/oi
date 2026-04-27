@@ -9,8 +9,8 @@ val do_registry_export :
   registry:string ->
   output:string ->
   unit
-(** Bulk export the registry index + sources tarball to [output]. Shared
-    with {!Registry_export} since both commands fall through to the same
-    operation. *)
+(** Bulk export the registry index + sources tarball to [output]. Shared with
+    {!Registry_export} since both commands fall through to the same operation.
+*)
 
 val cmd : unit Cmdliner.Cmd.t

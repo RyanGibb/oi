@@ -25,10 +25,10 @@ type env = {
 
 val run : (Eio_unix.Stdenv.base -> 'a) -> 'a
 (** [run f] sets up the Eio root, installs the SIGINT/SIGTERM handler under a
-    fresh switch, and calls [f env]. Any exception that escapes [f] is
-    caught: signal-style exits print "Interrupted." and exit 130; structured
-    {!Oi.Error.E} or [Failure] exceptions print a single coloured line and
-    exit 1; everything else prints a generic error and exits 1. *)
+    fresh switch, and calls [f env]. Any exception that escapes [f] is caught:
+    signal-style exits print "Interrupted." and exit 130; structured
+    {!Oi.Error.E} or [Failure] exceptions print a single coloured line and exit
+    1; everything else prints a generic error and exits 1. *)
 
 val bootstrap : Eio_unix.Stdenv.base -> string -> env
 (** [bootstrap env cache_dir] reads the proc-mgr / fs / clock / stdio

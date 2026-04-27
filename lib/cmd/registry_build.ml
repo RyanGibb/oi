@@ -1,8 +1,8 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
-
 let log_src = Logs.Src.create "oi.cmd.registry_build"
+
 module Log = (val Logs.src_log log_src : Logs.LOG)
 
 (* Helper for registry_build_cmd, will move with it when that command lifts. *)
@@ -140,7 +140,6 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       | _ -> ())
     rows
 
-
 let cmd =
   let run () data_dir cache_dir refresh dry_run all only skip registry
       with_repos with_deps jobs toolchain_override targets =
@@ -154,7 +153,9 @@ let cmd =
     let run_start_time = Unix.time () in
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-    let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+    let conf =
+      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    in
     let remote = Terms.remote_of_registry registry in
     (* When [--all] is set, walk every overlay in the reporepo and
        derive targets from each one:
@@ -481,7 +482,8 @@ let cmd =
         List.find_map
           (fun h ->
             match dir_for_handle h with
-            | Some d -> Target.latest_version_in_dirs ~pkg:(bare_name target) [ d ]
+            | Some d ->
+                Target.latest_version_in_dirs ~pkg:(bare_name target) [ d ]
             | None -> None)
           handles
       in
@@ -569,7 +571,8 @@ let cmd =
        [ensure_installed] pass. With [--toolchain=NAME] every group
        resolves to the same toolchain regardless of its handles, so all
        groups share one cache slot. *)
-    let resolved_toolchains : (string list, Oi.Toolchain.info option) Hashtbl.t =
+    let resolved_toolchains : (string list, Oi.Toolchain.info option) Hashtbl.t
+        =
       Hashtbl.create 4
     in
     let toolchain_for_handles handles =
@@ -581,8 +584,8 @@ let cmd =
       | Some i -> i
       | None ->
           let info =
-            Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf
-              ~install:true ~override:toolchain_override ~handles:key ()
+            Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+              ~override:toolchain_override ~handles:key ()
           in
           Hashtbl.add resolved_toolchains key info;
           info
@@ -621,8 +624,8 @@ let cmd =
          handles are kept verbatim — the user named those explicitly
          via [@h/pkg] and expects them in scope regardless. *)
       let global_handles =
-        Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(Terms.reporepo_path ())
-          ~toolchain global_handles
+        Oi.Pipeline.filter_compatible_overlays
+          ~reporepo_path:(Terms.reporepo_path ()) ~toolchain global_handles
       in
       let effective =
         global_handles @ handles |> List.sort_uniq String.compare
@@ -765,45 +768,46 @@ let cmd =
         if group = [] then begin
           Log.info (fun m ->
               m
-                "Skipping solve group: every entry was a root package \
-                 replaced by --toolchain");
+                "Skipping solve group: every entry was a root package replaced \
+                 by --toolchain");
           None
         end
         else
-        let items = List.map Target.parse_pkg_target group in
-        let names = List.map fst items in
-        let constraints =
-          List.fold_left
-            (fun acc (name, c) ->
-              match c with
-              | None -> acc
-              | Some c -> OpamPackage.Name.Map.add name c acc)
-            base_constraints items
-        in
-        match
-          Oi.Solver.solve ~fs ~cache_root gctx ~packages_dirs:pkg_dirs
-            ~constraints (names @ extra_names)
-        with
-        | Ok pkgs ->
-            Log.info (fun m ->
-                let tc_label =
-                  match toolchain with
-                  | None -> ""
-                  | Some i -> Fmt.str " (toolchain %s)" i.handle
-                in
-                m "Solved %s%s: %d packages" (group_label group) tc_label
-                  (List.length pkgs));
-            Some (group, handles, pkg_dirs, pkgs, toolchain, group_conf, tc_ctx)
-        | Error msg ->
-            let log_path =
-              write_solve_failure_log ~targets:group ~handles ~msg
-            in
-            List.iter
-              (fun t -> Hashtbl.replace solve_failures t (msg, log_path))
-              group;
-            Log.debug (fun m ->
-                m "solve failed: %s: %s" (group_label group) msg);
-            None
+          let items = List.map Target.parse_pkg_target group in
+          let names = List.map fst items in
+          let constraints =
+            List.fold_left
+              (fun acc (name, c) ->
+                match c with
+                | None -> acc
+                | Some c -> OpamPackage.Name.Map.add name c acc)
+              base_constraints items
+          in
+          match
+            Oi.Solver.solve ~fs ~cache_root gctx ~packages_dirs:pkg_dirs
+              ~constraints (names @ extra_names)
+          with
+          | Ok pkgs ->
+              Log.info (fun m ->
+                  let tc_label =
+                    match toolchain with
+                    | None -> ""
+                    | Some i -> Fmt.str " (toolchain %s)" i.handle
+                  in
+                  m "Solved %s%s: %d packages" (group_label group) tc_label
+                    (List.length pkgs));
+              Some
+                (group, handles, pkg_dirs, pkgs, toolchain, group_conf, tc_ctx)
+          | Error msg ->
+              let log_path =
+                write_solve_failure_log ~targets:group ~handles ~msg
+              in
+              List.iter
+                (fun t -> Hashtbl.replace solve_failures t (msg, log_path))
+                group;
+              Log.debug (fun m ->
+                  m "solve failed: %s: %s" (group_label group) msg);
+              None
       in
       if n_groups <= 1 then List.filter_map solve_one target_groups
       else
@@ -1080,8 +1084,8 @@ let cmd =
               Oi.Cache.Logs.write ~fs ~cache_root log_path body;
               Log.warn (fun m ->
                   m
-                    "%s: opam reports %d missing system package(s); \
-                     proceeding with the build anyway. See %s"
+                    "%s: opam reports %d missing system package(s); proceeding \
+                     with the build anyway. See %s"
                     group_targets
                     (OpamSysPkg.Set.cardinal missing)
                     log_path)
@@ -1103,16 +1107,16 @@ let cmd =
                 List.filter_map
                   (fun (p : Oi.Plan.package_plan) ->
                     match Hashtbl.find_opt failed_layers p.layer_hash with
-                    | Some path
-                      when path <> "" && not (Hashtbl.mem seen path) ->
+                    | Some path when path <> "" && not (Hashtbl.mem seen path)
+                      ->
                         Hashtbl.replace seen path ();
                         Some (p.pkg, path)
                     | _ -> None)
                   g.packages)
               exec_plan.groups
           in
-          let build_outcome :
-              [ `Ok | `Fail of string * (string * string) list ] =
+          let build_outcome : [ `Ok | `Fail of string * (string * string) list ]
+              =
             let build_plan =
               Oi.Pipeline.fetch_remote_layers ?jobs ~remote ~d10
                 ~packages_dirs:pkg_dirs ~ctx:group_ctx ~pkgs:sorted_pkgs
@@ -1416,8 +1420,7 @@ let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
                  the failure makes that connection visible without
                  needing -vv. *)
               Log.warn (fun m ->
-                  m "overlay depexts: %s group failed to solve: %s" handle
-                    msg);
+                  m "overlay depexts: %s group failed to solve: %s" handle msg);
               None)
         groups)
     targets
@@ -1443,8 +1446,8 @@ let depexts_union ~conf solves =
 let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf
     ?override () =
   let solves =
-    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh
-      ~host_conf:conf ?override ()
+    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf:conf
+      ?override ()
   in
   depexts_union ~conf solves
 
@@ -1473,4 +1476,3 @@ let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
       in
       (distro, depexts_union ~conf:distro_conf solves))
     distros
-

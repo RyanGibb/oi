@@ -1,7 +1,6 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
-
 let short_hash h = String.sub h 0 (min 12 (String.length h))
 
 (* Return the layer hash whose [layer.json] declares package name
@@ -38,8 +37,8 @@ let leaf_hash_for ~fs ~cache ~os_key ~want_name hashes =
    skipped; other tools still install. Returns the assembled path if
    at least one tool made it in, or [None] if nothing to install. *)
 let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
-    ~cache ~data_dir ~conf ~os_key ~extra_repos ~pins ?toolchain ?remote ~cwd
-    () =
+    ~cache ~data_dir ~conf ~os_key ~extra_repos ~pins ?toolchain ?remote ~cwd ()
+    =
   let say fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Fmt.pr "%s@." s) fmt
@@ -96,7 +95,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
   | [], [] ->
       say "No dev tools to install";
       None
-  | _ ->
+  | _ -> (
       let from_toolchain =
         List.filter_map
           (fun n ->
@@ -105,7 +104,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
       in
       let from_probes = List.filter_map install_probed probed_hits in
       let leaves = from_toolchain @ from_probes in
-      (match leaves with
+      match leaves with
       | [] -> None
       | _ ->
           let tools_dir = cwd / "_oi" / "tools" in
@@ -127,8 +126,8 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
    use; [oi sync] does it inline below, [oi exec] / [oi env] call this
    helper directly so they pick the same toolchain. *)
 let resolve_project_toolchain ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ~fs ~sys ~cache ~data_dir ~conf ~install ~override
-    ~cwd () =
+    ?(with_deps = []) ~fs ~sys ~cache ~data_dir ~conf ~install ~override ~cwd ()
+    =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let project_overlays =
@@ -141,7 +140,8 @@ let resolve_project_toolchain ?(refresh = false) ?(with_repos = [])
     Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
   in
   let tc_handles =
-    project_overlays @ url_project.overlays @ Target.handles_of_tokens with_repos
+    project_overlays @ url_project.overlays
+    @ Target.handles_of_tokens with_repos
     |> List.sort_uniq String.compare
   in
   Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override
@@ -153,8 +153,8 @@ let resolve_project_toolchain ?(refresh = false) ?(with_repos = [])
    [quiet] is true, narration goes to Logs.info (hidden at default
    verbosity); otherwise it prints to stdout. *)
 let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?(toolchain : string option) ~proc_mgr ~fs ~clock ~sys ~platform
-    ~os_key ~cache ~data_dir ~registry ~cwd () =
+    ?(with_deps = []) ?jobs ?(toolchain : string option) ~proc_mgr ~fs ~clock
+    ~sys ~platform ~os_key ~cache ~data_dir ~registry ~cwd () =
   let toolchain_override = toolchain in
   let say fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
@@ -172,7 +172,9 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   say "Dependencies from opam files: %s" (String.concat ", " deps);
   if url_project.roots <> [] then
     say "URL-supplied packages: %s" (String.concat ", " url_project.roots);
-  let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+  let conf =
+    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
   (* Same handle scope as {resolve_project_toolchain} — kept inline
      here so we can reuse the already-loaded [project] / [url_project]
      side-products below. *)
@@ -187,8 +189,8 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   in
   let conf, _ = Oi.Pipeline.toolchain_views toolchain conf in
   let project_overlays =
-    Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(Terms.reporepo_path ())
-      ~toolchain candidate_overlays
+    Oi.Pipeline.filter_compatible_overlays
+      ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
   in
   if project_overlays <> [] then
     say "Project overlays (from x-repos): %s"
@@ -217,8 +219,8 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   let url_names = List.map OpamPackage.Name.of_string url_project.roots in
   let names =
     List.map OpamPackage.Name.of_string deps @ extra_names @ url_names
-    |> Oi.Pipeline.drop_override_compiler_roots
-         ~override:toolchain_override ~toolchain
+    |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+         ~toolchain
   in
   let layer_hashes =
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key

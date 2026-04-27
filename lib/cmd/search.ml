@@ -2,7 +2,6 @@ open Cmdliner
 
 let ( / ) = Filename.concat
 
-
 (* -- search -------------------------------------------------------------- *)
 
 (* Glob match with [*] wildcard. Used for package-name filtering in
@@ -158,7 +157,15 @@ let cmd =
   let run () data_dir cache_dir registry all_versions overlay_filter long
       pattern =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = clock; sys = sys; platform = _platform; os_key = os_key; cache = cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform = _platform;
+      os_key;
+      cache;
+    } =
       Harness.bootstrap env cache_dir
     in
     (* Accept [@handle/PATTERN] as a shortcut for
@@ -170,9 +177,12 @@ let cmd =
       | Some (h, rest) -> (rest, h :: overlay_filter)
     in
     let clk = (clock :> D10.Config.clk) in
-    let index_path = Layer_index.ensure_local ~sys ~fs ~clock:clk ~cache ~os_key in
+    let index_path =
+      Layer_index.ensure_local ~sys ~fs ~clock:clk ~cache ~os_key
+    in
     (match Layer_index.ensure_remote ~sys ~fs ~cache ~os_key ~registry with
-    | Some remote_path -> Layer_index.merge_remote_into_local ~index_path ~remote_path
+    | Some remote_path ->
+        Layer_index.merge_remote_into_local ~index_path ~remote_path
     | None -> ());
     let db = D10.Index.open_ ~path:index_path in
     let d10 : D10.Config.t =

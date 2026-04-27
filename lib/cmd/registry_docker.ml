@@ -49,25 +49,25 @@ let build_depexts = function
    failure we log and move on. *)
 let arrow_install_cmd = function
   | `Apt ->
-      "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install \
-       -y --no-install-recommends ca-certificates lsb-release wget gpg && \
-       codename=$(lsb_release --codename --short) && distro=$(lsb_release \
-       --id --short | tr 'A-Z' 'a-z') && url=\"https://apache.jfrog.io/artifactory/arrow/$distro/apache-arrow-apt-source-latest-$codename.deb\" \
+      "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+       --no-install-recommends ca-certificates lsb-release wget gpg && \
+       codename=$(lsb_release --codename --short) && distro=$(lsb_release --id \
+       --short | tr 'A-Z' 'a-z') && \
+       url=\"https://apache.jfrog.io/artifactory/arrow/$distro/apache-arrow-apt-source-latest-$codename.deb\" \
        && if wget -q -O /tmp/arrow.deb \"$url\"; then apt-get install -y \
-       --no-install-recommends /tmp/arrow.deb && rm /tmp/arrow.deb && \
-       apt-get update -qq && apt-get install -y --no-install-recommends \
-       libarrow-dev || echo \"apt-get install libarrow-dev failed; \
-       conf-arrow probe will fail if needed\"; else echo \"Apache Arrow \
-       apt-source not yet published for $distro/$codename ($url 404); \
-       libarrow-dev will be unavailable\"; fi && rm -rf \
-       /var/lib/apt/lists/*"
+       --no-install-recommends /tmp/arrow.deb && rm /tmp/arrow.deb && apt-get \
+       update -qq && apt-get install -y --no-install-recommends libarrow-dev \
+       || echo \"apt-get install libarrow-dev failed; conf-arrow probe will \
+       fail if needed\"; else echo \"Apache Arrow apt-source not yet published \
+       for $distro/$codename ($url 404); libarrow-dev will be unavailable\"; \
+       fi && rm -rf /var/lib/apt/lists/*"
   | `Yum ->
-      "dnf install -y libarrow-devel || echo \"libarrow-devel not \
-       available on this distro; conf-arrow probe will fail if needed\""
+      "dnf install -y libarrow-devel || echo \"libarrow-devel not available on \
+       this distro; conf-arrow probe will fail if needed\""
   | `Apk ->
-      "apk add --no-cache apache-arrow-dev || echo \"apache-arrow-dev not \
-       in this Alpine release's community repo; conf-arrow probe will \
-       fail if needed\""
+      "apk add --no-cache apache-arrow-dev || echo \"apache-arrow-dev not in \
+       this Alpine release's community repo; conf-arrow probe will fail if \
+       needed\""
   | _ -> ""
 
 (* Hardcoded -dev packages that the upstream [compute_overlay_depexts]
@@ -218,17 +218,14 @@ let distro_stage ?(overlay_depexts = []) d =
   in
   let base = build_depexts mgr in
   let extra = extra_depexts mgr in
-  let combined_base =
-    if extra = "" then base else base ^ " " ^ extra
-  in
+  let combined_base = if extra = "" then base else base ^ " " ^ extra in
   (* Dedup against the base + hardcoded-extras list: overlay depexts
      often repeat libs already covered (gmp-devel, libev-devel, …)
      and a duplicated install command is both ugly and wastes
      [apt-get update] / [dnf metadata] time on some package
      managers. *)
   let base_words =
-    String.split_on_char ' ' combined_base
-    |> List.filter (fun s -> s <> "")
+    String.split_on_char ' ' combined_base |> List.filter (fun s -> s <> "")
   in
   let overlay_extras =
     overlay_depexts

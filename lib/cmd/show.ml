@@ -194,7 +194,9 @@ let show_repositories ?toolchain ~with_repos () =
         Oi.Source.Reporepo.base_entries ()
         |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
   in
-  let extra_handles = List.filter (fun h -> not (Target.is_url_like h)) with_repos in
+  let extra_handles =
+    List.filter (fun h -> not (Target.is_url_like h)) with_repos
+  in
   let all = base_handles @ extra_handles |> List.sort_uniq String.compare in
   let ordered =
     let seen = Hashtbl.create 4 in
@@ -327,19 +329,30 @@ let show_render_info ~target_label ~target_version ~target_opam ~overlay ~os_key
       String.split_on_char '\n' body
       |> List.iter (fun line -> Fmt.pr "  %s@," line));
   Fmt.pr "@]@."
+
 [@@@warning "-32"]
 
 let cmd =
-  let run () data_dir cache_dir refresh registry toolchain_override targets with_repos
-      with_deps tree only_depexts os_override =
+  let run () data_dir cache_dir refresh registry toolchain_override targets
+      with_repos with_deps tree only_depexts os_override =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = clock; sys = sys; platform = platform; os_key = os_key; cache = cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform;
+      os_key;
+      cache;
+    } =
       Harness.bootstrap env cache_dir
     in
     let _ = registry in
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-    let conf_host = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+    let conf_host =
+      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    in
     let conf =
       match os_override with
       | None -> conf_host
@@ -404,12 +417,14 @@ let cmd =
       | Some (info : Oi.Toolchain.info) -> Some info.packages_dirs
     in
     let project_overlays =
-      Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(Terms.reporepo_path ())
-        ~toolchain project_overlays
+      Oi.Pipeline.filter_compatible_overlays
+        ~reporepo_path:(Terms.reporepo_path ()) ~toolchain project_overlays
     in
     let with_repos = project_overlays @ with_repos in
     let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in
-    let all_extras = Target.merge_extras ~cli:cli_extras ~project:project_extras in
+    let all_extras =
+      Target.merge_extras ~cli:cli_extras ~project:project_extras
+    in
     let extra_pkg_dirs =
       Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
     in
@@ -426,7 +441,8 @@ let cmd =
     in
     let extra_constraints = Oi.Project.Script.constraints extra_deps in
     let handle_constraints =
-      Target.handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras handle_pins
+      Target.handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras
+        handle_pins
     in
     let extra_constraints =
       OpamPackage.Name.Map.union
@@ -445,8 +461,8 @@ let cmd =
     let names =
       List.map OpamPackage.Name.of_string targets
       @ project_dep_names @ extra_names @ url_names
-      |> Oi.Pipeline.drop_override_compiler_roots
-           ~override:toolchain_override ~toolchain
+      |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+           ~toolchain
     in
     if names = [] then
       Oi.Error.config_error
@@ -655,9 +671,6 @@ let cmd =
 
 (* -- env ----------------------------------------------------------------- *)
 
-
 (* -- tool installation --------------------------------------------------- *)
 
-
 (* -- add ----------------------------------------------------------------- *)
-

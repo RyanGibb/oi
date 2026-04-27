@@ -1,5 +1,4 @@
 let ( / ) = Filename.concat
-
 let remote_index_max_age = 3600.0 (* 1 hour *)
 
 let url_join registry rel =

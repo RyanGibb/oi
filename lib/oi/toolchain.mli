@@ -47,8 +47,8 @@ type info = {
           [x-oi-toolchain-compiler], e.g. [ocaml-base-compiler] for upstream,
           [ocaml-variants] for relocatable / oxcaml). Replaces the hardcoded
           [["ocaml"; "ocaml-base-compiler"; "ocaml-variants"; ...]] families
-          previously sprinkled across the codebase: every site that wants to
-          ask "is this package the toolchain's compiler?" reads this field. *)
+          previously sprinkled across the codebase: every site that wants to ask
+          "is this package the toolchain's compiler?" reads this field. *)
   root_names : OpamPackage.Name.Set.t;
       (** Names originally passed as root packages to the toolchain solver (e.g.
           [ocaml-variants], [ocamlfind]). Subset of [packages] by name. The

@@ -42,21 +42,20 @@ let cmd =
           `P
             "Solves every overlay's $(b,x-root-packages) once and prints the \
              union of $(b,depexts:) declared by the resulting package set, \
-             evaluated against the active opam filter variables. The output \
-             is one package name per line, suitable for piping into a \
-             package manager.";
+             evaluated against the active opam filter variables. The output is \
+             one package name per line, suitable for piping into a package \
+             manager.";
           `P
             "Equivalent to what $(b,oi registry docker) bakes into each \
              generated Dockerfile, but for the current host (or any \
-             $(b,--os=)-overridden one). The intended audience is CI \
-             workflows that build a registry on macOS or another OS without \
-             a generated Dockerfile to drive the install.";
+             $(b,--os=)-overridden one). The intended audience is CI workflows \
+             that build a registry on macOS or another OS without a generated \
+             Dockerfile to drive the install.";
           `S Manpage.s_examples;
           `Pre
             "  brew install \\$(oi registry depexts)\n\
             \  oi registry depexts --os=alpine-3.23\n\
-            \  apt-get install -y \\$(oi registry depexts \
-             --os=ubuntu-25.10)";
+            \  apt-get install -y \\$(oi registry depexts --os=ubuntu-25.10)";
         ]
   in
   Cmd.v info

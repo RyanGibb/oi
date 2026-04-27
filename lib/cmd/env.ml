@@ -17,7 +17,9 @@ let cmd =
     let want_extras =
       with_repos <> [] || with_deps <> [] || toolchain <> None
     in
-    let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+    let conf =
+      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    in
     (* Use the same project-aware resolve [oi sync] uses, so [oi env]
        picks the toolchain the existing prefix was actually built with
        (project [x-repos:] declarations and all). *)
@@ -27,7 +29,8 @@ let cmd =
     in
     let conf, tc_ctx = Oi.Pipeline.toolchain_views tc_info conf in
     let prefix =
-      if (not want_extras) && Workspace.path_exists cwd "_oi/prefix" then oi_prefix
+      if (not want_extras) && Workspace.path_exists cwd "_oi/prefix" then
+        oi_prefix
       else begin
         (* Fall back to a minimal compiler-only prefix, optionally
            extended with CLI extras + with-deps. *)
@@ -98,24 +101,22 @@ let cmd =
             "Reuses $(b,_oi/prefix/) when it exists and no extras are \
              requested. With $(b,--with), $(b,--with-repo), $(b,--toolchain), \
              or when $(b,_oi/prefix/) is missing, builds a one-shot prefix in \
-             process; $(b,.envrc) and dev tools are not updated. Run \
-             $(b,oi sync) for that.";
+             process; $(b,.envrc) and dev tools are not updated. Run $(b,oi \
+             sync) for that.";
           `S "TOOLCHAIN";
           `P "The active toolchain is picked in this order:";
           `I ("1.", "$(b,--toolchain=NAME), if given.");
           `I
             ( "2.",
-              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — \
-               from $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
+              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — from \
+               $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
                $(b,x-repos:). Conflicting tags are an error." );
           `I
             ( "3.",
-              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)."
-            );
+              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
         ]
   in
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
       $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain)
-

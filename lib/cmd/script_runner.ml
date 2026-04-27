@@ -6,8 +6,8 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
   let all_deps = Oi.Project.Script.dedup (file_deps @ cli_deps) in
   if all_deps = [] then
     Oi.Error.msg
-      "No dependencies found. Add [@@@opam pkg1 pkg2] to the first line or \
-       use --with=pkg";
+      "No dependencies found. Add [@@@opam pkg1 pkg2] to the first line or use \
+       --with=pkg";
   let script_hash = Oi.Project.Script.script_hash script_path all_deps in
   let run_dir = Oi.Cache.run_dir cache ~hash:script_hash in
   let run_dir_s = Eio.Path.native_exn run_dir in
@@ -25,8 +25,7 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
     let dep_names =
       List.filter_map
         (fun (d : Oi.Project.Script.dep) ->
-          if OpamPackage.Name.equal d.name ocaml_name then None
-          else Some d.name)
+          if OpamPackage.Name.equal d.name ocaml_name then None else Some d.name)
         all_deps
     in
     let constraints = Oi.Project.Script.constraints all_deps in
@@ -65,14 +64,11 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
     Oi.Project.Script.generate_project ~script:script_path ~deps:all_deps
       ~dir:build_dir;
     let build_env =
-      Oi.Solver.Env.make_env ~prefix
-        ~dune_cache_root:(Oi.Cache.dune_root cache) ()
+      Oi.Solver.Env.make_env ~prefix ~dune_cache_root:(Oi.Cache.dune_root cache)
+        ()
     in
     Eio.Process.run proc_mgr ~env:build_env
-      [
-        "/bin/sh"; "-c";
-        Fmt.str "cd %s && dune build main.exe 2>&1" build_dir;
-      ];
+      [ "/bin/sh"; "-c"; Fmt.str "cd %s && dune build main.exe 2>&1" build_dir ];
     let built = build_dir / "_build" / "default" / "main.exe" in
     if Workspace.path_exists fs built then begin
       let content = Eio.Path.load Eio.Path.(fs / built) in

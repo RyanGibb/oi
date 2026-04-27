@@ -7,8 +7,7 @@ let setup_log style_renderer level =
   Logs.set_level level;
   Logs.set_reporter (Progress.logs_reporter ())
 
-let log =
-  Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
+let log = Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
 
 let data_dir =
   let app_upper = String.uppercase_ascii Workspace.app_name in

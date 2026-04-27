@@ -3,15 +3,17 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let cmd =
-  let run () data_dir cache_dir refresh dry_run registry toolchain_override target
-      with_deps with_repos jobs args =
+  let run () data_dir cache_dir refresh dry_run registry toolchain_override
+      target with_deps with_repos jobs args =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
     in
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-    let conf = Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version in
+    let conf =
+      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    in
     let remote = Terms.remote_of_registry registry in
     let dune_cache_root = Oi.Cache.dune_root cache in
     (* [TARGET] and every [--with] token accept the
@@ -82,12 +84,14 @@ let cmd =
        atop). When [--toolchain] is set, drop any project overlays
        tagged for a different toolchain — the explicit flag wins. *)
     let project_overlays =
-      Oi.Pipeline.filter_compatible_overlays ~reporepo_path:(Terms.reporepo_path ())
-        ~toolchain project_overlays
+      Oi.Pipeline.filter_compatible_overlays
+        ~reporepo_path:(Terms.reporepo_path ()) ~toolchain project_overlays
     in
     let with_repos = project_overlays @ with_repos in
     let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in
-    let all_extras = Target.merge_extras ~cli:cli_extras ~project:project_extras in
+    let all_extras =
+      Target.merge_extras ~cli:cli_extras ~project:project_extras
+    in
     (* Pin each [@handle/pkg] (from TARGET or [--with]) to whatever
        version the overlay ships, so a dev-tagged version (e.g.
        [2.0.0~dev]) that would otherwise sort below a stable repo's
@@ -96,7 +100,8 @@ let cmd =
        the subsequent solve reuses the same clone. *)
     let handle_pins = Stdlib.Option.to_list target_pin @ with_pins in
     let handle_constraints =
-      Target.handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras handle_pins
+      Target.handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras
+        handle_pins
     in
     let extra_constraints =
       OpamPackage.Name.Map.union
@@ -116,18 +121,19 @@ let cmd =
         | Some m -> (
             match OpamPackage.of_string_opt m.package with
             | Some p
-              when OpamPackage.Name.to_string (OpamPackage.name p) = want_name ->
+              when OpamPackage.Name.to_string (OpamPackage.name p) = want_name
+              ->
                 Some hash
             | _ -> None)
         | None -> None
       in
       match List.find_map owns_target hashes with
       | None -> []
-      | Some hash ->
-          (try
-             Eio.Path.read_dir Eio.Path.(fs / layers_dir / hash / "fs" / "bin")
-             |> List.sort String.compare
-           with Eio.Exn.Io _ -> [])
+      | Some hash -> (
+          try
+            Eio.Path.read_dir Eio.Path.(fs / layers_dir / hash / "fs" / "bin")
+            |> List.sort String.compare
+          with Eio.Exn.Io _ -> [])
     in
     (* When a solve succeeds but [bin/<binary_name>] is missing, stash
        the binaries the target package's layer ships so the error site
@@ -145,8 +151,8 @@ let cmd =
           m "Solving for packages: %s" (String.concat ", " pkg_names));
       let names =
         List.map OpamPackage.Name.of_string pkg_names
-        |> Oi.Pipeline.drop_override_compiler_roots
-             ~override:toolchain_override ~toolchain
+        |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+             ~toolchain
       in
       let layer_hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
@@ -199,11 +205,11 @@ let cmd =
             | Some (pin : Target.handle_pin) ->
                 let want_name = OpamPackage.Name.to_string pin.pkg in
                 layer_binaries ~hashes:layer_hashes ~want_name
-            | None ->
-                (try
-                   Eio.Path.read_dir Eio.Path.(fs / prefix / "bin")
-                   |> List.sort String.compare
-                 with Eio.Exn.Io _ -> [])
+            | None -> (
+                try
+                  Eio.Path.read_dir Eio.Path.(fs / prefix / "bin")
+                  |> List.sort String.compare
+                with Eio.Exn.Io _ -> [])
           in
           unfound_bins := bins;
           Logs.info (fun m ->
@@ -248,8 +254,8 @@ let cmd =
       in
       let constraints = Oi.Project.Script.constraints all_script_deps in
       let dep_opam_names =
-        Oi.Pipeline.drop_override_compiler_roots
-          ~override:toolchain_override ~toolchain dep_opam_names
+        Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+          ~toolchain dep_opam_names
       in
       let layer_hashes =
         if dep_opam_names = [] then []
@@ -290,15 +296,18 @@ let cmd =
          own [info.packages_dirs] takes the place of the default base
          when set (matches what Pipeline.build does), so the precheck
          sees the same package universe the actual solve will. *)
-      let packages_dirs = lazy (
-        let pin_dir =
-          Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
-        in
-        Stdlib.Option.to_list pin_dir
-        @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
-        @ (match toolchain with
+      let packages_dirs =
+        lazy
+          (let pin_dir =
+             Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
+           in
+           Stdlib.Option.to_list pin_dir
+           @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
+           @
+           match toolchain with
            | Some (info : Oi.Toolchain.info) -> info.packages_dirs
-           | None -> Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()))
+           | None ->
+               Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ())
       in
       let package_exists name =
         List.exists
@@ -352,12 +361,12 @@ let cmd =
         let suggestion =
           match !unfound_bins with
           | [] ->
-              " The package solved but installed no executables — check \
-               the overlay's opam file."
+              " The package solved but installed no executables — check the \
+               overlay's opam file."
           | bins ->
               Fmt.str
-                " The package installs: %s.@,To run one of them: oi run \
-                 --with=%s %s"
+                " The package installs: %s.@,\
+                 To run one of them: oi run --with=%s %s"
                 (String.concat ", " bins) qualified (List.hd bins)
         in
         Oi.Error.not_found binary_name
@@ -365,8 +374,8 @@ let cmd =
           suggestion
       in
       (match target_pin with
-       | Some pin when not from_with -> fail_overlay_pin_no_binary pin
-       | _ -> ());
+      | Some pin when not from_with -> fail_overlay_pin_no_binary pin
+      | _ -> ());
       if not from_with then begin
         (* Dash-split prefixes, longest-first: "a-b-c" →
            ["a-b-c"; "a-b"; "a"]. Each accumulator step appends the next
@@ -389,8 +398,8 @@ let cmd =
         let clk = (Eio.Stdenv.clock env :> D10.Config.clk) in
         let from_index =
           match
-            Layer_index.binary_to_package ~sys ~fs ~clock:clk ~cache ~os_key ~registry
-              binary_name
+            Layer_index.binary_to_package ~sys ~fs ~clock:clk ~cache ~os_key
+              ~registry binary_name
           with
           | Some (pkg_name, _) when pkg_name <> binary_name ->
               (* Layer index says [bin/<binary_name>] is shipped by
@@ -543,14 +552,13 @@ let cmd =
           `I ("1.", "$(b,--toolchain=NAME), if given.");
           `I
             ( "2.",
-              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — \
-               from a $(b,@h/pkg) target, $(b,--with-repo=@h), \
-               $(b,--with=@h/pkg), or the project's $(b,x-repos:). \
-               Conflicting tags are an error." );
+              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — from \
+               a $(b,@h/pkg) target, $(b,--with-repo=@h), $(b,--with=@h/pkg), \
+               or the project's $(b,x-repos:). Conflicting tags are an error."
+            );
           `I
             ( "3.",
-              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)."
-            );
+              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
           `S "GIT URLS";
           `P
             "Passing $(b,--with=URL) clones the repository and treats every \

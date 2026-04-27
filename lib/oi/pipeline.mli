@@ -54,8 +54,8 @@ val resolve_toolchain :
 
     + [override = Some h]: resolve [h] directly. The [--toolchain=NAME] flag.
     + Implicit pickup from [handles]: scan each handle's latest reporepo entry
-      for an [x-oi-toolchain] field, and check whether the handle itself names
-      a toolchain definition ([x-oi-toolchain-name]). A unique non-empty result
+      for an [x-oi-toolchain] field, and check whether the handle itself names a
+      toolchain definition ([x-oi-toolchain-name]). A unique non-empty result
       wins; multiple distinct names hard-error with a "pass --toolchain=NAME to
       disambiguate" hint.
     + Reporepo default: the entry flagged [x-oi-default-toolchain: true].

@@ -1,11 +1,18 @@
 open Cmdliner
 
-
 let cmd =
   let run () cache_dir data_dir all toolchains sources binaries dune_cache repos
       dry_run =
     Harness.run @@ fun env ->
-    let { Harness.proc_mgr = _proc_mgr; fs = fs; clock = _clock; sys = sys; platform = _platform; os_key = _os_key; cache = cache } =
+    let {
+      Harness.proc_mgr = _proc_mgr;
+      fs;
+      clock = _clock;
+      sys;
+      platform = _platform;
+      os_key = _os_key;
+      cache;
+    } =
       Harness.bootstrap env cache_dir
     in
     let clean_any =
@@ -156,8 +163,7 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir $ all $ toolchains
-      $ sources $ binaries $ dune_cache $ repos $ dry_run)
+      const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir $ all
+      $ toolchains $ sources $ binaries $ dune_cache $ repos $ dry_run)
 
 (* -- registry list ------------------------------------------------------- *)
-

@@ -4,9 +4,8 @@
 
 (** [oi] entry point.
 
-    Each top-level command lives in its own module under {!Oi_cmd}; the
-    program info and shared man-page text are the only things this file
-    still owns. *)
+    Each top-level command lives in its own module under {!Oi_cmd}; the program
+    info and shared man-page text are the only things this file still owns. *)
 
 open Cmdliner
 
@@ -19,8 +18,7 @@ let version =
   | None -> "n/a"
 
 let info =
-  Cmd.info "oi" ~version
-    ~doc:"A fast, stateless OCaml package manager"
+  Cmd.info "oi" ~version ~doc:"A fast, stateless OCaml package manager"
     ~man:
       [
         `S Manpage.s_description;
@@ -63,19 +61,18 @@ let info =
           \  oi run my_script.ml\n\
           \  oi run https://example.com/hello.ml";
         `P
-          "Inside a project, $(b,oi sync) installs the project's \
-           dependencies into $(b,_oi/prefix/) and writes a $(b,.envrc) for \
-           $(b,direnv). The sync also installs dev tools ($(b,odoc), \
-           $(b,merlin), $(b,ocaml-lsp-server), plus $(b,mdx) and \
-           $(b,ocamlformat) when the project uses them) into \
-           $(b,_oi/tools/).";
+          "Inside a project, $(b,oi sync) installs the project's dependencies \
+           into $(b,_oi/prefix/) and writes a $(b,.envrc) for $(b,direnv). The \
+           sync also installs dev tools ($(b,odoc), $(b,merlin), \
+           $(b,ocaml-lsp-server), plus $(b,mdx) and $(b,ocamlformat) when the \
+           project uses them) into $(b,_oi/tools/).";
         `Pre
           "  oi sync\n\
           \  direnv allow      # or: eval \"\\$(oi env)\"\n\
           \  oi exec dune build";
         `P
-          "Add a new dependency. $(b,oi) edits $(b,dune-project), \
-           regenerates the $(b,*.opam) files, and re-syncs:";
+          "Add a new dependency. $(b,oi) edits $(b,dune-project), regenerates \
+           the $(b,*.opam) files, and re-syncs:";
         `Pre "  oi add logs\n  oi add \"fmt>=0.9\"";
         `P
           "An $(i,overlay) is somebody's curated opam repository, pinned to a \
@@ -97,18 +94,18 @@ let info =
              missing dependencies and caching them for next time." );
         `I
           ( "$(b,Working in a project)",
-            "$(b,sync) installs project dependencies and dev tools. \
-             $(b,exec) runs a command in the project environment. $(b,env) \
-             prints that environment for use with $(b,eval). $(b,add) \
-             records a new dependency in $(b,dune-project)." );
+            "$(b,sync) installs project dependencies and dev tools. $(b,exec) \
+             runs a command in the project environment. $(b,env) prints that \
+             environment for use with $(b,eval). $(b,add) records a new \
+             dependency in $(b,dune-project)." );
         `I
           ( "$(b,Checking what's going on)",
-            "$(b,show) summarises the build plan and lists any missing \
-             system packages; pass $(b,--tree) for the full per-package plan \
-             or $(b,--only-depexts) for a list suitable for piping into a \
-             package manager. $(b,search) finds a binary or package across \
-             caches and overlays. $(b,config) reports the platform, cache \
-             directories, project state, and dev-tool probes." );
+            "$(b,show) summarises the build plan and lists any missing system \
+             packages; pass $(b,--tree) for the full per-package plan or \
+             $(b,--only-depexts) for a list suitable for piping into a package \
+             manager. $(b,search) finds a binary or package across caches and \
+             overlays. $(b,config) reports the platform, cache directories, \
+             project state, and dev-tool probes." );
         `I
           ( "$(b,Sharing builds and managing disk)",
             "$(b,registry) manages the pre-built package cache and source \
@@ -116,18 +113,17 @@ let info =
         `I
           ( "$(b,Picking package sources)",
             "$(b,repo) manages the reporepo (see QUICK START): register \
-             overlays, inspect their pinned commits, and bump them forward."
-          );
+             overlays, inspect their pinned commits, and bump them forward." );
         `S "SCRIPT FORMAT";
         `P
-          "The first line of a $(b,.ml) script declares its dependencies \
-           using an attribute:";
+          "The first line of a $(b,.ml) script declares its dependencies using \
+           an attribute:";
         `Pre "  [@@@opam fmt cmdliner>=1.2.0 lwt]";
         `P
           "Each token names an opam package. An optional version constraint \
            uses the usual relational operators ($(b,>=), $(b,>), $(b,<=), \
-           $(b,<), $(b,=)). A dotted suffix selects a findlib sub-library, \
-           for example $(b,ppx_deriving.show).";
+           $(b,<), $(b,=)). A dotted suffix selects a findlib sub-library, for \
+           example $(b,ppx_deriving.show).";
         `P
           "Any package whose name starts with $(b,ppx_) is wired in as a PPX \
            preprocessor. Run $(b,oi run -vv SCRIPT.ml) to see the generated \
@@ -137,14 +133,13 @@ let info =
           "$(b,oi) works out of two directories. The data directory holds \
            long-lived state: cloned opam repositories and the relocatable \
            compiler toolchains. The cache directory holds rebuildable data: \
-           pre-built packages, assembled prefixes, and the source mirror. \
-           Each directory can be pointed elsewhere by setting one \
-           environment variable, or by passing a command-line flag that \
-           takes precedence.";
+           pre-built packages, assembled prefixes, and the source mirror. Each \
+           directory can be pointed elsewhere by setting one environment \
+           variable, or by passing a command-line flag that takes precedence.";
         `I
           ( "$(b,OI_DATA_DIR)",
-            "Override the data directory. Falls back to \
-             $(b,XDG_DATA_HOME/oi), then to $(b,~/.local/share/oi)." );
+            "Override the data directory. Falls back to $(b,XDG_DATA_HOME/oi), \
+             then to $(b,~/.local/share/oi)." );
         `I
           ( "$(b,OI_CACHE_DIR)",
             "Override the cache directory. Falls back to \
