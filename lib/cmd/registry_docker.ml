@@ -15,18 +15,18 @@ let ( @@ ) = Dockerfile.( @@ )
    will add more for specific packages. *)
 let build_depexts = function
   | `Apk ->
-      "build-base m4 perl pkgconf git curl bash patch tar xz zstd \
+      "build-base m4 perl pkgconf autoconf git curl bash patch tar xz zstd \
        ca-certificates linux-headers openssl-dev zlib-dev sqlite-dev gmp-dev \
        libffi-dev libev-dev capnproto capnproto-dev ncurses-dev"
   | `Apt ->
-      "build-essential m4 perl pkg-config git curl bash patch tar xz-utils \
-       zstd ca-certificates libssl-dev zlib1g-dev libsqlite3-dev libgmp-dev \
-       libffi-dev libev-dev capnproto libcapnp-dev libncurses-dev"
+      "build-essential m4 perl pkg-config autoconf git curl bash patch tar \
+       xz-utils zstd ca-certificates libssl-dev zlib1g-dev libsqlite3-dev \
+       libgmp-dev libffi-dev libev-dev capnproto libcapnp-dev libncurses-dev"
   | `Yum ->
-      "gcc gcc-c++ make m4 perl pkgconf-pkg-config git curl bash patch tar xz \
-       zstd ca-certificates findutils which diffutils openssl-devel zlib-devel \
-       sqlite-devel gmp-devel libffi-devel libev-devel capnproto \
-       capnproto-devel ncurses-devel"
+      "gcc gcc-c++ make m4 perl pkgconf-pkg-config autoconf git curl bash \
+       patch tar xz zstd ca-certificates findutils which diffutils \
+       openssl-devel zlib-devel sqlite-devel gmp-devel libffi-devel \
+       libev-devel capnproto capnproto-devel ncurses-devel"
   | _ -> failwith "unsupported package manager"
 
 (* -- Hardcoded depexts for common opam [conf-*] probe packages ---------- *)

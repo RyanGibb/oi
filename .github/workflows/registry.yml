@@ -173,13 +173,14 @@ jobs:
         # `oi registry depexts` solves every overlay's x-root-packages
         # under the host platform and prints the resulting Homebrew
         # package list one per line.
+        # autoconf is appended unconditionally because the oxcaml
+        # toolchain build's autogen.sh requires it and it isn't pulled
+        # in by any opam depext.
         run: |
           deps=$(oi registry depexts --refresh)
           echo "Homebrew depexts:"
-          printf '  %s\n' $deps
-          if [ -n "$deps" ]; then
-            brew install $deps
-          fi
+          printf '  %s\n' $deps autoconf
+          brew install autoconf $deps
 
       - name: oi registry build --all
         run: oi registry build --refresh --all
