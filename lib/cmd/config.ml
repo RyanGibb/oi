@@ -15,21 +15,21 @@ let cmd =
   let run () cache_dir data_dir =
     Harness.run @@ fun env ->
     let { Harness.fs; os_key; cache; _ } = Harness.bootstrap env cache_dir in
-    Fmt.pr "@[<v>%a@," Fmt.(styled `Bold string) "Platform";
+    Fmt.pr "@[<v>%a@," Oi.Style.header_string "Platform";
     Fmt.pr "  os-key:     %s@," os_key;
     Fmt.pr "  ocaml:      %s (relocatable)@," Workspace.ocaml_version;
-    Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Directories";
+    Fmt.pr "@,%a@," Oi.Style.header_string "Directories";
     Fmt.pr "  data:       %s@," data_dir;
     Fmt.pr "  cache:      %s@," cache_dir;
-    Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Registry";
+    Fmt.pr "@,%a@," Oi.Style.header_string "Registry";
     Fmt.pr "  url:        %s@," Terms.default_registry;
     Fmt.pr "  index TTL:  %gs@," Layer_index.remote_index_max_age;
-    Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Source mirror";
+    Fmt.pr "@,%a@," Oi.Style.header_string "Source mirror";
     let mirror_stats = Oi.Source.Mirror.stats ~cache in
     Fmt.pr "  dir:        %s@," (Oi.Source.Mirror.dir ~cache);
     Fmt.pr "  blobs:      %d@," mirror_stats.count;
     Fmt.pr "  total size: %s@," (human_bytes mirror_stats.total_size);
-    Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Toolchains";
+    Fmt.pr "@,%a@," Oi.Style.header_string "Toolchains";
     Fmt.pr "  install root:  %s@," (Oi.Toolchain.default_root ());
     List.iter
       (fun (s : Oi.Toolchain.summary) ->
@@ -37,18 +37,15 @@ let cmd =
           match s.ref_ with Some r -> Fmt.str "%s#%s" s.url r | None -> s.url
         in
         let mode_tag =
-          if s.relocatable then
-            Fmt.str "[%a]" Fmt.(styled `Green string) "relocatable"
-          else Fmt.str "[%a]" Fmt.(styled `Yellow string) "fixed-prefix"
+          if s.relocatable then Fmt.str "[%a]" Oi.Style.ok_string "relocatable"
+          else Fmt.str "[%a]" Oi.Style.warn_string "fixed-prefix"
         in
         let default_tag =
-          if s.is_default then
-            Fmt.str "  [%a]" Fmt.(styled `Bold (styled `Cyan string)) "default"
+          if s.is_default then Fmt.str "  [%a]" Oi.Style.accent_string "default"
           else ""
         in
-        Fmt.pr "  %a  %s%s  %s@,"
-          Fmt.(styled `Bold string)
-          s.handle mode_tag default_tag url_with_ref;
+        Fmt.pr "  %a  %s%s  %s@," Oi.Style.header_string s.handle mode_tag
+          default_tag url_with_ref;
         if s.depends <> [] then
           Fmt.pr "    depends:    %s@," (String.concat ", " s.depends);
         Fmt.pr "    roots:      %s@," (String.concat ", " s.roots);
@@ -58,28 +55,24 @@ let cmd =
         else
           match s.installs with
           | [] ->
-              Fmt.pr "    status:     %a@,"
-                Fmt.(styled `Faint string)
-                "not installed"
+              Fmt.pr "    status:     %a@," Oi.Style.dim_string "not installed"
           | xs ->
               List.iter
                 (fun (path, ready) ->
                   let status =
-                    if ready then
-                      Fmt.str "%a" Fmt.(styled `Green string) "ready"
-                    else Fmt.str "%a" Fmt.(styled `Yellow string) "partial"
+                    if ready then Fmt.str "%a" Oi.Style.ok_string "ready"
+                    else Fmt.str "%a" Oi.Style.warn_string "partial"
                   in
                   Fmt.pr "    install:    %s  %s@," status path)
                 xs)
       (Oi.Toolchain.available ());
-    Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Base overlays (from reporepo)";
+    Fmt.pr "@,%a@," Oi.Style.header_string "Base overlays (from reporepo)";
     let base = Oi.Source.Reporepo.base_entries () in
     if base = [] then
       Fmt.pr
         "  %a no 'relocatable' overlay in reporepo %s. Run 'oi repo add' to \
          bootstrap.@,"
-        Fmt.(styled `Yellow string)
-        "(none)" (Terms.reporepo_path ())
+        Oi.Style.warn_string "(none)" (Terms.reporepo_path ())
     else
       let path = Terms.reporepo_path () in
       List.iter
@@ -89,14 +82,13 @@ let cmd =
           in
           let status =
             if e.url = "" then
-              Fmt.str "%a" Fmt.(styled `Faint string) "definition only"
+              Fmt.str "%a" Oi.Style.dim_string "definition only"
             else if Sys.file_exists dir then
-              Fmt.str "%a" Fmt.(styled `Green string) "materialised"
-            else Fmt.str "%a" Fmt.(styled `Yellow string) "not materialised"
+              Fmt.str "%a" Oi.Style.ok_string "materialised"
+            else Fmt.str "%a" Oi.Style.warn_string "not materialised"
           in
-          Fmt.pr "  %a.%s  %s  %s@,"
-            Fmt.(styled `Bold string)
-            e.handle e.version status e.url)
+          Fmt.pr "  %a.%s  %s  %s@," Oi.Style.header_string e.handle e.version
+            status e.url)
         base;
       Fmt.pr "@]@.";
       let cwd_s, _ = Workspace.resolved_cwd fs in
@@ -138,8 +130,8 @@ let cmd =
           List.iter
             (fun (r : Oi.Project.Tool.result) ->
               let mark =
-                if r.hit then Fmt.str "%a" Fmt.(styled `Green string) "hit"
-                else Fmt.str "%a" Fmt.(styled `Faint string) "miss"
+                if r.hit then Fmt.str "%a" Oi.Style.ok_string "hit"
+                else Fmt.str "%a" Oi.Style.dim_string "miss"
               in
               Fmt.pr "  %-18s %-4s %s@." r.spec.name mark r.detail)
             tool_results

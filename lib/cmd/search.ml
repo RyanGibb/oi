@@ -113,12 +113,6 @@ let state_label = function
   | Remote -> "remote"
   | Declared -> "declared"
 
-let state_styled st =
-  let style =
-    match st with Local -> `Green | Remote -> `Cyan | Declared -> `Yellow
-  in
-  Fmt.str "%a" Fmt.(styled style string) (state_label st)
-
 (* Latest version per key, or every version when [all_versions] is set.
    Versions are compared via [OpamPackage.Version.compare]. *)
 let trim_to_latest ~all_versions rows key version =
@@ -322,33 +316,69 @@ let cmd =
         | None -> ""
         | Some h -> String.sub h 0 (min 12 (String.length h))
       in
-      List.iter
-        (fun r ->
-          let kind_s = match r.kind with `Bin -> "bin" | `Pkg -> "pkg" in
-          let nv =
-            match r.binary with
-            | Some b -> Fmt.str "%s (%s.%s)" b r.pkg_name r.pkg_version
-            | None -> Fmt.str "%s.%s" r.pkg_name r.pkg_version
-          in
-          Fmt.pr "%-4s %-14s %-48s %-12s %s@." kind_s r.overlay nv
-            (short_hash r.hash) (state_styled r.state);
-          if long then
-            match r.hash with
+      let row_spans r =
+        let kind_s = match r.kind with `Bin -> "bin" | `Pkg -> "pkg" in
+        let nv =
+          match r.binary with
+          | Some b -> Fmt.str "%s (%s.%s)" b r.pkg_name r.pkg_version
+          | None -> Fmt.str "%s.%s" r.pkg_name r.pkg_version
+        in
+        let state_style =
+          match r.state with
+          | Local -> Oi.Style.ok
+          | Remote -> Oi.Style.info
+          | Declared -> Oi.Style.warn
+        in
+        [
+          Tty.Span.text kind_s;
+          Tty.Span.text r.overlay;
+          Tty.Span.text nv;
+          Tty.Span.styled Oi.Style.dim (short_hash r.hash);
+          Tty.Span.styled state_style (state_label r.state);
+        ]
+      in
+      let cols =
+        [
+          Tty.Table.column "KIND";
+          Tty.Table.column "OVERLAY";
+          Tty.Table.column "NAME.VERSION";
+          Tty.Table.column "HASH";
+          Tty.Table.column "STATE";
+        ]
+      in
+      if long then begin
+        (* Long mode interleaves dep lines under each row, so render
+           one row at a time and append deps inline. *)
+        List.iter
+          (fun r ->
+            let table =
+              Tty.Table.of_rows ~header_style:Oi.Style.header cols
+                [ row_spans r ]
+            in
+            Tty.Table.pp Fmt.stdout table;
+            (match r.hash with
             | None -> ()
             | Some h ->
                 let deps = D10.Index.deps db ~hash:h in
                 if deps = [] then
-                  Fmt.pr "  %a@." Fmt.(styled `Faint string) "(no deps)"
+                  Fmt.pr "  %a@." Oi.Style.dim_string "(no deps)"
                 else
                   List.iter
                     (fun (dep_name, dep_ver, dep_hash) ->
-                      Fmt.pr "  %a %s.%s@."
-                        Fmt.(styled `Faint string)
+                      Fmt.pr "  %a %s.%s@." Oi.Style.dim_string
                         (String.sub dep_hash 0
                            (min 12 (String.length dep_hash)))
                         dep_name dep_ver)
-                    deps)
-        sorted
+                    deps);
+            Fmt.pr "@.")
+          sorted
+      end
+      else
+        let table =
+          Tty.Table.of_rows ~header_style:Oi.Style.header cols
+            (List.map row_spans sorted)
+        in
+        Tty.Table.pp Fmt.stdout table
     end;
     D10.Index.close db
   in

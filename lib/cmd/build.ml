@@ -54,10 +54,10 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
   in
   let status_col r =
     match r with
-    | R.Ok _ -> Fmt.str "%a" Fmt.(styled `Green string) "ok"
-    | R.Failed _ -> Fmt.str "%a" Fmt.(styled `Red string) "fail"
-    | R.Depext_fail _ -> Fmt.str "%a" Fmt.(styled `Yellow string) "depext-fail"
-    | R.Skipped _ -> Fmt.str "%a" Fmt.(styled `Yellow string) "skip"
+    | R.Ok _ -> Fmt.str "%a" Oi.Style.ok_string "ok"
+    | R.Failed _ -> Fmt.str "%a" Oi.Style.error_string "fail"
+    | R.Depext_fail _ -> Fmt.str "%a" Oi.Style.warn_string "depext-fail"
+    | R.Skipped _ -> Fmt.str "%a" Oi.Style.warn_string "skip"
   in
   (* Shorten multi-line solver diagnostics to the first line so the
      table stays readable. Full detail is still logged per-target
@@ -90,7 +90,7 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       (* [Fmt.str] with styling inflates the visible length with ANSI
          codes; pad first, then colour. *)
       let padded = Fmt.str "%-*s" handle_width h in
-      Fmt.str "%a" Fmt.(styled `Cyan string) padded
+      Fmt.str "%a" Oi.Style.info_string padded
   in
   Fmt.pr "@.";
   List.iter
@@ -105,27 +105,20 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       | R.Failed (_, _, _, _, failures) ->
           List.iter
             (fun (pkg, log_path) ->
-              Fmt.pr "         %a %s: %s@."
-                Fmt.(styled `Faint string)
-                "↳ log" pkg log_path)
+              Fmt.pr "         %a %s: %s@." Oi.Style.dim_string "↳ log" pkg
+                log_path)
             failures
       | R.Depext_fail (_, _, _, _, per_pkg, log_path) ->
           List.iter
             (fun (pkg, set) ->
-              Fmt.pr "         %a %s: %s@."
-                Fmt.(styled `Faint string)
-                "↳ needs" pkg
+              Fmt.pr "         %a %s: %s@." Oi.Style.dim_string "↳ needs" pkg
                 (set |> OpamSysPkg.Set.elements
                 |> List.map OpamSysPkg.to_string
                 |> String.concat " "))
             per_pkg;
-          Fmt.pr "         %a %s@."
-            Fmt.(styled `Faint string)
-            "↳ depext log:" log_path
+          Fmt.pr "         %a %s@." Oi.Style.dim_string "↳ depext log:" log_path
       | R.Skipped (_, log_path) when log_path <> "" ->
-          Fmt.pr "         %a %s@."
-            Fmt.(styled `Faint string)
-            "↳ solver log:" log_path
+          Fmt.pr "         %a %s@." Oi.Style.dim_string "↳ solver log:" log_path
       | _ -> ())
     rows;
   Fmt.pr "@.%d ok, %d failed, %d depext-fail, %d skipped@." n_ok n_failed
@@ -390,8 +383,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
       \  cd <build_dir>@,\
       \  dune runtest --profile=release@,\
        @]@."
-      Fmt.(styled `Bold string)
-      "Would run:" target_display;
+      Oi.Style.header_string "Would run:" target_display;
     0
   end
   else begin
@@ -434,21 +426,17 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
         let env =
           Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
         in
-        Fmt.pr "@.%a %s@.%a %s@."
-          Fmt.(styled `Bold string)
-          "Testing" pkg_full
-          Fmt.(styled `Faint string)
-          "→" build_dir;
+        Fmt.pr "@.%a %s@.%a %s@." Oi.Style.header_string "Testing" pkg_full
+          Oi.Style.dim_string "→" build_dir;
         let cmd = Fmt.str "cd %s && dune runtest --profile=release" build_dir in
         let ec = Subprocess.run proc_mgr ~env [ "/bin/sh"; "-c"; cmd ] in
         if ec <> 0 then begin
-          Fmt.epr "%a (dune runtest exit %d)@."
-            Fmt.(styled `Red string)
+          Fmt.epr "%a (dune runtest exit %d)@." Oi.Style.error_string
             "Test failed" ec;
           ec
         end
         else begin
-          Fmt.pr "%a@." Fmt.(styled `Green string) "Test successful";
+          Fmt.pr "%a@." Oi.Style.ok_string "Test successful";
           0
         end
   end
@@ -809,8 +797,7 @@ let cmd =
           !order
       in
       let n_display = List.length display_groups in
-      Fmt.pr "@.%a@."
-        Fmt.(styled `Bold string)
+      Fmt.pr "@.%a@." Oi.Style.header_string
         (Fmt.str
            "--all would build %d target%s in %d solve group%s (grouped into %d \
             handle scope%s):"
@@ -898,10 +885,8 @@ let cmd =
       List.iter
         (fun (targets, handles) ->
           let label = group_label handles in
-          Fmt.pr "@.  %a %-*s  %a@."
-            Fmt.(styled `Cyan string)
-            "▸" label_w label
-            Fmt.(styled `Faint string)
+          Fmt.pr "@.  %a %-*s  %a@." Oi.Style.info_string "▸" label_w label
+            Oi.Style.dim_string
             (overlays_summary_for handles);
           let sorted_targets = List.sort String.compare targets in
           let with_versions =
@@ -1184,23 +1169,20 @@ let cmd =
       in
       if n_groups <= 1 then List.filter_map solve_one target_groups
       else
-        let config = Progress.Config.v ~persistent:false () in
-        let bar =
-          let open Progress.Line in
-          pair ~sep:(const " ")
-            (list [ spinner (); brackets (count_to n_groups) ])
-            (rpad 40 string)
-        in
         let acc = ref [] in
-        Progress.with_reporter ~config bar (fun report ->
+        Eio.Switch.run @@ fun sw ->
+        Oi.Ui.run ~status_lines:0 ~sw
+          ~clock:(clock :> _ Eio.Time.clock)
+          ~total:n_groups ~title:"solve"
+          (fun ui ->
             List.iter
               (fun ((g, _) as group_and_handles) ->
                 let label = group_label g in
-                report (0, Fmt.str "solve %s" label);
+                Oi.Ui.with_msg ui (Fmt.str "solve %s" label);
                 (match solve_one group_and_handles with
                 | Some s -> acc := s :: !acc
                 | None -> ());
-                report (1, Fmt.str "solve %s" label))
+                Oi.Ui.tick ui)
               target_groups);
         List.rev !acc
     in
@@ -1274,7 +1256,7 @@ let cmd =
             n_groups ok cached build_failed dep_failed cur_pkg
       end
     in
-    let make_reporter report =
+    let make_reporter ui =
       Oi.Execute.
         {
           pkg_event =
@@ -1285,39 +1267,31 @@ let cmd =
               | Built _ -> counters#incr_ok
               | Build_failed { pkg; log } ->
                   counters#incr_build_failed;
-                  Progress.interject_with (fun () ->
-                      Fmt.epr "  %a %s → %s@."
-                        Fmt.(styled (`Fg `Red) string)
-                        "FAIL" pkg log)
+                  Oi.Ui.suspend ui (fun () ->
+                      Fmt.epr "  %a %s → %s@." Oi.Style.error_string "FAIL" pkg
+                        log)
               | Install_failed { pkg; log } ->
                   counters#incr_build_failed;
-                  Progress.interject_with (fun () ->
-                      Fmt.epr "  %a %s (install) → %s@."
-                        Fmt.(styled (`Fg `Red) string)
+                  Oi.Ui.suspend ui (fun () ->
+                      Fmt.epr "  %a %s (install) → %s@." Oi.Style.error_string
                         "FAIL" pkg log)
               | Dep_failed _ -> counters#incr_dep_failed);
-              let delta =
-                match e with
-                | Started _ -> 0
-                | Cached _ | Built _ | Build_failed _ | Install_failed _
-                | Dep_failed _ ->
-                    1
-              in
-              report (delta, counters#status));
+              match e with
+              | Started _ -> Oi.Ui.with_msg ui counters#status
+              | Cached _ | Built _ | Build_failed _ | Install_failed _
+              | Dep_failed _ ->
+                  Oi.Ui.tick ~msg:counters#status ui);
         }
-    in
-    let progress_config = Progress.Config.v ~persistent:false () in
-    let progress_bar =
-      let open Progress.Line in
-      pair ~sep:(const " ")
-        (list [ spinner (); brackets (count_to total_pkgs_estimate) ])
-        (rpad 80 string)
     in
     let in_progress_reporter f =
       if dry_run then f None
-      else
-        Progress.with_reporter ~config:progress_config progress_bar (fun rep ->
-            f (Some (make_reporter rep)))
+      else begin
+        Eio.Switch.run @@ fun sw ->
+        Oi.Ui.run ~status_lines:0 ~sw
+          ~clock:(clock :> _ Eio.Time.clock)
+          ~total:total_pkgs_estimate ~title:"build"
+          (fun ui -> f (Some (make_reporter ui)))
+      end
     in
     in_progress_reporter @@ fun reporter ->
     List.iteri
@@ -1573,9 +1547,8 @@ let cmd =
           with Sys_error _ -> []
         in
         if entries <> [] then begin
-          Fmt.pr "@.%a (%d):@."
-            Fmt.(styled `Faint string)
-            "transient fetch errors" (List.length entries);
+          Fmt.pr "@.%a (%d):@." Oi.Style.dim_string "transient fetch errors"
+            (List.length entries);
           List.iter (fun p -> Fmt.pr "  %s@." p) entries
         end
       end

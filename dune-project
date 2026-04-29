@@ -24,6 +24,6 @@
 (package (name oi) (synopsis "A stateless OCaml package builder")
  (depends (ocaml (>= 5.2.0)) dune-build-info (eio_main (>= 1.0)) (d10 (= :version))
   (osrel (= :version)) (opam-format (>= 2.2.0)) (opam-state (>= 2.2.0))
-  (opam-client (>= 2.2.0)) (opam-0install (>= 0.4)) (progress (>= 0.4))
+  (opam-client (>= 2.2.0)) (opam-0install (>= 0.4)) nox-tty nox-tty-eio
   (xdge (>= 1.0)) cmdliner fmt logs jsont bytesrw parsexp
   (dockerfile (>= 8.3.0)) (dockerfile-opam (>= 8.3.0))))

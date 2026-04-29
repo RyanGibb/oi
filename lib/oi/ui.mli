@@ -1,29 +1,42 @@
-[@@@ai_disclosure "ai-assisted"]
-[@@@ai_model "claude-opus-4-6"]
-[@@@ai_provider "Anthropic"]
+(** Unified progress display.
 
-(** Terminal progress display.
-
-    A unified progress display using a single progress bar line with dynamic
-    status text showing active packages and their phases. The display clears on
-    completion leaving only a summary line. *)
-
-type phase = Fetch | Build | Install | Binary | Clone | Configure | Check
+    A single progress bar with an optional dimmed status zone above it for
+    in-flight items. Animation is driven by an Eio daemon fiber. When stdout is
+    not a TTY the bar is silently disabled. *)
 
 type t
-(** An active progress display. *)
 
-val run : now:(unit -> float) -> total:int -> title:string -> (t -> 'a) -> 'a
-(** [run ~now ~total ~title f] renders a progress bar while [f t] executes. [f]
-    receives a handle [t] for reporting activity. [now] provides wall-clock
-    time. On return, the display clears and a summary is printed. *)
+val run :
+  ?status_lines:int ->
+  sw:Eio.Switch.t ->
+  clock:_ Eio.Time.clock ->
+  total:int ->
+  title:string ->
+  (t -> 'a) ->
+  'a
+(** [run ~sw ~clock ~total ~title f] opens an animated progress bar, runs [f t],
+    and clears the bar on return. [status_lines] reserves rows above the bar for
+    {!log} entries (default 4). *)
 
-val start_activity : t -> string -> phase -> unit
-val update_phase : t -> string -> phase -> unit
-val finish_activity : t -> string -> unit
-val fail_activity : t -> string -> cmd:string -> output:string -> unit
-val finish : t -> unit
+val with_msg : t -> string -> unit
+(** Set the bar message without advancing position. Visible on the next tick or
+    redraw. *)
 
-(** {1 Simple spinners} *)
+val tick : ?msg:string -> t -> unit
+(** Advance the position by one. If [msg] is given, also sets the message. *)
 
-val with_spinner : string -> (unit -> 'a) -> 'a
+val log : t -> string -> unit
+(** Push a line into the dimmed status zone above the bar. Older lines fall off
+    once the zone is full. *)
+
+val suspend : t -> (unit -> 'a) -> 'a
+(** Clear the bar, run [f ()], then redraw. Use when emitting permanent output
+    (errors, warnings) that must not be overwritten by the next redraw. *)
+
+val finish : ?msg:string -> t -> unit
+(** Render at 100% and emit a newline. Optionally replaces the message with a
+    summary. *)
+
+val position : t -> int
+val total : t -> int
+val title : t -> string

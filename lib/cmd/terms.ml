@@ -5,7 +5,7 @@ let ( / ) = Filename.concat
 let setup_log style_renderer level =
   Fmt_tty.setup_std_outputs ?style_renderer ();
   Logs.set_level level;
-  Logs.set_reporter (Progress.logs_reporter ())
+  Logs.set_reporter (Tty.Progress.logs_reporter (Logs_fmt.reporter ()))
 
 let log = Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
 

@@ -451,11 +451,8 @@ let ensure_installed ~fs (info : info) =
        (the [OpamConsole.msg] calls in opamAction.ml have no quiet
        hook — verbose_level only gates the [foo] compiled line and
        subprocess output), so we live with that and just frame it. *)
-    Fmt.pr "@.%a One-off build of toolchain %a (%s)@."
-      Fmt.(styled `Bold (styled `Cyan string))
-      "▸"
-      Fmt.(styled `Bold string)
-      info.handle info.ocaml_version;
+    Fmt.pr "@.%a One-off build of toolchain %a (%s)@." Style.accent_string "▸"
+      Style.header_string info.handle info.ocaml_version;
     Fmt.pr "  %s isn't relocatable yet, so it's installed once at a fixed@."
       info.handle;
     Fmt.pr "  prefix and reused on subsequent runs. This will go away once@.";
@@ -548,9 +545,8 @@ let ensure_installed ~fs (info : info) =
       (Fmt.str "handle: %s\nocaml: %s\nhash: %s\n" info.handle
          info.ocaml_version info.hash);
     let elapsed = Unix.gettimeofday () -. started in
-    Fmt.pr "@.%a Toolchain %s ready at %s (%.0fs)@."
-      Fmt.(styled `Bold (styled `Green string))
-      "▸" info.handle info.install_prefix elapsed;
+    Fmt.pr "@.%a Toolchain %s ready at %s (%.0fs)@." Style.strong_ok_string "▸"
+      info.handle info.install_prefix elapsed;
     Log.info (fun m ->
         m "Toolchain %s (%s) ready at %s" info.handle info.ocaml_version
           info.install_prefix)

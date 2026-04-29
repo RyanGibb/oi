@@ -10,11 +10,9 @@ type env = {
 
 let pp_one_exn fmt = function
   | Oi.Error.E e -> Oi.Error.pp fmt e
-  | Failure msg -> Fmt.pf fmt "%a %s" Fmt.(styled `Red string) "error:" msg
+  | Failure msg -> Fmt.pf fmt "%a %s" Oi.Style.error_string "error:" msg
   | e ->
-      Fmt.pf fmt "%a %s"
-        Fmt.(styled `Red string)
-        "error:" (Printexc.to_string e)
+      Fmt.pf fmt "%a %s" Oi.Style.error_string "error:" (Printexc.to_string e)
 
 let rec is_interrupt = function
   | Oi.Signals.Interrupted | Sys.Break -> true

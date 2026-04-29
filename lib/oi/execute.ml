@@ -421,45 +421,30 @@ type reporter = { pkg_event : pkg_event -> unit }
    [oi run] / [oi build], which only ever run one [Execute.run] at a time
    and have no outer UI to coordinate with. [oi build --all] supplies
    its own reporter to drive a cross-invocation bar with live counters. *)
-let with_default_reporter ~total_packages ~n_stages f =
-  let config = Progress.Config.v ~persistent:false () in
-  let bar =
-    let open Progress.Line in
-    pair ~sep:(const " ")
-      (list [ spinner (); brackets (count_to total_packages) ])
-      (rpad 60 string)
+let with_default_reporter ~clock ~total_packages ~n_stages f =
+  Eio.Switch.run @@ fun sw ->
+  Ui.run ~status_lines:0 ~sw ~clock ~total:total_packages ~title:"build"
+  @@ fun ui ->
+  let stage_s stage = Fmt.str "stage %d/%d" stage n_stages in
+  let reporter =
+    {
+      pkg_event =
+        (fun e ->
+          match e with
+          | Started { pkg; stage; total_stages = _ } ->
+              Ui.with_msg ui (Fmt.str "[%s] %s" (stage_s stage) pkg)
+          | Cached _ | Built _ -> Ui.tick ui
+          | Dep_failed _ -> ()
+          | Build_failed { pkg; log } ->
+              Ui.suspend ui (fun () ->
+                  Fmt.epr "  %a %s → %s@." Style.error_string "FAIL" pkg log)
+          | Install_failed { pkg; log } ->
+              Ui.suspend ui (fun () ->
+                  Fmt.epr "  %a %s (install) → %s@." Style.error_string "FAIL"
+                    pkg log));
+    }
   in
-  Progress.with_reporter ~config bar (fun report ->
-      let stage_s stage = Fmt.str "stage %d/%d" stage n_stages in
-      let reporter =
-        {
-          pkg_event =
-            (fun e ->
-              match e with
-              (* [Started] is the "now working on X" signal — show the
-                 package on the bar so the user sees what's in flight,
-                 without ticking the completion counter. *)
-              | Started { pkg; stage; total_stages = _ } ->
-                  report (0, Fmt.str "[%s] %s" (stage_s stage) pkg)
-              (* Terminal events only tick the counter; the label is
-                 left at whatever [Started] last set, so the bar always
-                 reads as the currently-in-flight job rather than the
-                 last one that finished. *)
-              | Cached _ | Built _ -> report (1, "")
-              | Dep_failed _ -> ()
-              | Build_failed { pkg; log } ->
-                  Progress.interject_with (fun () ->
-                      Fmt.epr "  %a %s → %s@."
-                        Fmt.(styled (`Fg `Red) string)
-                        "FAIL" pkg log)
-              | Install_failed { pkg; log } ->
-                  Progress.interject_with (fun () ->
-                      Fmt.epr "  %a %s (install) → %s@."
-                        Fmt.(styled (`Fg `Red) string)
-                        "FAIL" pkg log));
-        }
-      in
-      f reporter)
+  f reporter
 
 let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
     ~sys ~os_key plan =
@@ -668,7 +653,8 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
   (match reporter with
   | Some r -> do_work r
   | None ->
-      with_default_reporter ~total_packages:plan.total_packages ~n_stages
-        do_work);
+      with_default_reporter
+        ~clock:(clock :> _ Eio.Time.clock)
+        ~total_packages:plan.total_packages ~n_stages do_work);
   let n_failed = Hashtbl.length failed_layers - failed_count_before in
   if n_failed > 0 then Error.msg "%d package(s) failed to build" n_failed

@@ -197,10 +197,10 @@ let dep_pkgs_of g node =
     node.deps
 
 let pp_method_short ~remote_has fmt = function
-  | Binary -> Fmt.pf fmt "%a" Fmt.(styled `Green string) "binary"
+  | Binary -> Fmt.pf fmt "%a" Style.ok_string "binary"
   | Source ->
-      if remote_has then Fmt.pf fmt "%a" Fmt.(styled `Cyan string) "remote"
-      else Fmt.pf fmt "%a" Fmt.(styled `Blue string) "source"
+      if remote_has then Fmt.pf fmt "%a" Style.info_string "remote"
+      else Fmt.pf fmt "%a" Style.source_string "source"
 
 let pp_tree ?(remote_has = fun _ -> false) fmt g =
   let groups = parallel_groups g in
@@ -211,19 +211,16 @@ let pp_tree ?(remote_has = fun _ -> false) fmt g =
       let is_last_group = gi = n_groups - 1 in
       let cont = if is_last_group then "  " else "│ " in
       let n = List.length names in
-      Fmt.pf fmt "%a %a@,"
-        Fmt.(styled `Faint string)
+      Fmt.pf fmt "%a %a@," Style.dim_string
         (Fmt.str "stage %d" (gi + 1))
-        Fmt.(styled `Faint string)
+        Style.dim_string
         (Fmt.str "(%d package%s)" n (if n = 1 then "" else "s"));
       List.iteri
         (fun i name ->
           let node = find g name in
           let pkg_s = OpamPackage.to_string node.pkg in
           let b = if i = n - 1 then "└── " else "├── " in
-          Fmt.pf fmt "%s%s%a %a@," cont b
-            Fmt.(styled `Bold string)
-            pkg_s
+          Fmt.pf fmt "%s%s%a %a@," cont b Style.header_string pkg_s
             (pp_method_short ~remote_has:(remote_has node.layer_hash))
             node.method_)
         names)
@@ -491,7 +488,7 @@ let pp_package ~os_key fmt p =
   let method_s =
     match p.method_ with Source -> "source" | Binary -> "binary (cached)"
   in
-  Fmt.pf fmt "@[<v>  %a [%s]@," Fmt.(styled `Bold string) p.pkg method_s;
+  Fmt.pf fmt "@[<v>  %a [%s]@," Style.header_string p.pkg method_s;
   Fmt.pf fmt "    layer: %s/%s@," os_key (short_hash p.layer_hash);
   if p.dep_layers <> [] then begin
     Fmt.pf fmt "    needs:@,";
@@ -544,10 +541,9 @@ let pp fmt t =
   List.iter
     (fun g ->
       let n = List.length g.packages in
-      Fmt.pf fmt "%a %a@,"
-        Fmt.(styled `Faint string)
+      Fmt.pf fmt "%a %a@," Style.dim_string
         (Fmt.str "stage %d" g.stage)
-        Fmt.(styled `Faint string)
+        Style.dim_string
         (Fmt.str "(%d package%s, parallel)" n (if n = 1 then "" else "s"));
       List.iter (fun p -> pp_package ~os_key:t.os_key fmt p) g.packages;
       Fmt.pf fmt "@,")

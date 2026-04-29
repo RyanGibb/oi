@@ -15,7 +15,8 @@
   eio_posix
   eio.unix
   xdge
-  progress
+  nox-tty
+  nox-tty-eio
   dockerfile-opam
   jsont
   jsont.bytesrw

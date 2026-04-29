@@ -106,22 +106,34 @@ let cmd =
     | None ->
         let clean_any = bulk_flags in
         if not clean_any then begin
-          Fmt.pr "@[<v>%a@,@," Fmt.(styled `Bold string) "Cleanable items:";
+          Fmt.pr "%a@.@." Oi.Style.header_string "Cleanable items";
           let items = Oi.Cache.cleanable_items cache ~data_dir in
-          List.iter
-            (fun (item : Oi.Cache.item) ->
-              let path_s = Eio.Path.native_exn item.path in
-              if Sys.file_exists path_s then
-                Fmt.pr "  --%-20s %a  %s@," item.label Oi.Cache.pp_size
-                  (Oi.Cache.size ~sys item.path)
-                  item.description
-              else
-                Fmt.pr "  --%-20s %a  %s@," item.label
-                  Fmt.(styled `Faint string)
-                  "(empty)" item.description)
-            items;
-          Fmt.pr
-            "@,Use --all to clean everything, or select specific items.@]@."
+          let rows =
+            List.map
+              (fun (item : Oi.Cache.item) ->
+                let path_s = Eio.Path.native_exn item.path in
+                let flag = "--" ^ item.label in
+                let size =
+                  if Sys.file_exists path_s then
+                    Tty.Span.text
+                      (Fmt.str "%a" Oi.Cache.pp_size
+                         (Oi.Cache.size ~sys item.path))
+                  else Tty.Span.styled Oi.Style.dim "(empty)"
+                in
+                [ Tty.Span.text flag; size; Tty.Span.text item.description ])
+              items
+          in
+          let table =
+            Tty.Table.of_rows ~header_style:Oi.Style.header
+              [
+                Tty.Table.column "FLAG";
+                Tty.Table.column ~align:`Right "SIZE";
+                Tty.Table.column "DESCRIPTION";
+              ]
+              rows
+          in
+          Tty.Table.pp Fmt.stdout table;
+          Fmt.pr "@.Use --all to clean everything, or select specific items.@."
         end
         else begin
           let items = Oi.Cache.cleanable_items cache ~data_dir in
@@ -212,10 +224,9 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Remove rebuildable cache data. With no flags or $(b,PKG), lists \
-             each category and its disk usage. Flags are additive. A \
-             project's $(b,_oi/) and the reporepo (your overlay catalogue) \
-             are never touched — the reporepo is user-authored data, not \
-             cache.";
+             each category and its disk usage. Flags are additive. A project's \
+             $(b,_oi/) and the reporepo (your overlay catalogue) are never \
+             touched — the reporepo is user-authored data, not cache.";
           `P
             "$(b,PKG) drops every cached version of that package; \
              $(b,PKG.VERSION) drops one. Layers that transitively depend on a \

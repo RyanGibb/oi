@@ -43,8 +43,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
   in
   let warn_named name fmt =
     Fmt.kstr
-      (fun s ->
-        Fmt.epr "%a tool %s: %s@." Fmt.(styled `Yellow string) "WARN" name s)
+      (fun s -> Fmt.epr "%a tool %s: %s@." Oi.Style.warn_string "WARN" name s)
       fmt
   in
   let install_named ~tool_name ~constraints =

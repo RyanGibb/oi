@@ -70,6 +70,7 @@ jobs:
 
       - name: Build release oi
         run: |
+          opam repo add avsm git+https://git.recoil.org/anil.recoil.org/opam-overlay
           opam install -y --deps-only .
           opam exec -- dune build --profile=release bin/main.exe
           mkdir -p dist

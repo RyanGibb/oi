@@ -17,7 +17,8 @@ depends: [
   "opam-state" {>= "2.2.0"}
   "opam-client" {>= "2.2.0"}
   "opam-0install" {>= "0.4"}
-  "progress" {>= "0.4"}
+  "nox-tty"
+  "nox-tty-eio"
   "xdge" {>= "1.0"}
   "cmdliner"
   "fmt"

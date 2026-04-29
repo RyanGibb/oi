@@ -57,64 +57,23 @@ let parse_handle_version s =
 (* Visible-column width of the toolchain target column. Counts the
    em-dash (one display column despite 3-byte UTF-8) as 1 so column
    alignment doesn't drift on entries without a toolchain. *)
-let toolchain_width (e : Oi.Source.Reporepo.entry) =
-  match e.toolchain with Some t -> String.length t | None -> 1
+let handle_span (e : Oi.Source.Reporepo.entry) =
+  let style =
+    if e.toolchain_name <> None then Oi.Style.accent else Oi.Style.header
+  in
+  Tty.Span.styled style e.handle
 
-(* Print [pp x] to [Fmt.stdout] (where [Fmt_tty.setup_std_outputs] wired
-   up the ANSI renderer) and right-pad with [width - visible_chars]
-   spaces. [visible_chars] is the visible width of the rendered cell;
-   we pass it explicitly so callers don't need to count characters in
-   the styled output (ANSI escapes don't count). *)
-let pp_padded_to ~width ~visible pp x =
-  Fmt.pr "%a%s" pp x (String.make (max 0 (width - visible)) ' ')
-
-let pp_handle ppf (e : Oi.Source.Reporepo.entry) =
-  if e.toolchain_name <> None then
-    Fmt.(styled `Bold (styled `Cyan string)) ppf e.handle
-  else Fmt.(styled `Bold string) ppf e.handle
-
-let pp_toolchain_target ppf (e : Oi.Source.Reporepo.entry) =
+let toolchain_target_span (e : Oi.Source.Reporepo.entry) =
   match e.toolchain with
-  | Some t -> Fmt.(styled `Cyan string) ppf t
-  | None -> Fmt.(styled `Faint string) ppf "—"
+  | Some t -> Tty.Span.styled Oi.Style.info t
+  | None -> Tty.Span.styled Oi.Style.dim "—"
 
-let pp_commit ppf commit =
+let commit_span commit =
   let short =
     if commit = "" then ""
     else String.sub commit 0 (min 7 (String.length commit))
   in
-  Fmt.(styled `Faint string) ppf short
-
-let pp_header_cell ppf (label, width) =
-  Fmt.pf ppf "%a%s"
-    Fmt.(styled `Bold string)
-    label
-    (String.make (max 0 (width - String.length label)) ' ')
-
-let print_header ~tc_w ~with_status =
-  pp_header_cell Fmt.stdout ("HANDLE", 24);
-  Fmt.pr "  ";
-  pp_header_cell Fmt.stdout ("VERSION", 16);
-  Fmt.pr "  ";
-  pp_header_cell Fmt.stdout ("COMMIT", 8);
-  Fmt.pr "  ";
-  pp_header_cell Fmt.stdout ("TOOLCHAIN", tc_w);
-  Fmt.pr "  ";
-  if with_status then begin
-    pp_header_cell Fmt.stdout ("STATUS", 28);
-    Fmt.pr "  "
-  end;
-  Fmt.pr "%a@." Fmt.(styled `Bold string) "URL"
-
-let print_entry_oneline ~tc_w (e : Oi.Source.Reporepo.entry) =
-  pp_padded_to ~width:24 ~visible:(String.length e.handle) pp_handle e;
-  Fmt.pr "  %-16s  " e.version;
-  pp_padded_to ~width:8
-    ~visible:(min 7 (String.length e.commit))
-    pp_commit e.commit;
-  Fmt.pr "  ";
-  pp_padded_to ~width:tc_w ~visible:(toolchain_width e) pp_toolchain_target e;
-  Fmt.pr "  %a@." Fmt.(styled `Faint string) e.url
+  Tty.Span.styled Oi.Style.dim short
 
 (* Upstream tip status for a reporepo entry, computed by re-running
    [git ls-remote] against its URL + ref. *)
@@ -136,40 +95,15 @@ let check_upstream ~sys (e : Oi.Source.Reporepo.entry) =
     | tip -> Stale tip
     | exception _ -> Unknown
 
-(* Print the status tag plus pad to a fixed visible width. Returns
-   the visible width consumed so callers can pad without re-counting
-   ANSI escapes. *)
-let pp_status_tag ppf status =
-  match status with
-  | Fresh -> Fmt.(styled `Green string) ppf "up-to-date"
-  | Unknown -> Fmt.(styled `Yellow string) ppf "unreachable"
-  | Definition_only -> Fmt.(styled `Cyan string) ppf "toolchain"
+let status_span = function
+  | Fresh -> Tty.Span.styled Oi.Style.ok "up-to-date"
+  | Unknown -> Tty.Span.styled Oi.Style.warn "unreachable"
+  | Definition_only -> Tty.Span.styled Oi.Style.info "toolchain"
   | Stale tip ->
-      Fmt.pf ppf "%a %a"
-        Fmt.(styled `Bold (styled `Red string))
-        "stale"
-        Fmt.(styled `Faint string)
-        (Fmt.str "(%s)" (short_sha tip))
-
-let status_visible_width = function
-  | Fresh -> String.length "up-to-date"
-  | Unknown -> String.length "unreachable"
-  | Definition_only -> String.length "toolchain"
-  | Stale tip -> String.length "stale " + String.length (short_sha tip) + 2
-
-let print_entry_with_upstream ~tc_w (e : Oi.Source.Reporepo.entry) status =
-  pp_padded_to ~width:24 ~visible:(String.length e.handle) pp_handle e;
-  Fmt.pr "  %-16s  " e.version;
-  pp_padded_to ~width:8
-    ~visible:(min 7 (String.length e.commit))
-    pp_commit e.commit;
-  Fmt.pr "  ";
-  pp_padded_to ~width:tc_w ~visible:(toolchain_width e) pp_toolchain_target e;
-  Fmt.pr "  ";
-  pp_padded_to ~width:28
-    ~visible:(status_visible_width status)
-    pp_status_tag status;
-  Fmt.pr "  %a@." Fmt.(styled `Faint string) e.url
+      Tty.Span.(
+        styled Oi.Style.error "stale"
+        ++ space
+        ++ styled Oi.Style.dim (Fmt.str "(%s)" (short_sha tip)))
 
 (* Toolchain section: definitions ([toolchain_name] set) printed under
    their CLI-facing name (the [x-oi-toolchain-name] field) rather than
@@ -179,39 +113,72 @@ let toolchain_cli_name (e : Oi.Source.Reporepo.entry) =
 
 let mode_of (e : Oi.Source.Reporepo.entry) =
   match e.relocatable with
-  | Some true -> ("relocatable", `Green)
-  | Some false -> ("fixed-prefix", `Yellow)
-  | None -> ("?", `Faint)
+  | Some true -> ("relocatable", Oi.Style.ok)
+  | Some false -> ("fixed-prefix", Oi.Style.warn)
+  | None -> ("?", Oi.Style.dim)
 
-let print_toolchain_header ~name_w ~mode_w =
-  pp_header_cell Fmt.stdout ("NAME", name_w);
-  Fmt.pr "  ";
-  pp_header_cell Fmt.stdout ("VERSION", 16);
-  Fmt.pr "  ";
-  pp_header_cell Fmt.stdout ("MODE", mode_w);
-  Fmt.pr "  ";
-  pp_header_cell Fmt.stdout ("DEFAULT", 7);
-  Fmt.pr "  ";
-  Fmt.pr "%a@." Fmt.(styled `Bold string) "COMPILER"
-
-let print_toolchain_entry ~name_w ~mode_w (e : Oi.Source.Reporepo.entry) =
-  let name = toolchain_cli_name e in
-  let pp_name ppf s = Fmt.(styled `Bold string) ppf s in
-  pp_padded_to ~width:name_w ~visible:(String.length name) pp_name name;
-  Fmt.pr "  %-16s  " e.version;
-  let mode, mode_color = mode_of e in
-  let pp_mode ppf s = Fmt.(styled mode_color string) ppf s in
-  pp_padded_to ~width:mode_w ~visible:(String.length mode) pp_mode mode;
-  Fmt.pr "  ";
-  let default_text = if e.default_toolchain then "yes" else "" in
-  let pp_default ppf s =
-    if e.default_toolchain then Fmt.(styled `Bold (styled `Cyan string)) ppf s
-    else Fmt.string ppf s
+let overlay_row ?status (e : Oi.Source.Reporepo.entry) =
+  let base =
+    [
+      handle_span e;
+      Tty.Span.text e.version;
+      commit_span e.commit;
+      toolchain_target_span e;
+    ]
   in
-  pp_padded_to ~width:7
-    ~visible:(String.length default_text)
-    pp_default default_text;
-  Fmt.pr "  %s@." (Stdlib.Option.value ~default:"" e.toolchain_compiler)
+  let status_cells =
+    match status with None -> [] | Some s -> [ status_span s ]
+  in
+  base @ status_cells @ [ Tty.Span.styled Oi.Style.dim e.url ]
+
+let overlay_columns ~with_status =
+  let base =
+    [
+      Tty.Table.column "HANDLE";
+      Tty.Table.column "VERSION";
+      Tty.Table.column "COMMIT";
+      Tty.Table.column "TOOLCHAIN";
+    ]
+  in
+  let status_col = if with_status then [ Tty.Table.column "STATUS" ] else [] in
+  base @ status_col @ [ Tty.Table.column "URL" ]
+
+let render_overlay_table ~with_status rows =
+  let table =
+    Tty.Table.of_rows ~header_style:Oi.Style.header
+      (overlay_columns ~with_status)
+      rows
+  in
+  Tty.Table.pp Fmt.stdout table
+
+let toolchain_row (e : Oi.Source.Reporepo.entry) =
+  let name = toolchain_cli_name e in
+  let mode, mode_style = mode_of e in
+  let default_span =
+    if e.default_toolchain then Tty.Span.styled Oi.Style.accent "yes"
+    else Tty.Span.text ""
+  in
+  [
+    Tty.Span.styled Oi.Style.header name;
+    Tty.Span.text e.version;
+    Tty.Span.styled mode_style mode;
+    default_span;
+    Tty.Span.text (Stdlib.Option.value ~default:"" e.toolchain_compiler);
+  ]
+
+let render_toolchain_table rows =
+  let table =
+    Tty.Table.of_rows ~header_style:Oi.Style.header
+      [
+        Tty.Table.column "NAME";
+        Tty.Table.column "VERSION";
+        Tty.Table.column "MODE";
+        Tty.Table.column "DEFAULT";
+        Tty.Table.column "COMPILER";
+      ]
+      rows
+  in
+  Tty.Table.pp Fmt.stdout table
 
 let ref_term =
   Arg.(
@@ -298,23 +265,16 @@ module Ls = struct
             in
             untagged @ tagged
           in
-          let tc_w =
-            List.fold_left
-              (fun w e -> max w (toolchain_width e))
-              (String.length "TOOLCHAIN")
-              overlays
-          in
-          let pp_subtitle ppf s = Fmt.(styled `Faint string) ppf s in
+          let pp_subtitle ppf s = Oi.Style.dim_string ppf s in
           if overlays <> [] then begin
-            Fmt.pr "%a@." Fmt.(styled `Bold string) "OVERLAYS";
+            Fmt.pr "%a@." Oi.Style.header_string "OVERLAYS";
             Fmt.pr "%a@.@." pp_subtitle
               "Curated opam packages pinned to git commits. Use as \
                --with-repo=@HANDLE, --with=@HANDLE/PKG, or 'x-repos:' in \
                *.opam.";
-            if no_check then begin
-              print_header ~tc_w ~with_status:false;
-              List.iter (print_entry_oneline ~tc_w) overlays
-            end
+            if no_check then
+              render_overlay_table ~with_status:false
+                (List.map overlay_row overlays)
             else begin
               (* Parallel [git ls-remote] per entry. Four at a time keeps
                the pipe/fd footprint small without making a 30-entry
@@ -325,30 +285,19 @@ module Ls = struct
               Eio.Fiber.List.iter ~max_fibers:4
                 (fun (i, e) -> statuses.(i) <- check_upstream ~sys e)
                 indexed;
-              print_header ~tc_w ~with_status:true;
-              List.iteri
-                (fun i e -> print_entry_with_upstream ~tc_w e statuses.(i))
-                overlays
+              render_overlay_table ~with_status:true
+                (List.mapi
+                   (fun i e -> overlay_row ~status:statuses.(i) e)
+                   overlays)
             end
           end;
           if toolchains <> [] then begin
-            let name_w =
-              List.fold_left
-                (fun w e -> max w (String.length (toolchain_cli_name e)))
-                (String.length "NAME") toolchains
-            in
-            let mode_w =
-              List.fold_left
-                (fun w e -> max w (String.length (fst (mode_of e))))
-                (String.length "MODE") toolchains
-            in
             if overlays <> [] then Fmt.pr "@.";
-            Fmt.pr "%a@." Fmt.(styled `Bold string) "TOOLCHAINS";
+            Fmt.pr "%a@." Oi.Style.header_string "TOOLCHAINS";
             Fmt.pr "%a@.@." pp_subtitle
               "Compiler bundles. Select with --toolchain=NAME; the DEFAULT \
                entry is used otherwise.";
-            print_toolchain_header ~name_w ~mode_w;
-            List.iter (print_toolchain_entry ~name_w ~mode_w) toolchains
+            render_toolchain_table (List.map toolchain_row toolchains)
           end
     in
     let no_check =
@@ -667,9 +616,7 @@ module Bump = struct
         (List.length summary.unavailable);
       List.iter
         (fun (pkg, reason) ->
-          Fmt.pr "    %a %s: %s@."
-            Fmt.(styled `Yellow string)
-            "unavailable" pkg reason)
+          Fmt.pr "    %a %s: %s@." Oi.Style.warn_string "unavailable" pkg reason)
         summary.unavailable
     end
 
@@ -716,14 +663,13 @@ module Bump = struct
           in
           List.iter
             (fun h ->
-              Fmt.pr "@.%a@." Fmt.(styled `Bold string) ("== " ^ h ^ " ==");
+              Fmt.pr "@.%a@." Oi.Style.header_string ("== " ^ h ^ " ==");
               try
                 bump_one ~fs ~sys ~reporepo ~handle:h ~url:None ~ref_:None
                   ~toolchain:None ~depends:None ~default:None
               with exn ->
-                Fmt.pr "  %a %s: %s@."
-                  Fmt.(styled `Red string)
-                  "error" h (Printexc.to_string exn))
+                Fmt.pr "  %a %s: %s@." Oi.Style.error_string "error" h
+                  (Printexc.to_string exn))
             handles
       | false, Some handle ->
           bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
@@ -971,48 +917,40 @@ module Push = struct
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
-      Fmt.pr "%a %s@." Fmt.(styled `Bold string) "reporepo:" reporepo;
+      Fmt.pr "%a %s@." Oi.Style.header_string "reporepo:" reporepo;
       (match push_url with
       | None -> ()
       | Some u ->
           Oi.Source.Reporepo.set_push_url ~sys ~path:reporepo u;
-          Fmt.pr "%a push URL of origin set to %s@."
-            Fmt.(styled `Green string)
-            "ok" u);
+          Fmt.pr "%a push URL of origin set to %s@." Oi.Style.ok_string "ok" u);
       let on_step_start n title =
-        Fmt.pr "@.%a %s@." Fmt.(styled `Bold string) (Fmt.str "[%d/3]" n) title
+        Fmt.pr "@.%a %s@." Oi.Style.header_string (Fmt.str "[%d/3]" n) title
       in
       let outcome =
         Oi.Source.Reporepo.push ~on_step_start ~sys ~path:reporepo ()
       in
-      Fmt.pr "@.%a@." Fmt.(styled `Bold string) "summary:";
+      Fmt.pr "@.%a@." Oi.Style.header_string "summary:";
       List.iter
         (function
           | Oi.Source.Reporepo.Step_commit { files = [] } ->
-              Fmt.pr "  commit: %a (working tree clean)@."
-                Fmt.(styled `Faint string)
+              Fmt.pr "  commit: %a (working tree clean)@." Oi.Style.dim_string
                 "skipped"
           | Oi.Source.Reporepo.Step_commit { files } ->
-              Fmt.pr "  commit: %a (%d file(s))@."
-                Fmt.(styled `Green string)
-                "ok" (List.length files);
+              Fmt.pr "  commit: %a (%d file(s))@." Oi.Style.ok_string "ok"
+                (List.length files);
               List.iter (fun f -> Fmt.pr "    %s@." f) files
           | Oi.Source.Reporepo.Step_pull { commits = 0 } ->
-              Fmt.pr "  pull:   %a (already up to date)@."
-                Fmt.(styled `Faint string)
+              Fmt.pr "  pull:   %a (already up to date)@." Oi.Style.dim_string
                 "skipped"
           | Oi.Source.Reporepo.Step_pull { commits } ->
               Fmt.pr "  pull:   %a (%d new upstream commit(s))@."
-                Fmt.(styled `Green string)
-                "ok" commits
+                Oi.Style.ok_string "ok" commits
           | Oi.Source.Reporepo.Step_push { commits = 0 } ->
-              Fmt.pr "  push:   %a (nothing to push)@."
-                Fmt.(styled `Faint string)
+              Fmt.pr "  push:   %a (nothing to push)@." Oi.Style.dim_string
                 "skipped"
           | Oi.Source.Reporepo.Step_push { commits } ->
               Fmt.pr "  push:   %a (%d local commit(s) sent)@."
-                Fmt.(styled `Green string)
-                "ok" commits)
+                Oi.Style.ok_string "ok" commits)
         outcome
     in
     let push_url =
@@ -1181,9 +1119,8 @@ module Lint = struct
       let entries = Oi.Source.Reporepo.load ~path:reporepo in
       let problems = collect_problems entries in
       if problems = [] then begin
-        Fmt.pr "%a %d entries, no problems found.@."
-          Fmt.(styled `Green string)
-          "OK:" (List.length entries);
+        Fmt.pr "%a %d entries, no problems found.@." Oi.Style.ok_string "OK:"
+          (List.length entries);
         exit 0
       end
       else begin
@@ -1192,7 +1129,7 @@ module Lint = struct
             let where =
               if version = "" then handle else Fmt.str "%s.%s" handle version
             in
-            Fmt.pr "%a %s: %s@." Fmt.(styled `Red string) "error:" where msg)
+            Fmt.pr "%a %s: %s@." Oi.Style.error_string "error:" where msg)
           problems;
         Fmt.pr "@.%d problem(s) in %s@." (List.length problems) reporepo;
         exit 1

@@ -130,10 +130,7 @@ let show_meta_line label value =
   match value with
   | "" -> ()
   | v ->
-      Fmt.pr "%a %s@,"
-        Fmt.(styled `Bold string)
-        (Fmt.str "%-11s" (label ^ ":"))
-        v
+      Fmt.pr "%a %s@," Oi.Style.header_string (Fmt.str "%-11s" (label ^ ":")) v
 
 (* Extract a compact, user-facing snapshot of an opam file's
    descriptive metadata fields for the info page. *)
@@ -228,8 +225,7 @@ let show_repositories ?toolchain ~with_repos () =
 let show_indented_meta_line ~indent label = function
   | "" -> ()
   | v ->
-      Fmt.pr "%s%a %s@," (String.make indent ' ')
-        Fmt.(styled `Bold string)
+      Fmt.pr "%s%a %s@," (String.make indent ' ') Oi.Style.header_string
         (Fmt.str "%-11s" (label ^ ":"))
         v
 
@@ -283,7 +279,7 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
           List.filter_map
             (fun (pkg, opam) ->
               let name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
-              Fmt.pr "@,%a@," Fmt.(styled `Bold string) name;
+              Fmt.pr "@,%a@," Oi.Style.header_string name;
               let descr = show_pkg_meta_block ~indent:2 pkg opam in
               if descr = "" then None else Some (name, descr))
             many
@@ -296,8 +292,7 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
   | bs -> show_meta_line "Binaries" (String.concat ", " bs));
   (match overlay with
   | None -> ()
-  | Some tag ->
-      show_meta_line "Overlay" (Fmt.str "%a" Fmt.(styled `Cyan string) tag));
+  | Some tag -> show_meta_line "Overlay" (Fmt.str "%a" Oi.Style.info_string tag));
   show_meta_line "Platform" os_key;
   show_meta_line "OCaml" ocaml_version;
   Fmt.pr "@,";
@@ -319,8 +314,7 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
         OpamSysPkg.Set.elements all_depexts |> List.map OpamSysPkg.to_string
       in
       show_meta_line "Depexts" (String.concat ", " names);
-      Fmt.pr "            %a@,"
-        Fmt.(styled `Faint string)
+      Fmt.pr "            %a@," Oi.Style.dim_string
         "(host check skipped because --os is set)"
   | Some st ->
       (* Every depext declared, with the uninstalled ones marked.
@@ -329,7 +323,7 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
       let render p =
         let name = OpamSysPkg.to_string p in
         if OpamSysPkg.Set.mem p st.missing then
-          Fmt.str "%a" Fmt.(styled `Yellow string) (name ^ " (missing)")
+          Fmt.str "%a" Oi.Style.warn_string (name ^ " (missing)")
         else name
       in
       let rendered =
@@ -341,27 +335,24 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
         let missing_names =
           OpamSysPkg.Set.elements st.missing |> List.map OpamSysPkg.to_string
         in
-        Fmt.pr "            %a@,"
-          Fmt.(styled `Faint string)
+        Fmt.pr "            %a@," Oi.Style.dim_string
           (Fmt.str "Run: sudo apt install %s" (String.concat " " missing_names)));
   (match repositories with
   | [] -> ()
   | rows ->
-      Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Repositories:";
+      Fmt.pr "@,%a@," Oi.Style.header_string "Repositories:";
       (* Two columns: [@handle (version)] left-padded to the longest
          token so URLs line up. *)
       let left = List.map (fun (h, v, _) -> Fmt.str "@%s (%s)" h v) rows in
       let col = List.fold_left (fun m s -> max m (String.length s)) 0 left in
       List.iter2
         (fun (_, _, url) l ->
-          Fmt.pr "  %a  %s@,"
-            Fmt.(styled `Cyan string)
-            (Fmt.str "%-*s" col l) url)
+          Fmt.pr "  %a  %s@," Oi.Style.info_string (Fmt.str "%-*s" col l) url)
         rows left);
   (match descriptions with
   | [] -> ()
   | [ ("", body) ] ->
-      Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Description:";
+      Fmt.pr "@,%a@," Oi.Style.header_string "Description:";
       String.split_on_char '\n' body
       |> List.iter (fun line -> Fmt.pr "  %s@," line)
   | many ->
@@ -371,7 +362,7 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
             if name = "" then "Description:"
             else Fmt.str "Description (%s):" name
           in
-          Fmt.pr "@,%a@," Fmt.(styled `Bold string) label;
+          Fmt.pr "@,%a@," Oi.Style.header_string label;
           String.split_on_char '\n' body
           |> List.iter (fun line -> Fmt.pr "  %s@," line))
         many);
@@ -414,8 +405,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
       | None -> ("the cache", "oi build --all")
     in
     Fmt.pr "(no cached layers in %s; run %a to populate)@." scope
-      Fmt.(styled `Bold string)
-      suggest
+      Oi.Style.header_string suggest
   else begin
     let rows =
       List.sort
@@ -430,34 +420,39 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
     let handle_str (m : D10.Layer.meta) =
       match m.overlay_handle with Some h -> "@" ^ h | None -> ""
     in
-    let h_w, p_w =
-      List.fold_left
-        (fun (h, p) (m, _, _) ->
-          ( max h (String.length (handle_str m)),
-            max p (String.length m.D10.Layer.package) ))
-        (0, 12) rows
-    in
     let header =
       match handle with
       | Some h -> Fmt.str "Cached layers for @%s on %s" h os_key
       | None -> Fmt.str "Cached layers on %s" os_key
     in
-    Fmt.pr "@[<v>%a@,@," Fmt.(styled `Bold string) header;
+    Fmt.pr "%a@.@." Oi.Style.header_string header;
     let total = ref 0L in
-    List.iter
-      (fun ((m : D10.Layer.meta), hash, sz) ->
-        total := Int64.add !total sz;
-        let short = String.sub hash 0 (min 12 (String.length hash)) in
-        Fmt.pr "  %a  %-*s  %a  %a@,"
-          Fmt.(styled `Cyan string)
-          (Fmt.str "%-*s" h_w (handle_str m))
-          p_w m.package
-          Fmt.(styled `Faint string)
-          short Oi.Cache.pp_size sz)
-      rows;
-    Fmt.pr "@,%a %d layer(s), %a total@,@]@."
-      Fmt.(styled `Bold string)
-      "Summary:" (List.length rows) Oi.Cache.pp_size !total
+    let table_rows =
+      List.map
+        (fun ((m : D10.Layer.meta), hash, sz) ->
+          total := Int64.add !total sz;
+          let short = String.sub hash 0 (min 12 (String.length hash)) in
+          [
+            Tty.Span.styled Oi.Style.info (handle_str m);
+            Tty.Span.text m.package;
+            Tty.Span.styled Oi.Style.dim short;
+            Tty.Span.text (Fmt.str "%a" Oi.Cache.pp_size sz);
+          ])
+        rows
+    in
+    let table =
+      Tty.Table.of_rows ~header_style:Oi.Style.header
+        [
+          Tty.Table.column "OVERLAY";
+          Tty.Table.column "PACKAGE";
+          Tty.Table.column "HASH";
+          Tty.Table.column ~align:`Right "SIZE";
+        ]
+        table_rows
+    in
+    Tty.Table.pp Fmt.stdout table;
+    Fmt.pr "@.%a %d layer(s), %a total@." Oi.Style.header_string "Summary:"
+      (List.length rows) Oi.Cache.pp_size !total
   end
 
 let cmd =

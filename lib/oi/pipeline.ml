@@ -356,8 +356,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
               Fmt.epr
                 "%a system packages are not installed. The build may fail at \
                  compile time. Install them with:@.  %s@."
-                Fmt.(styled `Yellow string)
-                "warning:"
+                Style.warn_string "warning:"
                 (st.missing |> OpamSysPkg.Set.elements
                 |> List.map OpamSysPkg.to_string
                 |> String.concat " ")
@@ -366,8 +365,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
               Fmt.epr
                 "%a system packages are not known to the host package manager: \
                  %s@."
-                Fmt.(styled `Yellow string)
-                "warning:"
+                Style.warn_string "warning:"
                 (st.not_found |> OpamSysPkg.Set.elements
                 |> List.map OpamSysPkg.to_string
                 |> String.concat ", "))

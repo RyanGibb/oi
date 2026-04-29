@@ -10,7 +10,8 @@
   opam-client
   opam-repository
   opam-0install
-  progress
+  nox-tty
+  nox-tty-eio
   xdge
   fmt
   logs

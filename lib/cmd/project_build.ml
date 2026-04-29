@@ -187,10 +187,8 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
       | Some t -> Fmt.str "dune %s --profile=release" t
     in
     Fmt.pr "@[<v>%a@,@,  cd %s@,  %s@,@,%a packages: %s@,@]@."
-      Fmt.(styled `Bold string)
-      "Would run:" cwd cmd_line
-      Fmt.(styled `Faint string)
-      "→" (String.concat ", " order);
+      Oi.Style.header_string "Would run:" cwd cmd_line Oi.Style.dim_string "→"
+      (String.concat ", " order);
     0
   end
   else begin
@@ -207,20 +205,18 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
         let env =
           Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
         in
-        Fmt.pr "@.%a %d package(s): %s@."
-          Fmt.(styled `Bold string)
-          (label ^ "ing") (List.length opams) (String.concat ", " order);
+        Fmt.pr "@.%a %d package(s): %s@." Oi.Style.header_string (label ^ "ing")
+          (List.length opams) (String.concat ", " order);
         let ec =
           Subprocess.run proc_mgr ~env [ "dune"; target; "--profile=release" ]
         in
         if ec <> 0 then begin
-          Fmt.epr "%a (dune %s exit %d)@."
-            Fmt.(styled `Red string)
+          Fmt.epr "%a (dune %s exit %d)@." Oi.Style.error_string
             (label ^ " failed") target ec;
           ec
         end
         else begin
-          Fmt.pr "%a@." Fmt.(styled `Green string) (label ^ " successful");
+          Fmt.pr "%a@." Oi.Style.ok_string (label ^ " successful");
           0
         end
   end

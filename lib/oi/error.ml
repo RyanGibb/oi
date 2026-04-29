@@ -16,20 +16,16 @@ let raise e = Stdlib.raise (E e)
 
 let pp fmt = function
   | Not_found { target; msg } ->
-      Fmt.pf fmt "%a %s: %s" Fmt.(styled `Red string) "error:" target msg
+      Fmt.pf fmt "%a %s: %s" Style.error_string "error:" target msg
   | No_solution { msg } ->
-      Fmt.pf fmt "%a no solution found@,%s"
-        Fmt.(styled `Red string)
-        "error:" msg
-  | Config_error { msg } ->
-      Fmt.pf fmt "%a %s" Fmt.(styled `Red string) "error:" msg
+      Fmt.pf fmt "%a no solution found@,%s" Style.error_string "error:" msg
+  | Config_error { msg } -> Fmt.pf fmt "%a %s" Style.error_string "error:" msg
   | Build_failed { pkg; cmd; output } ->
-      Fmt.pf fmt "%a package %s failed@,  command: %s@,@,%s"
-        Fmt.(styled `Red string)
+      Fmt.pf fmt "%a package %s failed@,  command: %s@,@,%s" Style.error_string
         "error:" pkg cmd output
   | Fetch_failed { url; msg } ->
-      Fmt.pf fmt "%a fetch %s: %s" Fmt.(styled `Red string) "error:" url msg
-  | Msg s -> Fmt.pf fmt "%a %s" Fmt.(styled `Red string) "error:" s
+      Fmt.pf fmt "%a fetch %s: %s" Style.error_string "error:" url msg
+  | Msg s -> Fmt.pf fmt "%a %s" Style.error_string "error:" s
 
 let () =
   Printexc.register_printer (function
