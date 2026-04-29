@@ -159,37 +159,6 @@ let cache_urls ~cache ~remote =
   | Some (`Http_remote r) -> [ local; Source.Mirror.remote_url ~registry:r ]
   | None | Some _ -> [ local ]
 
-let record_sources ~sys ~cache (exec_plan : Plan.t) =
-  try
-    List.iter
-      (fun (group : Plan.group) ->
-        List.iter
-          (fun (p : Plan.package_plan) ->
-            let package = OpamPackage.of_string p.pkg in
-            let overlay =
-              match (p.overlay_handle, p.overlay_version) with
-              | Some h, Some v -> Some (h, v)
-              | _ -> None
-            in
-            Stdlib.Option.iter
-              (fun (src : Plan.source_info) ->
-                let checksums = List.map OpamHash.of_string src.checksums in
-                let url = OpamUrl.parse ~handle_suffix:true src.url in
-                Source.Mirror.record ~sys ~cache ~package ?overlay ~kind:`Main
-                  ~url ~checksums ())
-              p.source;
-            List.iter
-              (fun (name, (src : Plan.source_info)) ->
-                let checksums = List.map OpamHash.of_string src.checksums in
-                let url = OpamUrl.parse ~handle_suffix:true src.url in
-                Source.Mirror.record ~sys ~cache ~package ?overlay
-                  ~kind:(`Extra name) ~url ~checksums ())
-              p.extra_sources)
-          group.packages)
-      exec_plan.groups
-  with Failure msg ->
-    Log.warn (fun m -> m "source mirror write failed: %s" msg)
-
 let fetch_parallelism ?jobs () =
   match jobs with
   | Some n when n > 0 -> n
@@ -248,10 +217,12 @@ let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
 
 let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
-    ?remote ?jobs ?toolchain ?(constraints = OpamPackage.Name.Map.empty) names =
+    ?remote ?jobs ?toolchain ?(constraints = OpamPackage.Name.Map.empty)
+    ?project_root names =
   let extra_pkg_dirs =
     Source.Repo.ensure_extra ~fs ~data_dir ~refresh extra_repos
   in
+  let pins = Source.Pin.resolve_pins ~fs ~sys ?project_root pins in
   let pin_dir = Source.Pin.materialize ~fs ~sys ~cache ~refresh pins in
   (* When a toolchain is active, its [info.packages_dirs] replaces the
      base set — stacking on top would re-add [relocatable], whose
@@ -409,7 +380,6 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         Execute.run ~cache_urls:urls ~proc_mgr ~fs ?jobs
           ~clock:(clock :> D10.Config.clk)
           ~sys ~os_key exec_plan;
-        record_sources ~sys ~cache exec_plan;
         let prefix_hash = D10.Prefix.solve_hash hashes in
         let prefix_dir =
           Eio.Path.native_exn Eio.Path.(d10.root / "prefixes" / prefix_hash)

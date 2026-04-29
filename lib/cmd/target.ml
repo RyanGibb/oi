@@ -6,7 +6,7 @@ let log_overlay fmt = Fmt.kstr (fun s -> Logs.debug (fun m -> m "%s" s)) fmt
 let cli_extra_repo_of_url url_s : Oi.Project.extra_repo =
   let hash = Digest.string url_s |> Digest.to_hex in
   let name = "extra-" ^ String.sub hash 0 10 in
-  { name; url = url_s }
+  { name; url = url_s; local_packages_dir = None }
 
 let is_url_like s =
   List.exists
@@ -63,7 +63,13 @@ let overlay_extras_of_handles ?toolchain ~fs ~sys handles =
       (fun (e : Oi.Source.Reporepo.entry) ->
         let url = if e.commit = "" then e.url else e.url ^ "#" ^ e.commit in
         let name = "overlay-" ^ e.handle ^ "-" ^ e.version in
-        { Oi.Project.name; url })
+        let local =
+          if e.url = "" then None
+          else
+            Some
+              (Oi.Source.Reporepo.overlay_packages_dir ~path ~handle:e.handle)
+        in
+        { Oi.Project.name; url; local_packages_dir = local })
       resolved
   end
 

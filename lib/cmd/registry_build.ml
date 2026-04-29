@@ -319,30 +319,19 @@ let cmd =
        --force] pointing at a new URL), clone it on the fly rather
        than fail out. *)
     let overlay_packages handle =
-      let entries = Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ()) in
+      let path = Terms.reporepo_path () in
+      let entries = Oi.Source.Reporepo.load ~path in
       match Oi.Source.Reporepo.latest entries ~handle with
       | None -> Oi.Error.config_error "no overlay %s in reporepo" handle
       | Some e ->
-          let name = "overlay-" ^ e.handle ^ "-" ^ e.version in
-          let clone_dir = data_dir / "repos" / name in
-          let pkgs_dir = clone_dir / "packages" in
-          if not (Sys.file_exists pkgs_dir) then begin
-            let url = if e.commit = "" then e.url else e.url ^ "#" ^ e.commit in
-            Log.info (fun m -> m "On-demand clone of %s from %s" name url);
-            try
-              Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh
-                [ { Oi.Project.name; url } ]
-              |> ignore
-            with exn ->
-              Oi.Error.config_error
-                "overlay %s@.%s failed to clone from %s:@.  %s" handle e.version
-                url (Printexc.to_string exn)
-          end;
+          let pkgs_dir =
+            Oi.Source.Reporepo.overlay_packages_dir ~path ~handle:e.handle
+          in
           if not (Sys.file_exists pkgs_dir) then
             Oi.Error.config_error
-              "overlay %s clone at %s has no packages/ tree (the upstream repo \
-               at %s may not be an opam-repository layout)"
-              handle clone_dir e.url;
+              "overlay %s.%s is not materialised at %s; run 'oi repo bump %s' \
+               to populate it (upstream %s)"
+              handle e.version pkgs_dir handle e.url;
           Sys.readdir pkgs_dir |> Array.to_list
           |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
           |> List.sort String.compare
@@ -449,6 +438,7 @@ let cmd =
            (if n = 1 then "" else "s")
            n_display
            (if n_display = 1 then "" else "s"));
+      let reporepo_path = Terms.reporepo_path () in
       let handle_dir = Hashtbl.create 8 in
       let dir_for_handle h =
         match Hashtbl.find_opt handle_dir h with
@@ -457,11 +447,11 @@ let cmd =
             let v =
               match Oi.Source.Reporepo.latest entries ~handle:h with
               | None -> None
-              | Some e ->
+              | Some e when e.url = "" -> None
+              | Some _ ->
                   let d =
-                    data_dir / "repos"
-                    / ("overlay-" ^ e.handle ^ "-" ^ e.version)
-                    / "packages"
+                    Oi.Source.Reporepo.overlay_packages_dir
+                      ~path:reporepo_path ~handle:h
                   in
                   if Sys.file_exists d then Some d else None
             in
@@ -635,11 +625,12 @@ let cmd =
         | None -> overlay_entries_for_handles effective
         | Some _ -> overlay_entries_direct effective
       in
+      let reporepo_path = Terms.reporepo_path () in
       let overlay_dirs =
         List.map
           (fun (e : Oi.Source.Reporepo.entry) ->
-            let name = "overlay-" ^ e.handle ^ "-" ^ e.version in
-            Oi.Source.Repo.repo_dir ~data_dir name / "packages")
+            Oi.Source.Reporepo.assert_overlay_dir ~path:reporepo_path
+              ~handle:e.handle)
           overlay_entries
       in
       (* When a toolchain is active, [info.packages_dirs] (the
@@ -1090,10 +1081,6 @@ let cmd =
                     (OpamSysPkg.Set.cardinal missing)
                     log_path)
           | None -> ());
-          let exec_plan =
-            Oi.Plan.resolve group_ctx ~packages_dirs:pkg_dirs ~cache_root
-              ~os_key ~ocaml_version:conf.ocaml_version build_plan
-          in
           (* After the build, any package in this group's plan whose
              layer hash is in [failed_layers] with a non-empty path
              either failed directly (its own build log) or inherited a
@@ -1155,11 +1142,7 @@ let cmd =
             (match build_outcome with
             | `Ok -> `Ok (n_pkgs, n_build, n_cached)
             | `Fail (msg, failures) ->
-                `Fail (n_pkgs, n_build, n_cached, msg, failures));
-          (* Write-side mirror: only useful when we actually built
-             something new; fully-cached groups have no fresh sources
-             to promote. *)
-          Oi.Pipeline.record_sources ~sys ~cache exec_plan
+                `Fail (n_pkgs, n_build, n_cached, msg, failures))
         end)
       solutions;
     if not dry_run then begin
@@ -1320,21 +1303,26 @@ let overlay_root_targets reporepo_entries =
         | _ -> None)
 
 (* Resolve the effective [packages_dirs] for a single overlay handle:
-   its own clone plus every overlay it depends on (via the reporepo's
-   [depends:] entries), followed by the base opam/relocatable clones.
-   Same first-wins ordering the registry build uses. *)
-let packages_dirs_for_overlay ~data_dir ~base_packages_dirs ~reporepo_entries
-    handle =
+   its own materialised v1/ tree plus every overlay it depends on (via
+   the reporepo's [depends:] entries), followed by the base
+   opam/relocatable trees. Same first-wins ordering the registry build
+   uses. *)
+let packages_dirs_for_overlay ~data_dir:_ ~base_packages_dirs
+    ~reporepo_entries handle =
   let roots = [ { Oi.Source.Reporepo.handle; version = None } ] in
   let transitive =
     try Oi.Source.Reporepo.resolve reporepo_entries ~roots |> List.rev
     with Oi.Error.E _ -> []
   in
+  let reporepo_path = Terms.reporepo_path () in
   let overlay_dirs =
-    List.map
+    List.filter_map
       (fun (e : Oi.Source.Reporepo.entry) ->
-        let name = "overlay-" ^ e.handle ^ "-" ^ e.version in
-        Oi.Source.Repo.repo_dir ~data_dir name / "packages")
+        if e.url = "" then None
+        else
+          Some
+            (Oi.Source.Reporepo.assert_overlay_dir ~path:reporepo_path
+               ~handle:e.handle))
       transitive
   in
   let seen = Hashtbl.create 8 in

@@ -80,15 +80,7 @@ let cmd =
   let run () cache_dir data_dir all toolchains sources binaries dune_cache repos
       dry_run target =
     Harness.run @@ fun env ->
-    let {
-      Harness.proc_mgr = _proc_mgr;
-      fs;
-      clock;
-      sys;
-      platform = _platform;
-      os_key;
-      cache;
-    } =
+    let { Harness.fs; clock; sys; os_key; cache; _ } =
       Harness.bootstrap env cache_dir
     in
     let bulk_flags =

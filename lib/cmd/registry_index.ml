@@ -165,21 +165,5 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
      tree: blobs are content-addressed so collisions are correctness-
      preserving. *)
   let n_sources = Oi.Source.Mirror.export ~cache ~dst in
-  if registry <> "" then begin
-    let scratch = output / "sources" / ".remote-index.db" in
-    if fetch_remote_to ~sys ~fs ~registry ~rel:"sources/index.db" ~dst:scratch
-    then begin
-      let index_path = output / "sources" / "index.db" in
-      (try Oi.Source.Mirror.merge_remote ~fs ~index_path ~remote_path:scratch
-       with Failure msg ->
-         Logs.warn (fun m -> m "Failed to merge remote sources index: %s" msg));
-      remove_sqlite_scratch scratch
-    end
-    else
-      Logs.info (fun m ->
-          m "No remote sources index at %s/sources/index.db (skipping merge)"
-            registry)
-  end;
-  finalize_sqlite_for_publish (output / "sources" / "index.db");
   if n_sources > 0 then
     Fmt.pr "  sources: %d blob(s) at %s/sources/@." n_sources output

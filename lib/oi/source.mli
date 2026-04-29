@@ -123,26 +123,75 @@ module Reporepo : sig
   (** Transitive closure in dependency order (deps before dependents). If a root
       has no [version], the highest version is picked. *)
 
-  val materialize :
+  (** {2 v1 overlay layout}
+
+      The reporepo's [v1/] subtree carries one fully-materialised opam
+      repository per handle. Each handle's [opam] files have had every
+      [url{}] block rewritten to be content-addressed (sha-pinned git URL or
+      tarball+checksum), turning the reporepo into a deterministic snapshot
+      of every overlay's package data. The [v1] prefix is a schema marker;
+      a future incompatible change becomes [v2]. *)
+
+  val v1_root : path:string -> string
+  (** [<reporepo>/v1]. *)
+
+  val overlay_dir : path:string -> handle:string -> string
+  (** [<reporepo>/v1/<handle>]. *)
+
+  val overlay_packages_dir : path:string -> handle:string -> string
+  (** [<reporepo>/v1/<handle>/packages] — directly consumable as a solver
+      [packages_dir]. *)
+
+  val assert_overlay_dir : path:string -> handle:string -> string
+  (** Like {!overlay_packages_dir}, but errors with a "run [oi repo bump]"
+      hint when the directory is missing on disk. *)
+
+  type materialise_summary = {
+    handle : string;
+    total : int;  (** number of packages walked *)
+    kept : int;  (** url already content-addressed *)
+    rewrote : int;  (** url rewritten to a sha-pinned form *)
+    unavailable : (string * string) list;
+        (** [(pkg.version, reason)] for entries marked [available: false]. *)
+  }
+
+  val materialise_handle :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     sys:D10.Sysops.t ->
-    data_dir:string ->
-    ?refresh:bool ->
-    entry list ->
-    string list
-  (** For each entry, ensure its upstream opam repo is cloned at the pinned
-      commit under [{data_dir}/repos/overlay-<handle>-<version>/]. Returns the
-      list of [packages/] directories in the order supplied. *)
-
-  val materialize_one :
-    fs:Eio.Fs.dir_ty Eio.Path.t ->
-    refresh:bool ->
-    data_dir:string ->
+    path:string ->
     handle:string ->
-    version:string ->
     url:string ->
     commit:string ->
-    string
+    materialise_summary
+  (** Clone [url] at [commit] into a scratch directory, walk every
+      [packages/<pkg>/<pkg>.<ver>/opam] file, rewrite each [url{}] block
+      and pin-depends entry to a content-addressed form, and write the
+      result to [<reporepo>/v1/<handle>/]. The write is atomic from the
+      caller's POV: a sibling [v1/<handle>.tmp/] is built first, then
+      rotated into place at the end.
+
+      Hard-errors on unsupported VCS backends (darcs, hg, rsync). Persistent
+      network failures (git ls-remote unreachable, tarball 404 after retry)
+      mark the offending package [available: false] with an
+      [x-oi-unavailable:] explanation rather than failing the whole bump. *)
+
+  val try_resolve_url :
+    fs:Eio.Fs.dir_ty Eio.Path.t ->
+    sys:D10.Sysops.t ->
+    where:string ->
+    OpamUrl.t ->
+    has_checksum:bool ->
+    [ `Keep
+    | `Replace_url of OpamUrl.t
+    | `Add_checksum of OpamHash.t
+    | `Failed of string ]
+  (** [try_resolve_url ~fs ~sys ~where url ~has_checksum] performs the same
+      content-address resolution as the per-overlay materialiser does for one
+      [url{}] block: applies host rewrites, returns [`Keep] when the URL is
+      already pinned, [`Replace_url] for a sha-pinned/host-rewritten git URL,
+      [`Add_checksum] for a tarball whose sha-256 we just computed, or
+      [`Failed] when the URL cannot be content-addressed. [where] is a
+      free-form label used in error messages. *)
 
   (** {2 Base overlay resolution} *)
 
@@ -154,9 +203,10 @@ module Reporepo : sig
     unit ->
     string list
   (** Resolves the [relocatable] overlay (and its transitive deps) from the
-      reporepo, clones each at its pinned commit, and returns [packages/]
-      directories in solver priority order. Auto-clones the reporepo itself if
-      it doesn't already exist on disk. *)
+      reporepo and returns the [packages/] directories under [v1/<handle>/]
+      in solver priority order. Auto-clones the reporepo itself if it doesn't
+      already exist on disk. Errors when any base handle's [v1/] tree is
+      missing — run [oi repo bump <handle>] to populate. *)
 
   val base_entries : unit -> entry list
   (** Resolved base overlays without cloning. Useful for display in [oi config].
@@ -263,19 +313,34 @@ module Pin : sig
     string option
   (** Returns [Some packages_dir] (an absolute path to a synthesized [packages/]
       tree) when [pins] is non-empty, [None] when [pins = []]. *)
+
+  val resolve_pins :
+    fs:Eio.Fs.dir_ty Eio.Path.t ->
+    sys:D10.Sysops.t ->
+    ?project_root:string ->
+    Project.pin list ->
+    Project.pin list
+  (** Pin the URL of every entry in [pins] to a deterministic form (sha-pinned
+      git URL or unchanged tarball), consulting/refreshing
+      [<project_root>/_oi/oi.lock] when supplied. With no [project_root], or
+      with an empty list, the input is returned unchanged. The lock file is
+      transient state under [_oi/] — never committed; deleting it forces a
+      re-resolution on the next [oi sync].
+
+      Errors when a pin's URL cannot be resolved (network down, ref gone). *)
 end
 
 (** {1 Source tarball mirror}
 
-    Populated automatically during [oi registry build] as a side-effect of each
-    successful source fetch; exported to the registry's top-level [sources/]
-    directory by [oi registry export]. The on-disk layout is what opam expects
-    for a [cache_url]:
+    Static, content-addressed source mirror produced by
+    [oi registry mirror build] from the reporepo's [v1/] tree. The on-disk
+    layout is what opam expects for a [cache_url]:
 
     <mirror>/<algo>/<first-2-chars>/<full-hash>
 
-    where <algo> is [md5], [sha256], or [sha512]. A sibling sqlite database
-    [<mirror>/index.db] records metadata for fast queries. *)
+    where <algo> is [md5], [sha256], or [sha512]. The directory itself is
+    the only metadata — [stats], [verify], and [export] all walk it
+    directly. *)
 
 module Mirror : sig
   val dir : cache:Cache.t -> string
@@ -288,40 +353,43 @@ module Mirror : sig
   val remote_url : registry:string -> OpamUrl.t
   (** [<registry>/sources] as an [OpamUrl.t]. *)
 
-  val record :
+  type populate_summary = {
+    total : int;  (** opam files walked *)
+    fetched : int;  (** tarballs newly downloaded *)
+    skipped : int;
+        (** already present, no checksum, or git URL (clone-only). *)
+    failed : (string * string) list;
+        (** [(pkg.version, reason)] for tarballs we couldn't fetch or whose
+            checksum mismatched. *)
+  }
+
+  val populate :
+    fs:Eio.Fs.dir_ty Eio.Path.t ->
     sys:D10.Sysops.t ->
-    cache:Cache.t ->
-    package:OpamPackage.t ->
-    ?overlay:string * string ->
-    kind:[ `Main | `Extra of string ] ->
-    url:OpamUrl.t ->
-    checksums:OpamHash.t list ->
-    unit ->
-    unit
-  (** Promote a just-fetched source from opam's own download-cache into the
-      mirror, and record metadata rows. Idempotent. *)
+    reporepo_path:string ->
+    dst:string ->
+    populate_summary
+  (** Walk every opam file under [<reporepo>/v1/<handle>/packages/], fetch
+      the tarball for any [url{}] with at least one checksum, verify it, and
+      store it content-addressed under
+      [<dst>/<algo>/<XX>/<full-hash>] — opam's standard cache layout, so
+      the result is directly usable as a [cache_url].
+
+      Idempotent: tarballs already present (matching the primary checksum)
+      are not re-fetched. Concurrency is bounded internally. Git sources
+      are not cached here — opam clones them directly from the sha-pinned
+      git URLs in v1/. *)
 
   type stats = { count : int; total_size : int64 }
 
   val stats : cache:Cache.t -> stats
+  (** Walk the mirror directory and report blob count + total size. *)
 
-  type entry = {
-    sha256 : string;
-    size : int64;
-    package_name : string;
-    package_version : string;
-    kind : [ `Main | `Extra of string ];
-    url : string;
-  }
-
-  val list : cache:Cache.t -> ?package:string -> unit -> entry list
-  val gc : cache:Cache.t -> int
   val verify : sys:D10.Sysops.t -> cache:Cache.t -> (string * string) list
-  val export : cache:Cache.t -> dst:Eio.Fs.dir_ty Eio.Path.t -> int
+  (** Re-hash every blob and return [(hash, reason)] for any whose contents
+      no longer match the filename. *)
 
-  val merge_remote :
-    fs:Eio.Fs.dir_ty Eio.Path.t ->
-    index_path:string ->
-    remote_path:string ->
-    unit
+  val export : cache:Cache.t -> dst:Eio.Fs.dir_ty Eio.Path.t -> int
+  (** Hardlink-copy the mirror tree to [<dst>/sources/]. Returns the number
+      of blobs copied. *)
 end

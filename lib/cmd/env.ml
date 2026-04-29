@@ -64,6 +64,7 @@ let cmd =
           Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
             ~os_key ~refresh ~extra_repos:extras ~pins:url_project.pins ?jobs
             ?toolchain:tc_info ~constraints:extra_constraints
+            ~project_root:cwd_s
             (OpamPackage.Name.of_string "ocaml" :: extra_names)
         in
         Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes

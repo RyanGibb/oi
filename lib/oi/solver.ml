@@ -690,41 +690,73 @@ module Cache = struct
 
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  let schema_version = "v5"
-  let head_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
+  (* Bumped to v6 with the working-tree-aware signature below: cache
+     entries written under v5 keys are no longer trustworthy. *)
+  let schema_version = "v6"
+  let signature_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
 
-  let compute_git_head repo =
-    let cmd =
-      Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
-        (Filename.quote repo)
-    in
+  let read_process_output cmd =
     let ic = Unix.open_process_in cmd in
-    let line =
-      try Some (String.trim (input_line ic)) with End_of_file -> None
+    let buf = Buffer.create 256 in
+    let chunk = Bytes.create 4096 in
+    let rec loop () =
+      let n = input ic chunk 0 (Bytes.length chunk) in
+      if n > 0 then begin
+        Buffer.add_subbytes buf chunk 0 n;
+        loop ()
+      end
     in
-    match (Unix.close_process_in ic, line) with
-    | Unix.WEXITED 0, Some h when h <> "" -> Some h
+    loop ();
+    match Unix.close_process_in ic with
+    | Unix.WEXITED 0 -> Some (Buffer.contents buf)
     | _ -> None
 
-  let git_head_for_packages_dir packages_dir =
-    match Hashtbl.find_opt head_memo packages_dir with
+  (* Working-tree-aware signature for [packages_dir]: combines
+     [git rev-parse HEAD] (the committed tip) with a hash of
+     [git status --porcelain] (tracked + untracked working-tree state)
+     scoped to [packages_dir]. This catches reporepo working-tree edits
+     that bumps make to [v1/<handle>/packages/] without committing —
+     reusing the previous "tip-only" key cached stale solves once those
+     edits stopped moving the parent commit. *)
+  let compute_git_signature packages_dir =
+    let repo = Filename.dirname packages_dir in
+    let head =
+      Option.map String.trim
+        (read_process_output
+           (Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
+              (Filename.quote repo)))
+    in
+    let status =
+      read_process_output
+        (Printf.sprintf
+           "git -C %s status --porcelain -- %s 2>/dev/null"
+           (Filename.quote repo)
+           (Filename.quote packages_dir))
+    in
+    match (head, status) with
+    | Some h, Some s when h <> "" ->
+        Some (h ^ ":" ^ Digest.to_hex (Digest.string s))
+    | _ -> None
+
+  let git_signature_for_packages_dir packages_dir =
+    match Hashtbl.find_opt signature_memo packages_dir with
     | Some r -> r
     | None ->
-        let r = compute_git_head (Filename.dirname packages_dir) in
-        Hashtbl.add head_memo packages_dir r;
+        let r = compute_git_signature packages_dir in
+        Hashtbl.add signature_memo packages_dir r;
         r
 
   let key ~(conf : Ctx.conf) ~packages_dirs ~constraints ~names ?toolchain () =
-    let heads =
-      List.map (fun d -> (d, git_head_for_packages_dir d)) packages_dirs
+    let signatures =
+      List.map (fun d -> (d, git_signature_for_packages_dir d)) packages_dirs
     in
-    if List.exists (fun (_, h) -> h = None) heads then begin
+    if List.exists (fun (_, s) -> s = None) signatures then begin
       List.iter
-        (fun (d, h) ->
-          if h = None then
+        (fun (d, s) ->
+          if s = None then
             Log.info (fun m ->
                 m "solve cache disabled: %s is not a git working tree" d))
-        heads;
+        signatures;
       None
     end
     else
@@ -743,11 +775,11 @@ module Cache = struct
       add "os_family" conf.os_family;
       add "ocaml_version" conf.ocaml_version;
       List.iteri
-        (fun i (d, head) ->
+        (fun i (d, sig_) ->
           add (Fmt.str "dir%d_path" i) d;
-          add (Fmt.str "dir%d_head" i)
-            (match head with Some h -> h | None -> assert false))
-        heads;
+          add (Fmt.str "dir%d_sig" i)
+            (match sig_ with Some s -> s | None -> assert false))
+        signatures;
       let cs =
         OpamPackage.Name.Map.bindings constraints
         |> List.map (fun (name, (relop, version)) ->

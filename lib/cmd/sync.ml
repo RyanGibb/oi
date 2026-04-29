@@ -55,7 +55,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
       let hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~extra_repos ~pins ?refresh ?remote ?jobs ?toolchain
-          ~constraints [ name ]
+          ~constraints ~project_root:cwd [ name ]
       in
       match leaf_hash_for ~fs ~cache ~os_key ~want_name:tool_name hashes with
       | None ->
@@ -226,7 +226,8 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
       ~extra_repos:all_extras
       ~pins:(project.pins @ url_project.pins)
-      ~refresh ~constraints:extra_constraints ?remote ?jobs ?toolchain names
+      ~refresh ~constraints:extra_constraints ~project_root:cwd ?remote ?jobs
+      ?toolchain names
   in
   let oi_dir = cwd / "_oi" in
   let prefix = oi_dir / "prefix" in

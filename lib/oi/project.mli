@@ -9,7 +9,15 @@
 
 (** {1 Project metadata from a directory} *)
 
-type extra_repo = { name : string; url : string }
+type extra_repo = {
+  name : string;
+  url : string;
+  local_packages_dir : string option;
+      (** When set, the entry resolves to this on-disk [packages/] directory
+          and {!Source.Repo.ensure_extra} returns it without cloning. Used
+          for reporepo-handle overlays already materialised under
+          [<reporepo>/v1/<handle>/]. *)
+}
 
 type pin = { pkg : OpamPackage.t; url : OpamUrl.t; declared_in : string }
 (** [declared_in] is the source [*.opam] filename, used in error messages. *)

@@ -528,6 +528,19 @@ module Add = struct
             | Some ver -> Fmt.pr "  %s = %s@." h ver
             | None -> Fmt.pr "  %s@." h)
           e.depends
+      end;
+      if e.url <> "" then begin
+        Fmt.pr "Materialising v1/%s/ from %s @ %s@." e.handle e.url
+          (String.sub e.commit 0 (min 7 (String.length e.commit)));
+        let summary =
+          Oi.Source.Reporepo.materialise_handle ~fs ~sys ~path:reporepo
+            ~handle:e.handle ~url:e.url ~commit:e.commit
+        in
+        Fmt.pr
+          "  %d packages: %d already pinned, %d rewritten, %d marked \
+           unavailable@."
+          summary.total summary.kept summary.rewrote
+          (List.length summary.unavailable)
       end
     in
     let handle =
@@ -593,9 +606,78 @@ module Add = struct
 end
 
 module Bump = struct
+  let bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
+      ~default =
+    let effective_toolchain =
+      match toolchain with
+      | Some _ -> toolchain
+      | None ->
+          let entries = Oi.Source.Reporepo.load ~path:reporepo in
+          Stdlib.Option.bind (Oi.Source.Reporepo.latest entries ~handle)
+            (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain)
+    in
+    let base_handles = base_handles_of_toolchain effective_toolchain in
+    (* Setting --default on toolchain X requires clearing the flag on
+       whichever toolchain currently holds it, otherwise the reporepo
+       has two defaults and Source.Reporepo.load refuses to parse. *)
+    if default = Some true then begin
+      let entries = Oi.Source.Reporepo.load ~path:reporepo in
+      match Oi.Source.Reporepo.default_toolchain entries with
+      | Some prev when prev.handle <> handle -> begin
+          Fmt.pr "Clearing default flag on %s (replaced by %s)@." prev.handle
+            handle;
+          match
+            Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo
+              ~handle:prev.handle ~default:false ()
+          with
+          | `Bumped b -> Fmt.pr "  -> %s.%s@." b.handle b.version
+          | `Unchanged _ -> ()
+        end
+      | _ -> ()
+    end;
+    let bumped =
+      Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle ?url ?ref_
+        ?toolchain ?base_handles ?depends ?default ()
+    in
+    let entry =
+      match bumped with `Bumped e -> e | `Unchanged e -> e
+    in
+    (match bumped with
+    | `Bumped e ->
+        Fmt.pr "Bumped %s to %s@ commit=%s@ at %s@." e.handle e.version
+          e.commit e.opam_path;
+        if e.default_toolchain then Fmt.pr "  marked as default toolchain@."
+    | `Unchanged e ->
+        Fmt.pr
+          "No change: %s.%s already pins the current upstream commit (%s).@."
+          e.handle e.version e.commit);
+    if entry.url = "" then ()
+    else begin
+      Fmt.pr
+        "Materialising v1/%s/ from %s @ %s — this resolves every package's \
+         url and may take a while.@."
+        entry.handle entry.url
+        (String.sub entry.commit 0 (min 7 (String.length entry.commit)));
+      let summary =
+        Oi.Source.Reporepo.materialise_handle ~fs ~sys ~path:reporepo
+          ~handle:entry.handle ~url:entry.url ~commit:entry.commit
+      in
+      Fmt.pr
+        "  %d packages: %d already pinned, %d rewritten, %d marked \
+         unavailable@."
+        summary.total summary.kept summary.rewrote
+        (List.length summary.unavailable);
+      List.iter
+        (fun (pkg, reason) ->
+          Fmt.pr "    %a %s: %s@."
+            Fmt.(styled `Yellow string)
+            "unavailable" pkg reason)
+        summary.unavailable
+    end
+
   let cmd =
-    let run () reporepo reporepo_url handle url ref_ toolchain depend_specs
-        default =
+    let run () reporepo reporepo_url handle_opt all url ref_ toolchain
+        depend_specs default =
       Harness.run @@ fun env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
@@ -610,66 +692,62 @@ module Bump = struct
         | [] -> None
         | _ -> Some (List.map parse_depend_spec depend_specs)
       in
-      (* Effective toolchain for [base_handles] resolution: the
-       [--toolchain] flag overrides; otherwise inherit from the
-       previous entry so a bare [oi repo bump] keeps using the
-       toolchain's base set. *)
-      let effective_toolchain =
-        match toolchain with
-        | Some _ -> toolchain
-        | None ->
-            let entries = Oi.Source.Reporepo.load ~path:reporepo in
-            Stdlib.Option.bind (Oi.Source.Reporepo.latest entries ~handle)
-              (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain)
-      in
-      let base_handles = base_handles_of_toolchain effective_toolchain in
-      (* Auto-clear: setting --default on toolchain X requires clearing
-       any other toolchain currently flagged default, otherwise the
-       reporepo would have two defaults and Source.Reporepo.load would
-       refuse to parse it on next solve. The clearing is done as
-       separate bump operations so the timeline stays auditable. *)
-      if default = Some true then begin
-        let entries = Oi.Source.Reporepo.load ~path:reporepo in
-        List.iter
-          (fun (e : Oi.Source.Reporepo.entry) ->
-            () |> ignore;
-            if
-              e.handle <> handle && e.default_toolchain
-              && e.toolchain_name <> None
-            then begin
-              Fmt.pr "Clearing default flag on %s (replaced by %s)@." e.handle
-                handle;
-              match
-                Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle:e.handle
-                  ~default:false ()
-              with
-              | `Bumped b -> Fmt.pr "  -> %s.%s@." b.handle b.version
-              | `Unchanged _ -> ()
-            end)
-          (entries
-          |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
-          |> List.sort_uniq String.compare
-          |> List.filter_map (fun h ->
-              Oi.Source.Reporepo.latest entries ~handle:h))
-      end;
-      match
-        Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle ?url ?ref_
-          ?toolchain ?base_handles ?depends ?default ()
-      with
-      | `Bumped e ->
-          Fmt.pr "Bumped %s to %s@ commit=%s@ at %s@." e.handle e.version
-            e.commit e.opam_path;
-          if e.default_toolchain then Fmt.pr "  marked as default toolchain@."
-      | `Unchanged e ->
-          Fmt.pr
-            "No change: %s.%s already pins the current upstream commit (%s).@."
-            e.handle e.version e.commit
+      match (all, handle_opt) with
+      | false, None ->
+          Fmt.epr "oi repo bump: pass HANDLE or --all.@.";
+          exit 1
+      | true, Some _ ->
+          Fmt.epr "oi repo bump: HANDLE and --all are mutually exclusive.@.";
+          exit 1
+      | true, None ->
+          if
+            url <> None || ref_ <> None || toolchain <> None
+            || depend_specs <> [] || default <> None
+          then begin
+            Fmt.epr
+              "oi repo bump --all: per-entry overrides (--url, --ref, \
+               --toolchain, --depend, --default) are not supported with \
+               --all.@.";
+            exit 1
+          end;
+          let entries = Oi.Source.Reporepo.load ~path:reporepo in
+          let handles =
+            entries
+            |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
+            |> List.sort_uniq String.compare
+          in
+          List.iter
+            (fun h ->
+              Fmt.pr "@.%a@."
+                Fmt.(styled `Bold string)
+                ("== " ^ h ^ " ==");
+              try
+                bump_one ~fs ~sys ~reporepo ~handle:h ~url:None ~ref_:None
+                  ~toolchain:None ~depends:None ~default:None
+              with exn ->
+                Fmt.pr "  %a %s: %s@."
+                  Fmt.(styled `Red string)
+                  "error" h (Printexc.to_string exn))
+            handles
+      | false, Some handle ->
+          bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
+            ~default
     in
     let handle =
       Arg.(
-        required
+        value
         & pos 0 (some string) None
         & info ~docv:"HANDLE" ~doc:"The overlay handle to bump." [])
+    in
+    let all =
+      Arg.(
+        value & flag
+        & info
+            ~doc:
+              "Bump every overlay in the reporepo. Per-entry overrides \
+               ($(b,--url), $(b,--ref), $(b,--toolchain), $(b,--depend), \
+               $(b,--default)) are not allowed in this mode."
+            [ "all" ])
     in
     let url =
       Arg.(
@@ -714,36 +792,36 @@ module Bump = struct
       Term.(ret (const combine $ set $ unset))
     in
     let info =
-      Cmd.info "bump" ~doc:"Bring an overlay up to the latest upstream commit"
+      Cmd.info "bump" ~doc:"Re-pin an overlay to its current upstream commit"
         ~man:
           [
             `S Manpage.s_description;
             `P
               "Re-fetch the upstream commit on $(b,HANDLE)'s tracked branch \
-               and record it as a new $(b,YYYYMMDD.N) entry. Old entries stay \
-               in place — the reporepo keeps a git-like timeline you can roll \
-               back to.";
+               and record a new $(b,YYYYMMDD.N) meta-entry. Then walk the \
+               upstream's packages, sha-pin every URL, and write the result \
+               to $(b,<reporepo>/v1/<HANDLE>/). Pass $(b,--all) to bump \
+               every overlay.";
             `P
-              "Idempotent: prints $(b,No change) when the upstream commit, \
-               URL, branch, toolchain tag, default-flag, and deps still match \
-               the previous entry. Safe to run from cron or a pre-commit hook.";
+              "Idempotent on the meta-entry: prints $(b,No change) when \
+               nothing in commit/URL/ref/depends/flags has moved. The \
+               $(b,v1/) tree is rebuilt either way to catch upstream tag \
+               drift.";
             `P
-              "Non-base overlays also re-lock against the current latest \
-               $(b,default)/$(b,relocatable) on each bump (or, when the \
-               overlay declares $(b,x-oi-toolchain), against that toolchain's \
-               own base set). $(b,--depend) overrides the auto-injected pins.";
+              "Non-base overlays auto-relock against the current \
+               $(b,default)/$(b,relocatable) (or the toolchain's own base \
+               set when $(b,x-oi-toolchain) is set); $(b,--depend) \
+               overrides.";
             `P
-              "$(b,--default) flips the $(b,x-oi-default-toolchain) flag on \
-               toolchain-defining entries (those with \
-               $(b,x-oi-toolchain-name)). Setting it on one toolchain auto- \
-               clears it from any other; this is what $(b,oi run) without \
-               $(b,--toolchain) keys off.";
+              "$(b,--default) flips $(b,x-oi-default-toolchain) on \
+               toolchain-defining entries; setting it on one auto-clears \
+               any other.";
           ]
     in
     Cmd.v info
       Term.(
-        const run $ Terms.log $ reporepo_term $ reporepo_url_term $ handle $ url
-        $ ref_term $ toolchain_repo_term $ depend_term $ default)
+        const run $ Terms.log $ reporepo_term $ reporepo_url_term $ handle $ all
+        $ url $ ref_term $ toolchain_repo_term $ depend_term $ default)
 end
 
 module Set_roots = struct

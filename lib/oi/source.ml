@@ -80,9 +80,12 @@ module Repo = struct
   let ensure_extra ~fs ~data_dir ?(refresh = false) extras =
     List.map
       (fun (e : Project.extra_repo) ->
-        let dir = repo_dir ~data_dir e.name in
-        ensure_one ~fs ~refresh ~label:e.name ~url:e.url ~dir;
-        dir / "packages")
+        match e.local_packages_dir with
+        | Some d -> d
+        | None ->
+            let dir = repo_dir ~data_dir e.name in
+            ensure_one ~fs ~refresh ~label:e.name ~url:e.url ~dir;
+            dir / "packages")
       extras
 end
 
@@ -118,6 +121,28 @@ module Reporepo = struct
     match Sys.getenv_opt "OI_REPOREPO_URL" with
     | Some v when v <> "" -> v
     | _ -> default_url
+
+  (* -- v1 layout -------------------------------------------------------
+
+     reporepo/
+       v1/
+         reporepo/                       — meta-entries describing each
+           repo                            overlay (handle -> upstream pin).
+           packages/<handle>/<handle>.<version>/opam
+         <handle>/                       — fully-materialised overlay,
+           repo                            content-addressed end-to-end:
+           packages/<pkg>/<pkg>.<ver>/opam every url{} block carries a
+                                           tarball checksum or sha-pinned
+                                           git URL.
+
+     The [v1] prefix is a schema marker — a future incompatible change
+     becomes [v2] without breaking older clients in flight. *)
+
+  let v1_root ~path = path / "v1"
+  let meta_root ~path = v1_root ~path / "reporepo"
+  let meta_packages_dir ~path = meta_root ~path / "packages"
+  let overlay_dir ~path ~handle = v1_root ~path / handle
+  let overlay_packages_dir ~path ~handle = overlay_dir ~path ~handle / "packages"
 
   type entry = {
     handle : string;
@@ -455,7 +480,7 @@ module Reporepo = struct
       (OpamPackage.Version.of_string b)
 
   let load ~path =
-    let packages_dir = path / "packages" in
+    let packages_dir = meta_packages_dir ~path in
     if not (Sys.file_exists packages_dir) then []
     else
       let entries =
@@ -564,9 +589,12 @@ module Reporepo = struct
     if roots = [] then []
     else
       let path = env_path () in
-      let packages_dir = path / "packages" in
+      let packages_dir = meta_packages_dir ~path in
       if not (Sys.file_exists packages_dir) then
-        Error.config_error "reporepo at %s has no packages/ tree" path;
+        Error.config_error
+          "reporepo at %s has no v1/reporepo/packages/ tree (run 'oi repo \
+           add' or migrate from the old layout)"
+          path;
       let constraints =
         List.fold_left
           (fun m (r : root) ->
@@ -616,25 +644,6 @@ module Reporepo = struct
             sorted;
           sorted
 
-  let clone_dir_name ~handle ~version = "overlay-" ^ handle ^ "-" ^ version
-
-  let materialize_one ~fs ~refresh ~data_dir ~handle ~version ~url ~commit =
-    let name = clone_dir_name ~handle ~version in
-    let dir = data_dir / "repos" / name in
-    let url = if commit = "" then url else url ^ "#" ^ commit in
-    Repo.ensure_one ~fs ~refresh ~label:name ~url ~dir;
-    dir / "packages"
-
-  let materialize ~fs ~sys:_ ~data_dir ?(refresh = false) entries =
-    List.filter_map
-      (fun (e : entry) ->
-        if e.url = "" then None
-        else
-          Some
-            (materialize_one ~fs ~refresh ~data_dir ~handle:e.handle
-               ~version:e.version ~url:e.url ~commit:e.commit))
-      entries
-
   let base_entries () =
     let path = env_path () in
     if not (Sys.file_exists path) then []
@@ -646,7 +655,16 @@ module Reporepo = struct
           resolve entries ~roots:[ { handle = "relocatable"; version = None } ]
           |> List.rev
 
-  let ensure_base ~fs ~sys ~data_dir ?(refresh = false) () =
+  let assert_overlay_dir ~path ~handle =
+    let dir = overlay_packages_dir ~path ~handle in
+    if not (Sys.file_exists dir) then
+      Error.config_error
+        "overlay %s not materialised in reporepo at %s (missing %s); run 'oi \
+         repo bump %s' (or 'oi repo bump --all' to populate every overlay)"
+        handle path dir handle;
+    dir
+
+  let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false) () =
     let path = env_path () in
     ensure_clone ~fs ~sys ~refresh ~path ~url:(env_url ());
     Log.debug (fun m -> m "ensure_base: reading reporepo %s" path);
@@ -666,10 +684,10 @@ module Reporepo = struct
             m "base overlays (highest priority first): %s"
               (String.concat ", "
                  (List.map (fun (e : entry) -> e.handle ^ "." ^ e.version) base)));
-        List.map
+        List.filter_map
           (fun (e : entry) ->
-            materialize_one ~fs ~refresh ~data_dir ~handle:e.handle
-              ~version:e.version ~url:e.url ~commit:e.commit)
+            if e.url = "" then None
+            else Some (assert_overlay_dir ~path ~handle:e.handle))
           base
 
   let parse_ls_remote_output out =
@@ -842,13 +860,15 @@ module Reporepo = struct
     Buffer.contents buf
 
   let write_entry ~fs ~path ~handle ~version content =
-    let pkg_dir = path / "packages" / handle / (handle ^ "." ^ version) in
+    let pkg_dir =
+      meta_packages_dir ~path / handle / (handle ^ "." ^ version)
+    in
     let opam_path = pkg_dir / "opam" in
     write_file ~fs opam_path content;
     opam_path
 
   let ensure_repo_marker ~fs ~path =
-    let marker = path / "repo" in
+    let marker = meta_root ~path / "repo" in
     if not (Sys.file_exists marker) then
       write_file ~fs marker "opam-version: \"2.0\"\n"
 
@@ -867,6 +887,324 @@ module Reporepo = struct
           | Some e -> Some (h, Some e.version)
           | None -> None)
         base_handles
+
+  (* -- v1 overlay materialisation -------------------------------------- *)
+
+  (* Hardcoded — see design notes. Bumps are run interactively and the
+     bottleneck is one [git ls-remote] per package; eight in flight is a
+     comfortable concurrency without overwhelming a small reporepo's
+     upstream hosts. *)
+  let max_concurrent_url_resolutions = 8
+
+  let is_sha_string s =
+    String.length s = 40
+    && String.for_all
+         (function '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' -> true | _ -> false)
+         s
+
+  (* Classify [u] for v1 materialisation — git or tarball. Anything else
+     hard-errors: the v1 invariant is that the corpus is git+tarball-only. *)
+  let classify_url ~where (u : OpamUrl.t) : [ `Git | `Tarball ] =
+    match u.OpamUrl.backend with
+    | `git -> `Git
+    | `http -> `Tarball
+    | (`rsync | `darcs | `hg) as b ->
+        let name =
+          match b with `rsync -> "rsync" | `darcs -> "darcs" | `hg -> "hg"
+        in
+        Error.config_error
+          "%s: %s URLs are not supported in v1 materialisation (URL: %s)"
+          where name (OpamUrl.to_string u)
+
+  (* Special-case host rewrite: tangled.org's plain HTTPS clone path is
+     flaky in our hands, but the same content is mirrored on
+     git.recoil.org without the [.git] suffix. We rewrite up front so
+     both the [ls-remote] query and the URL we bake into the opam file
+     point at the more reliable host. *)
+  let rewrite_host (u : OpamUrl.t) : OpamUrl.t =
+    let prefix = "tangled.org/" in
+    if u.transport = "https" && String.starts_with ~prefix u.path then
+      let after = String.sub u.path (String.length prefix)
+        (String.length u.path - String.length prefix) in
+      let after =
+        if String.length after >= 4
+           && String.sub after (String.length after - 4) 4 = ".git"
+        then String.sub after 0 (String.length after - 4)
+        else after
+      in
+      { u with path = "git.recoil.org/" ^ after }
+    else u
+
+  (* Resolve a single URL into a content-addressed form. The caller maps
+     the polymorphic-variant outcome to whatever opam-file mutation it
+     needs; the four cases are: keep as-is, replace the URL (sha or host
+     rewrite), add a checksum to a tarball that lacked one, or report
+     why we couldn't pin it. *)
+  let try_resolve_url ~fs ~sys ~where (u_in : OpamUrl.t) ~has_checksum :
+      [ `Keep
+      | `Replace_url of OpamUrl.t
+      | `Add_checksum of OpamHash.t
+      | `Failed of string ] =
+    let u = rewrite_host u_in in
+    let host_changed = u.path <> u_in.path in
+    match classify_url ~where u with
+    | `Git -> begin
+        match u.hash with
+        | Some sha when is_sha_string sha ->
+            if host_changed then `Replace_url u else `Keep
+        | ref_opt -> begin
+            (* git(1) doesn't understand opam's [git+https://...]
+               spelling — strip the [git+] backend prefix and feed it the
+               plain [transport://path] form. The rewritten URL we write
+               back to the opam file keeps the [git+] form. *)
+            let url_for_query = { u with hash = None } in
+            let url_str = OpamUrl.base_url url_for_query in
+            try
+              let sha = ls_remote_sha ~sys ?ref_:ref_opt url_str in
+              `Replace_url { u with hash = Some sha }
+            with exn ->
+              `Failed
+                (Fmt.str "git ls-remote %s%s failed: %s" url_str
+                   (match ref_opt with None -> "" | Some r -> " " ^ r)
+                   (Printexc.to_string exn))
+          end
+      end
+    | `Tarball ->
+        if has_checksum then
+          if host_changed then `Replace_url u else `Keep
+        else begin
+          let url_str = OpamUrl.to_string u in
+          let tmp = Filename.temp_file "oi-bump-tarball-" ".bin" in
+          Fun.protect
+            ~finally:(fun () -> try Sys.remove tmp with Sys_error _ -> ())
+            (fun () ->
+              if D10.Sysops.Curl.fetch sys ~url:url_str ~dst:Eio.Path.(fs / tmp)
+              then `Add_checksum (OpamHash.compute ~kind:`SHA256 tmp)
+              else `Failed (Fmt.str "could not fetch tarball at %s" url_str))
+        end
+
+  type pkg_outcome =
+    | Pkg_kept
+    | Pkg_rewrote of int (* number of url fields rewritten *)
+    | Pkg_unavailable of string
+
+  type materialise_summary = {
+    handle : string;
+    total : int;
+    kept : int;
+    rewrote : int;
+    unavailable : (string * string) list;
+  }
+
+  let set_extension key str opam =
+    let v : OpamParserTypes.FullPos.value =
+      { pelem = OpamParserTypes.FullPos.String str; pos = OpamTypesBase.pos_null }
+    in
+    let exts =
+      OpamStd.String.Map.add key v (OpamFile.OPAM.extensions opam)
+    in
+    OpamFile.OPAM.with_extensions exts opam
+
+  (* Tag the rewritten file with the pre-rewrite URL so that incremental
+     bumps can detect "upstream URL didn't change" without re-running
+     ls-remote. *)
+  let stamp_source_url opam original_url =
+    set_extension "x-oi-source-url" original_url opam
+
+  let mark_unavailable opam ~reason =
+    opam
+    |> OpamFile.OPAM.with_available (OpamTypes.FBool false)
+    |> set_extension "x-oi-unavailable" reason
+
+  let process_main_url ~fs ~sys ~package opam =
+    match OpamFile.OPAM.url opam with
+    | None -> (opam, Pkg_kept, 0)
+    | Some file_url -> begin
+        let u = OpamFile.URL.url file_url in
+        let has_checksum = OpamFile.URL.checksum file_url <> [] in
+        let original = OpamUrl.to_string u in
+        match try_resolve_url ~fs ~sys ~where:package u ~has_checksum with
+        | `Keep -> (stamp_source_url opam original, Pkg_kept, 0)
+        | `Replace_url u' ->
+            let file_url' = OpamFile.URL.with_url u' file_url in
+            let opam' = OpamFile.OPAM.with_url file_url' opam in
+            (stamp_source_url opam' original, Pkg_rewrote 1, 1)
+        | `Add_checksum h ->
+            let file_url' = OpamFile.URL.with_checksum [ h ] file_url in
+            let opam' = OpamFile.OPAM.with_url file_url' opam in
+            (stamp_source_url opam' original, Pkg_rewrote 1, 1)
+        | `Failed reason ->
+            (* Lenient fallback: a transient ls-remote / tarball-fetch
+               failure should not poison the package. Keep the original
+               URL — opam will attempt the clone/download at build time
+               and fail there if it really is broken. The package stays
+               solvable, which preserves the pre-v1 behaviour for
+               overlays whose upstream URLs are flaky. *)
+            Log.warn (fun m ->
+                m "%s: leaving URL unpinned (%s)" package reason);
+            (stamp_source_url opam original, Pkg_kept, 0)
+      end
+
+  let process_pin_depends ~fs ~sys ~package opam =
+    match OpamFile.OPAM.pin_depends opam with
+    | [] -> (opam, 0)
+    | pins ->
+        (* For pin-depends we only ever rewrite (when ls-remote
+           resolves) or keep (when it doesn't, when a tarball has no
+           checksum slot, or when there's nothing to add). The package
+           stays solvable in every case — opam discovers the broken pin
+           at fetch time, matching pre-v1 behaviour. *)
+        let resolve_one (pkg, url) =
+          let where =
+            Fmt.str "%s pin-depends %s" package (OpamPackage.to_string pkg)
+          in
+          match try_resolve_url ~fs ~sys ~where url ~has_checksum:false with
+          | `Keep -> ((pkg, url), 0)
+          | `Replace_url u' -> ((pkg, u'), 1)
+          | `Add_checksum _ ->
+              Log.warn (fun m ->
+                  m "%s: tarball pin without checksum — leaving unpinned (%s)"
+                    where (OpamUrl.to_string url));
+              ((pkg, url), 0)
+          | `Failed reason ->
+              Log.warn (fun m ->
+                  m "%s: leaving pin unpinned (%s)" where reason);
+              ((pkg, url), 0)
+        in
+        let rewritten, count =
+          List.fold_right
+            (fun pin (acc, n) ->
+              let pin', delta = resolve_one pin in
+              (pin' :: acc, n + delta))
+            pins ([], 0)
+        in
+        (OpamFile.OPAM.with_pin_depends rewritten opam, count)
+
+  let process_one_opam ~fs ~sys ~src_opam_path ~dst_opam_path ~package =
+    let read_src () =
+      OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw src_opam_path))
+    in
+    let write_dst opam =
+      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+        Eio.Path.(fs / Filename.dirname dst_opam_path);
+      OpamFile.OPAM.write
+        (OpamFile.make (OpamFilename.raw dst_opam_path))
+        opam
+    in
+    let opam, outcome =
+      try
+        let opam = read_src () in
+        let opam, main_outcome, main_count =
+          process_main_url ~fs ~sys ~package opam
+        in
+        let opam, pin_count = process_pin_depends ~fs ~sys ~package opam in
+        let total = main_count + pin_count in
+        let outcome =
+          match main_outcome with
+          | Pkg_unavailable _ as r -> r
+          | Pkg_kept when total = 0 -> Pkg_kept
+          | _ -> Pkg_rewrote total
+        in
+        (opam, outcome)
+      with exn ->
+        (* Don't let a single bad opam file kill the whole bump — write
+           a stub marked unavailable and keep going. *)
+        Log.warn (fun m ->
+            m "%s: rewrite failed (%s)" package (Printexc.to_string exn));
+        let reason = Fmt.str "rewrite error: %s" (Printexc.to_string exn) in
+        let stub =
+          try mark_unavailable (read_src ()) ~reason
+          with _ -> OpamFile.OPAM.empty
+        in
+        (stub, Pkg_unavailable reason)
+    in
+    write_dst opam;
+    outcome
+
+  let scratch_clone ~fs ~sys ~url ~commit =
+    let scratch = Filename.temp_dir "oi-bump-clone-" "" in
+    try
+      Retry.with_attempts ~label:(Fmt.str "git clone %s" url) (fun () ->
+          D10.Sysops.Cmd.run sys [ "git"; "clone"; "--quiet"; url; scratch ]);
+      D10.Sysops.Cmd.run sys
+        [ "git"; "-C"; scratch; "checkout"; "--quiet"; commit ];
+      scratch
+    with exn ->
+      (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch)
+       with _ -> ());
+      Error.config_error "failed to clone %s at %s: %s" url commit
+        (Printexc.to_string exn)
+
+  (* In an opam-repository layout, [packages/<name>/<name>.<version>/opam].
+     The inner directory's basename is already [name.version] — don't
+     re-concatenate it. *)
+  let walk_packages_dir packages_dir =
+    if not (Sys.file_exists packages_dir) then []
+    else
+      Sys.readdir packages_dir |> Array.to_list
+      |> List.filter (fun n ->
+          Sys.is_directory (packages_dir / n)
+          && not (String.starts_with ~prefix:"." n))
+      |> List.sort String.compare
+      |> List.concat_map (fun pkg ->
+          let pkg_dir = packages_dir / pkg in
+          Sys.readdir pkg_dir |> Array.to_list
+          |> List.filter (fun pv ->
+              Sys.is_directory (pkg_dir / pv)
+              && Sys.file_exists (pkg_dir / pv / "opam"))
+          |> List.sort String.compare
+          |> List.map (fun pkg_ver_dir -> (pkg, pkg_ver_dir)))
+
+  let materialise_handle ~fs ~sys ~path ~handle ~url ~commit =
+    if commit = "" || url = "" then
+      Error.config_error
+        "cannot materialise overlay %s: missing url or commit (definition-only \
+         entries should not call this)"
+        handle;
+    let target_root = overlay_dir ~path ~handle in
+    let tmp_root = target_root ^ ".tmp" in
+    let tmp_packages = tmp_root / "packages" in
+    Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / tmp_root);
+    mkdir_p ~fs tmp_packages;
+    write_file ~fs (tmp_root / "repo") "opam-version: \"2.0\"\n";
+    let scratch = scratch_clone ~fs ~sys ~url ~commit in
+    Fun.protect
+      ~finally:(fun () ->
+        try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch)
+        with _ -> ())
+    @@ fun () ->
+    let scratch_packages = scratch / "packages" in
+    let pkgs = walk_packages_dir scratch_packages in
+    Log.info (fun m ->
+        m "Materialising %s: %d package versions" handle (List.length pkgs));
+    let outcomes =
+      Eio.Fiber.List.map ~max_fibers:max_concurrent_url_resolutions
+        (fun (pkg, pkg_ver) ->
+          let src = scratch_packages / pkg / pkg_ver / "opam" in
+          let dst = tmp_packages / pkg / pkg_ver / "opam" in
+          ( pkg_ver,
+            process_one_opam ~fs ~sys ~src_opam_path:src ~dst_opam_path:dst
+              ~package:pkg_ver ))
+        pkgs
+    in
+    Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / target_root);
+    Unix.rename tmp_root target_root;
+    let kept, rewrote, unavailable =
+      List.fold_left
+        (fun (k, r, u) (pkg_ver, outcome) ->
+          match outcome with
+          | Pkg_kept -> (k + 1, r, u)
+          | Pkg_rewrote _ -> (k, r + 1, u)
+          | Pkg_unavailable reason -> (k, r, (pkg_ver, reason) :: u))
+        (0, 0, []) outcomes
+    in
+    {
+      handle;
+      total = List.length outcomes;
+      kept;
+      rewrote;
+      unavailable = List.rev unavailable;
+    }
 
   let add ~fs ~sys ~path ~handle ~url ?ref_ ?toolchain ?base_handles ?depends
       ?(root_packages = []) ?synopsis ?(force = false) () =
@@ -1029,7 +1367,7 @@ module Reporepo = struct
         let pkg_dir = Filename.dirname e.opam_path in
         Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / pkg_dir))
       matches;
-    let handle_dir = path / "packages" / handle in
+    let handle_dir = meta_packages_dir ~path / handle in
     if Sys.file_exists handle_dir && Sys.readdir handle_dir |> Array.length = 0
     then Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / handle_dir)
 end
@@ -1045,6 +1383,131 @@ module Pin = struct
     Digest.to_hex (Digest.string (OpamUrl.to_string url))
 
   let sentinel_path src_dir = src_dir / ".oi-pin-ok"
+
+  (* -- oi.lock: per-project pin-depends resolution snapshot ------------ *)
+
+  module Lock = struct
+    (* [oi.lock] is transient state, kept under [_oi/] so it's
+       gitignored alongside the rest of the build artefacts. Pin
+       resolution is repeated on demand if the file is missing. *)
+    let rel_path = "_oi" / "oi.lock"
+
+    type entry = { pkg : string; origin : string; resolved : string }
+
+    let parse_entries (sexps : Sexplib0.Sexp.t list) =
+      let find_kv key fields =
+        List.find_map
+          (function
+            | Sexplib0.Sexp.List [ Atom k; Atom v ] when k = key -> Some v
+            | _ -> None)
+          fields
+      in
+      let tbl = Hashtbl.create 16 in
+      List.iter
+        (function
+          | Sexplib0.Sexp.List (Atom "pin" :: Atom pkg :: fields) -> begin
+              match (find_kv "origin" fields, find_kv "resolved" fields) with
+              | Some origin, Some resolved ->
+                  Hashtbl.replace tbl (pkg, origin)
+                    { pkg; origin; resolved }
+              | _ -> ()
+            end
+          | _ -> ())
+        sexps;
+      tbl
+
+    let read ~fs ~project_root =
+      let path = project_root / rel_path in
+      if not (Sys.file_exists path) then Hashtbl.create 0
+      else
+        let content = Eio.Path.load Eio.Path.(fs / path) in
+        match Parsexp.Many.parse_string content with
+        | Ok sexps -> parse_entries sexps
+        | Error e ->
+            Log.warn (fun m ->
+                m "%s: parse error (%s); ignoring lock file" path
+                  (Parsexp.Parse_error.message e));
+            Hashtbl.create 0
+
+    let write ~fs ~project_root entries =
+      let path = project_root / rel_path in
+      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+        Eio.Path.(fs / Filename.dirname path);
+      let buf = Buffer.create 512 in
+      Buffer.add_string buf
+        ";; _oi/oi.lock — transient. Auto-regenerated by `oi sync`.\n\
+         ;; Records the sha each pin-depends URL resolved to so subsequent\n\
+         ;; syncs skip the ls-remote round-trip; safe to delete to force a\n\
+         ;; refresh.\n";
+      Buffer.add_string buf "(version 1)\n";
+      let sorted =
+        List.sort (fun a b -> String.compare a.pkg b.pkg) entries
+      in
+      List.iter
+        (fun e ->
+          Printf.bprintf buf "(pin %s\n  (origin   %S)\n  (resolved %S))\n"
+            e.pkg e.origin e.resolved)
+        sorted;
+      Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path)
+        (Buffer.contents buf)
+  end
+
+  (* Resolve every pin's URL into a sha-pinned (or already content-
+     addressed) form, consulting/refreshing oi.lock at [lock_dir]. The
+     returned list has the same shape and order as [pins], but with each
+     [Project.pin.url] swapped for its resolved URL — downstream
+     [fetch_pin] then clones at exactly that sha. *)
+  let resolve_pins ~fs ~sys ?project_root pins =
+    match (pins, project_root) with
+    | [], _ | _, None -> pins
+    | _, Some project_root ->
+        let tbl = Lock.read ~fs ~project_root in
+        let resolve_url ~pkg_s origin (pin : Project.pin) =
+          match Hashtbl.find_opt tbl (pkg_s, origin) with
+          | Some entry -> OpamUrl.parse entry.resolved
+          | None -> (
+              match
+                Reporepo.try_resolve_url ~fs ~sys ~where:pkg_s pin.url
+                  ~has_checksum:false
+              with
+              | `Keep -> pin.url
+              | `Replace_url u -> u
+              (* Tarball pin without checksum: format has no checksum
+                 slot, so we leave the URL alone. *)
+              | `Add_checksum _ -> pin.url
+              | `Failed reason ->
+                  Error.config_error "pin %s: cannot resolve URL %s: %s"
+                    pkg_s origin reason)
+        in
+        let pins', entries =
+          List.fold_right
+            (fun (pin : Project.pin) (pins_acc, entries_acc) ->
+              let pkg_s = OpamPackage.to_string pin.pkg in
+              let origin = OpamUrl.to_string pin.url in
+              let resolved_url = resolve_url ~pkg_s origin pin in
+              let entry =
+                {
+                  Lock.pkg = pkg_s;
+                  origin;
+                  resolved = OpamUrl.to_string resolved_url;
+                }
+              in
+              ({ pin with url = resolved_url } :: pins_acc, entry :: entries_acc))
+            pins ([], [])
+        in
+        let entry_key (e : Lock.entry) = (e.pkg, e.origin, e.resolved) in
+        let sorted_keys items = List.sort compare (List.map entry_key items) in
+        let prev =
+          Hashtbl.fold (fun _ v acc -> v :: acc) tbl [] |> sorted_keys
+        in
+        if sorted_keys entries <> prev then begin
+          Lock.write ~fs ~project_root entries;
+          Log.info (fun m ->
+              m "Wrote %s with %d pin(s)"
+                (project_root / Lock.rel_path)
+                (List.length entries))
+        end;
+        pins'
 
   let fetch_pin ~fs ~cache ~refresh (pin : Project.pin) =
     let root = Cache.pins_dir cache in
@@ -1188,7 +1651,6 @@ module Mirror = struct
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
   let dir ~cache = Cache.root_s cache / "mirror"
-  let db_path ~cache = dir ~cache / "index.db"
   let url ~cache = OpamUrl.of_string ("file://" ^ dir ~cache)
 
   let remote_url ~registry =
@@ -1199,67 +1661,8 @@ module Mirror = struct
     in
     OpamUrl.of_string (trimmed ^ "/sources")
 
-  let path_of_checksum ~cache ck =
-    List.fold_left ( / ) (dir ~cache) (OpamHash.to_path ck)
-
-  let schema =
-    {|
-    CREATE TABLE IF NOT EXISTS sources (
-      sha256    TEXT PRIMARY KEY,
-      size      INTEGER NOT NULL,
-      added_at  REAL NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS source_checksums (
-      algo    TEXT NOT NULL,
-      value   TEXT NOT NULL,
-      sha256  TEXT NOT NULL REFERENCES sources(sha256) ON DELETE CASCADE,
-      PRIMARY KEY (algo, value)
-    );
-    CREATE INDEX IF NOT EXISTS idx_source_checksums_sha256
-      ON source_checksums(sha256);
-
-    CREATE TABLE IF NOT EXISTS source_refs (
-      sha256          TEXT NOT NULL REFERENCES sources(sha256) ON DELETE CASCADE,
-      package_name    TEXT NOT NULL,
-      package_version TEXT NOT NULL,
-      url             TEXT NOT NULL,
-      kind            TEXT NOT NULL CHECK (kind IN ('main','extra')),
-      extra_name      TEXT NOT NULL DEFAULT '',
-      PRIMARY KEY (sha256, package_name, package_version, kind, extra_name)
-    );
-    CREATE INDEX IF NOT EXISTS idx_source_refs_pkg
-      ON source_refs(package_name, package_version);
-  |}
-
-  let exec db sql =
-    match Sqlite3.exec db sql with
-    | Sqlite3.Rc.OK -> ()
-    | rc ->
-        Fmt.failwith "source_mirror sqlite: %s: %s\nSQL: %s"
-          (Sqlite3.Rc.to_string rc) (Sqlite3.errmsg db) sql
-
   let mkdir_p ~fs d =
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / d)
-
-  let open_db ~cache =
-    mkdir_p ~fs:(Cache.fs cache) (dir ~cache);
-    let db = Sqlite3.db_open (db_path ~cache) in
-    exec db schema;
-    exec db "PRAGMA journal_mode=WAL";
-    exec db "PRAGMA synchronous=NORMAL";
-    exec db "PRAGMA foreign_keys=ON";
-    db
-
-  let close_db db = ignore (Sqlite3.db_close db)
-
-  let with_db ~cache f =
-    let db = open_db ~cache in
-    Fun.protect ~finally:(fun () -> close_db db) (fun () -> f db)
-
-  let quote s =
-    let s = String.split_on_char '\'' s |> String.concat "''" in
-    Fmt.str "'%s'" s
 
   let file_size path =
     try Int64.of_int (Unix.stat path).Unix.st_size
@@ -1314,275 +1717,195 @@ module Mirror = struct
       with Unix.Unix_error _ -> ( try Sys.remove tmp with Sys_error _ -> ())
     end
 
-  let opam_cache_root () =
-    OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
-    |> OpamFilename.Dir.to_string
+  (* -- Static mirror populate (walks reporepo v1/) ----------------------- *)
 
-  let opam_cache_file checksums =
-    let root = opam_cache_root () in
-    List.find_map
-      (fun ck ->
-        let path = List.fold_left ( / ) root (OpamHash.to_path ck) in
-        if Sys.file_exists path then Some path else None)
-      checksums
+  type populate_summary = {
+    total : int;
+    fetched : int;
+    skipped : int;
+    failed : (string * string) list;
+  }
 
-  let record ~sys:_ ~cache ~package ?overlay ~kind ~url ~checksums () =
-    let provenance =
-      match overlay with
-      | None -> ""
-      | Some (h, v) -> Fmt.str " (from %s.%s)" h v
-    in
-    let kind_tag =
-      match kind with `Main -> "" | `Extra name -> Fmt.str " [extra:%s]" name
-    in
-    match checksums with
-    | [] ->
-        Log.debug (fun m ->
-            m "no checksums for %s%s%s, nothing to mirror"
-              (OpamPackage.to_string package)
-              kind_tag provenance)
+  let path_of_hash ~dst hash =
+    List.fold_left ( / ) dst (OpamHash.to_path hash)
+
+  let primary_checksum cks =
+    let prefer kind = List.find_opt (fun h -> OpamHash.kind h = kind) cks in
+    match prefer `SHA256 with
+    | Some h -> Some h
+    | None -> (
+        match prefer `SHA512 with Some h -> Some h | None -> prefer `MD5)
+
+  (* Walk every opam file under [reporepo/v1/<handle>/packages/], yield
+     (package, url, checksums) for every [url{}] block with at least one
+     checksum. Tarballs without checksums (legitimately missing or
+     stripped by the materialiser) are skipped silently. *)
+  let walk_v1_urls ~reporepo_path =
+    let v1 = reporepo_path / "v1" in
+    if not (Sys.file_exists v1) then []
+    else
+      let handles =
+        Sys.readdir v1 |> Array.to_list
+        |> List.filter (fun h -> Sys.is_directory (v1 / h))
+        |> List.sort String.compare
+      in
+      List.concat_map
+        (fun h ->
+          let pkgs_dir = v1 / h / "packages" in
+          if not (Sys.file_exists pkgs_dir) then []
+          else
+            Sys.readdir pkgs_dir |> Array.to_list
+            |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
+            |> List.sort String.compare
+            |> List.concat_map (fun pkg ->
+                let pkg_dir = pkgs_dir / pkg in
+                Sys.readdir pkg_dir |> Array.to_list
+                |> List.filter (fun pv ->
+                    Sys.is_directory (pkg_dir / pv)
+                    && Sys.file_exists (pkg_dir / pv / "opam"))
+                |> List.sort String.compare
+                |> List.filter_map (fun pkg_ver ->
+                    let opam_path = pkg_dir / pkg_ver / "opam" in
+                    try
+                      let opam =
+                        OpamFile.OPAM.read
+                          (OpamFile.make (OpamFilename.raw opam_path))
+                      in
+                      match OpamFile.OPAM.url opam with
+                      | None -> None
+                      | Some u ->
+                          let cks = OpamFile.URL.checksum u in
+                          if cks = [] then None
+                          else Some (pkg_ver, OpamFile.URL.url u, cks)
+                    with _ -> None)))
+        handles
+
+  type fetch_outcome = Fetched | Skipped | Fetch_failed of string
+
+  let fetch_one ~fs ~sys ~dst (u : OpamUrl.t) cks =
+    match u.OpamUrl.backend with
+    | `git ->
+        (* Git sources are not cached as tarballs — opam clones
+           directly from the sha-pinned URL. *)
+        Skipped
     | _ -> (
-        match opam_cache_file checksums with
-        | None ->
-            Log.debug (fun m ->
-                m "no cached blob for %s%s%s, skipping mirror"
-                  (OpamPackage.to_string package)
-                  kind_tag provenance)
-        | Some src_path ->
-            let sha256_hash = OpamHash.compute ~kind:`SHA256 src_path in
-            let sha256 = OpamHash.contents sha256_hash in
-            let size = file_size src_path in
-            let fs = Cache.fs cache in
-            with_db ~cache @@ fun db ->
-            exec db "BEGIN TRANSACTION";
-            exec db
-              (Fmt.str
-                 "INSERT OR IGNORE INTO sources (sha256, size, added_at) \
-                  VALUES (%s, %Ld, %f)"
-                 (quote sha256) size (Unix.time ()));
-            let declared = ref [] in
-            List.iter
-              (fun ck ->
-                let dst = path_of_checksum ~cache ck in
-                link_or_copy ~fs ~src:src_path ~dst;
-                let algo = OpamHash.(string_of_kind (kind ck)) in
-                let value = OpamHash.contents ck in
-                declared := (algo, value) :: !declared;
-                exec db
-                  (Fmt.str
-                     "INSERT OR IGNORE INTO source_checksums (algo, value, \
-                      sha256) VALUES (%s, %s, %s)"
-                     (quote algo) (quote value) (quote sha256)))
-              checksums;
-            if not (List.exists (fun (a, _) -> a = "sha256") !declared) then begin
-              let dst = path_of_checksum ~cache sha256_hash in
-              link_or_copy ~fs ~src:src_path ~dst;
-              exec db
-                (Fmt.str
-                   "INSERT OR IGNORE INTO source_checksums (algo, value, \
-                    sha256) VALUES ('sha256', %s, %s)"
-                   (quote sha256) (quote sha256))
-            end;
-            let extra_name, kind_s =
-              match kind with `Main -> ("", "main") | `Extra n -> (n, "extra")
-            in
-            exec db
-              (Fmt.str
-                 "INSERT OR IGNORE INTO source_refs (sha256, package_name, \
-                  package_version, url, kind, extra_name) VALUES (%s, %s, %s, \
-                  %s, %s, %s)"
-                 (quote sha256)
-                 (quote (OpamPackage.Name.to_string (OpamPackage.name package)))
-                 (quote
-                    (OpamPackage.Version.to_string
-                       (OpamPackage.version package)))
-                 (quote (OpamUrl.to_string url))
-                 (quote kind_s) (quote extra_name));
-            exec db "COMMIT")
+        match primary_checksum cks with
+        | None -> Skipped
+        | Some primary ->
+            if Sys.file_exists (path_of_hash ~dst primary) then Skipped
+            else
+              let url_str = OpamUrl.to_string u in
+              let tmp = Filename.temp_file "oi-mirror-" ".bin" in
+              Fun.protect
+                ~finally:(fun () -> try Sys.remove tmp with Sys_error _ -> ())
+                (fun () ->
+                  if
+                    not
+                      (D10.Sysops.Curl.fetch sys ~url:url_str
+                         ~dst:Eio.Path.(fs / tmp))
+                  then Fetch_failed (Fmt.str "fetch failed: %s" url_str)
+                  else
+                    let bad =
+                      List.find_opt
+                        (fun ck ->
+                          let got =
+                            OpamHash.contents
+                              (OpamHash.compute ~kind:(OpamHash.kind ck) tmp)
+                          in
+                          got <> OpamHash.contents ck)
+                        cks
+                    in
+                    match bad with
+                    | Some ck ->
+                        Fetch_failed
+                          (Fmt.str "checksum mismatch (%s) for %s"
+                             (OpamHash.to_string ck) url_str)
+                    | None ->
+                        List.iter
+                          (fun ck ->
+                            link_or_copy ~fs ~src:tmp
+                              ~dst:(path_of_hash ~dst ck))
+                          cks;
+                        Fetched))
+
+  let populate ~fs ~sys ~reporepo_path ~dst =
+    let entries = walk_v1_urls ~reporepo_path in
+    let total = List.length entries in
+    Log.info (fun m -> m "Mirror populate: %d candidates from v1/" total);
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dst);
+    let outcomes =
+      Eio.Fiber.List.map ~max_fibers:8
+        (fun (pkg_ver, u, cks) -> (pkg_ver, fetch_one ~fs ~sys ~dst u cks))
+        entries
+    in
+    let fetched, skipped, failed =
+      List.fold_left
+        (fun (f, s, fl) (pkg_ver, outcome) ->
+          match outcome with
+          | Fetched -> (f + 1, s, fl)
+          | Skipped -> (f, s + 1, fl)
+          | Fetch_failed reason -> (f, s, (pkg_ver, reason) :: fl))
+        (0, 0, []) outcomes
+    in
+    { total; fetched; skipped; failed = List.rev failed }
+
+  (* Disk-walk helpers — no SQLite metadata; the on-disk layout
+     [<dir>/<algo>/<XX>/<full-hash>] is the single source of truth. *)
+
+  let walk_blobs ~mirror_dir =
+    let algos = [ "md5"; "sha256"; "sha512" ] in
+    List.concat_map
+      (fun algo ->
+        let algo_dir = mirror_dir / algo in
+        if not (Sys.file_exists algo_dir) then []
+        else
+          Sys.readdir algo_dir |> Array.to_list
+          |> List.filter (fun s -> Sys.is_directory (algo_dir / s))
+          |> List.concat_map (fun shard ->
+              let shard_dir = algo_dir / shard in
+              Sys.readdir shard_dir |> Array.to_list
+              |> List.filter_map (fun hash ->
+                  let path = shard_dir / hash in
+                  if Sys.is_directory path then None
+                  else Some (algo, hash, path))))
+      algos
 
   type stats = { count : int; total_size : int64 }
 
   let stats ~cache =
-    if not (Sys.file_exists (db_path ~cache)) then
-      { count = 0; total_size = 0L }
+    let mirror_dir = dir ~cache in
+    if not (Sys.file_exists mirror_dir) then { count = 0; total_size = 0L }
     else
-      with_db ~cache @@ fun db ->
-      let stmt =
-        Sqlite3.prepare db
-          "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM sources"
+      let blobs = walk_blobs ~mirror_dir in
+      let total =
+        List.fold_left
+          (fun acc (_, _, p) -> Int64.add acc (file_size p))
+          0L blobs
       in
-      let r =
-        match Sqlite3.step stmt with
-        | Sqlite3.Rc.ROW ->
-            let count = Sqlite3.Data.to_int_exn (Sqlite3.column stmt 0) in
-            let total_size =
-              match Sqlite3.column stmt 1 with
-              | Sqlite3.Data.INT n -> n
-              | Sqlite3.Data.FLOAT f -> Int64.of_float f
-              | _ -> 0L
-            in
-            { count; total_size }
-        | _ -> { count = 0; total_size = 0L }
-      in
-      ignore (Sqlite3.finalize stmt);
-      r
-
-  type entry = {
-    sha256 : string;
-    size : int64;
-    package_name : string;
-    package_version : string;
-    kind : [ `Main | `Extra of string ];
-    url : string;
-  }
-
-  let list ~cache ?package () =
-    if not (Sys.file_exists (db_path ~cache)) then []
-    else
-      with_db ~cache @@ fun db ->
-      let out = ref [] in
-      let cb row =
-        match row with
-        | [| sha256; size; name; version; url; kind_s; extra_name |] ->
-            let kind =
-              match kind_s with
-              | "main" -> `Main
-              | "extra" -> `Extra extra_name
-              | other -> `Extra other
-            in
-            let size =
-              Int64.of_string_opt size |> Stdlib.Option.value ~default:0L
-            in
-            out :=
-              {
-                sha256;
-                size;
-                package_name = name;
-                package_version = version;
-                kind;
-                url;
-              }
-              :: !out
-        | _ -> ()
-      in
-      let where =
-        match package with
-        | None -> ""
-        | Some p -> Fmt.str " WHERE r.package_name = %s" (quote p)
-      in
-      ignore
-        (Sqlite3.exec_not_null_no_headers db ~cb
-           (Fmt.str
-              "SELECT s.sha256, s.size, r.package_name, r.package_version, \
-               r.url, r.kind, r.extra_name FROM source_refs r JOIN sources s \
-               ON s.sha256 = r.sha256%s ORDER BY r.package_name, \
-               r.package_version, r.kind, r.extra_name"
-              where));
-      List.rev !out
-
-  let checksums_for_sha256 db sha256 =
-    let out = ref [] in
-    let cb row =
-      match row with
-      | [| algo; value |] -> out := (algo, value) :: !out
-      | _ -> ()
-    in
-    ignore
-      (Sqlite3.exec_not_null_no_headers db ~cb
-         (Fmt.str "SELECT algo, value FROM source_checksums WHERE sha256 = %s"
-            (quote sha256)));
-    !out
-
-  let gc ~cache =
-    if not (Sys.file_exists (db_path ~cache)) then 0
-    else
-      with_db ~cache @@ fun db ->
-      let orphans = ref [] in
-      let cb row =
-        match row with [| sha |] -> orphans := sha :: !orphans | _ -> ()
-      in
-      ignore
-        (Sqlite3.exec_not_null_no_headers db ~cb
-           "SELECT s.sha256 FROM sources s LEFT JOIN source_refs r ON r.sha256 \
-            = s.sha256 WHERE r.sha256 IS NULL");
-      let removed = ref 0 in
-      List.iter
-        (fun sha ->
-          let cks = checksums_for_sha256 db sha in
-          List.iter
-            (fun (algo, value) ->
-              let shard =
-                if String.length value >= 2 then String.sub value 0 2 else value
-              in
-              let path = dir ~cache / algo / shard / value in
-              try
-                Unix.unlink path;
-                incr removed
-              with Unix.Unix_error _ -> ())
-            cks;
-          exec db (Fmt.str "DELETE FROM sources WHERE sha256 = %s" (quote sha)))
-        !orphans;
-      !removed
+      { count = List.length blobs; total_size = total }
 
   let verify ~sys:_ ~cache =
-    if not (Sys.file_exists (db_path ~cache)) then []
+    let mirror_dir = dir ~cache in
+    if not (Sys.file_exists mirror_dir) then []
     else
-      with_db ~cache @@ fun db ->
-      let bad = ref [] in
-      let cb row =
-        match row with
-        | [| sha256; algo; value |] ->
-            let shard =
-              if String.length value >= 2 then String.sub value 0 2 else value
-            in
-            let path = dir ~cache / algo / shard / value in
-            if not (Sys.file_exists path) then
-              bad := (sha256, Fmt.str "missing: %s" path) :: !bad
-            else begin
-              let kind =
-                match algo with
-                | "md5" -> `MD5
-                | "sha256" -> `SHA256
-                | "sha512" -> `SHA512
-                | other ->
-                    bad := (sha256, Fmt.str "unknown algo: %s" other) :: !bad;
-                    `SHA256
-              in
-              let got = OpamHash.contents (OpamHash.compute ~kind path) in
-              if got <> value then
-                bad :=
-                  (sha256, Fmt.str "%s mismatch at %s: %s" algo path got)
-                  :: !bad
-            end
-        | _ -> ()
-      in
-      ignore
-        (Sqlite3.exec_not_null_no_headers db ~cb
-           "SELECT sha256, algo, value FROM source_checksums");
-      !bad
-
-  let merge_remote ~fs ~index_path ~remote_path =
-    mkdir_p ~fs (Filename.dirname index_path);
-    let db = Sqlite3.db_open index_path in
-    Fun.protect ~finally:(fun () -> close_db db) @@ fun () ->
-    exec db schema;
-    exec db "PRAGMA journal_mode=DELETE";
-    exec db "PRAGMA synchronous=NORMAL";
-    exec db "PRAGMA foreign_keys=ON";
-    exec db (Fmt.str "ATTACH DATABASE %s AS remote" (quote remote_path));
-    (try
-       exec db "BEGIN TRANSACTION";
-       exec db "INSERT OR IGNORE INTO sources SELECT * FROM remote.sources";
-       exec db
-         "INSERT OR IGNORE INTO source_checksums SELECT * FROM \
-          remote.source_checksums";
-       exec db
-         "INSERT OR IGNORE INTO source_refs SELECT * FROM remote.source_refs";
-       exec db "COMMIT"
-     with e ->
-       (try exec db "ROLLBACK" with _ -> ());
-       raise e);
-    exec db "DETACH DATABASE remote"
+      let blobs = walk_blobs ~mirror_dir in
+      List.filter_map
+        (fun (algo, hash, path) ->
+          let kind =
+            match algo with
+            | "md5" -> Some `MD5
+            | "sha256" -> Some `SHA256
+            | "sha512" -> Some `SHA512
+            | _ -> None
+          in
+          match kind with
+          | None -> Some (hash, Fmt.str "unknown algo: %s" algo)
+          | Some k ->
+              let got = OpamHash.contents (OpamHash.compute ~kind:k path) in
+              if got <> hash then
+                Some (hash, Fmt.str "%s mismatch at %s: %s" algo path got)
+              else None)
+        blobs
 
   let export ~cache ~dst =
     let src_dir = dir ~cache in
@@ -1592,32 +1915,14 @@ module Mirror = struct
       let dst_root = Eio.Path.(dst / "sources") in
       let dst_s = Eio.Path.native_exn dst_root in
       mkdir_p ~fs dst_s;
-      if Sys.file_exists (db_path ~cache) then
-        link_or_copy ~fs ~src:(db_path ~cache) ~dst:(dst_s / "index.db");
-      let algo_dirs = [ "md5"; "sha256"; "sha512" ] in
-      let count = ref 0 in
+      let blobs = walk_blobs ~mirror_dir:src_dir in
       List.iter
-        (fun algo ->
-          let algo_src = src_dir / algo in
-          if Sys.file_exists algo_src then begin
-            let shards = Sys.readdir algo_src in
-            Array.iter
-              (fun shard ->
-                let shard_src = algo_src / shard in
-                if Sys.is_directory shard_src then begin
-                  let files = Sys.readdir shard_src in
-                  Array.iter
-                    (fun hash ->
-                      let sp = shard_src / hash in
-                      if not (Sys.is_directory sp) then begin
-                        let dp = dst_s / algo / shard / hash in
-                        link_or_copy ~fs ~src:sp ~dst:dp;
-                        incr count
-                      end)
-                    files
-                end)
-              shards
-          end)
-        algo_dirs;
-      !count
+        (fun (algo, hash, src) ->
+          let shard =
+            if String.length hash >= 2 then String.sub hash 0 2 else hash
+          in
+          let dp = dst_s / algo / shard / hash in
+          link_or_copy ~fs ~src ~dst:dp)
+        blobs;
+      List.length blobs
 end

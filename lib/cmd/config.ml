@@ -1,23 +1,9 @@
 open Cmdliner
 
-let ( / ) = Filename.concat
-
-[@@@warning "-32"]
-
 let cmd =
   let run () cache_dir data_dir =
     Harness.run @@ fun env ->
-    let {
-      Harness.proc_mgr = _proc_mgr;
-      fs;
-      clock = _clock;
-      sys;
-      platform = _platform;
-      os_key;
-      cache = _cache;
-    } =
-      Harness.bootstrap env cache_dir
-    in
+    let { Harness.fs; os_key; _ } = Harness.bootstrap env cache_dir in
     Fmt.pr "@[<v>%a@," Fmt.(styled `Bold string) "Platform";
     Fmt.pr "  os-key:     %s@," os_key;
     Fmt.pr "  ocaml:      %s (relocatable)@," Workspace.ocaml_version;
@@ -79,18 +65,18 @@ let cmd =
         Fmt.(styled `Yellow string)
         "(none)" (Terms.reporepo_path ())
     else
+      let path = Terms.reporepo_path () in
       List.iter
         (fun (e : Oi.Source.Reporepo.entry) ->
-          let name = "overlay-" ^ e.handle ^ "-" ^ e.version in
-          let dir = Oi.Source.Repo.repo_dir ~data_dir name in
+          let dir =
+            Oi.Source.Reporepo.overlay_packages_dir ~path ~handle:e.handle
+          in
           let status =
-            if Sys.file_exists (dir / ".git") then
-              let hash =
-                try D10.Sysops.Git.head_short sys ~dir:Eio.Path.(fs / dir)
-                with _ -> "?"
-              in
-              Fmt.str "%a (%s)" Fmt.(styled `Green string) "cloned" hash
-            else Fmt.str "%a" Fmt.(styled `Yellow string) "not cloned"
+            if e.url = "" then
+              Fmt.str "%a" Fmt.(styled `Faint string) "definition only"
+            else if Sys.file_exists dir then
+              Fmt.str "%a" Fmt.(styled `Green string) "materialised"
+            else Fmt.str "%a" Fmt.(styled `Yellow string) "not materialised"
           in
           Fmt.pr "  %a.%s  %s  %s@,"
             Fmt.(styled `Bold string)

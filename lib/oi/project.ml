@@ -9,7 +9,14 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 
 (* -- Top-level: read *.opam files in a directory ------------------------- *)
 
-type extra_repo = { name : string; url : string }
+type extra_repo = {
+  name : string;
+  url : string;
+  local_packages_dir : string option;
+      (* When [Some d], [d] is an existing on-disk packages/ directory and
+         [Source.Repo.ensure_extra] returns it without cloning. Used for
+         reporepo-handle overlays that live in [<reporepo>/v1/<handle>/]. *)
+}
 type pin = { pkg : OpamPackage.t; url : OpamUrl.t; declared_in : string }
 
 type t = {
@@ -127,7 +134,7 @@ let merge_extra_repos entries =
       Error.config_error "package %s and %s disagree on %s entry %s: %s vs %s"
         prev_file declared_in Keys.repos name prev_url url)
     entries
-  |> List.map (fun (_, name, url) -> { name; url })
+  |> List.map (fun (_, name, url) -> { name; url; local_packages_dir = None })
 
 let merge_pins (entries : pin list) : pin list =
   dedup_with_conflict_check

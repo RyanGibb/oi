@@ -56,8 +56,7 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
       let cache_urls = Oi.Pipeline.cache_urls ~cache ~remote in
       Oi.Execute.run ~cache_urls ~proc_mgr ~fs
         ~clock:(clock :> D10.Config.clk)
-        ~sys ~os_key exec_plan;
-      Oi.Pipeline.record_sources ~sys ~cache exec_plan
+        ~sys ~os_key exec_plan
     end;
     let build_dir = run_dir_s in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / build_dir);

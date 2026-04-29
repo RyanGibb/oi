@@ -244,7 +244,7 @@ let pick_ocaml_version ~explicit_compiler pkgs =
   |> Stdlib.Option.map (fun p ->
       OpamPackage.Version.to_string (OpamPackage.version p))
 
-let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
+let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
   (* Auto-clone the reporepo if missing so [--toolchain=HANDLE] still
      works on a fresh machine — the toolchain definitions live there
      now, not in oi's binary. *)
@@ -284,8 +284,13 @@ let resolve ~fs ~sys ~data_dir ~(conf : Solver.Ctx.conf) ~handle =
     if dep_roots = [] then []
     else Source.Reporepo.resolve entries ~roots:dep_roots |> List.rev
   in
+  let path = Source.Reporepo.env_path () in
   let packages_dirs =
-    Source.Reporepo.materialize ~fs ~sys ~data_dir ~refresh:false resolved
+    List.filter_map
+      (fun (e : Source.Reporepo.entry) ->
+        if e.url = "" then None
+        else Some (Source.Reporepo.assert_overlay_dir ~path ~handle:e.handle))
+      resolved
   in
   let root_specs = List.flatten entry.toolchain_roots in
   if root_specs = [] then
