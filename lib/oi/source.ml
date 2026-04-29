@@ -883,9 +883,18 @@ module Reporepo = struct
     else
       List.filter_map
         (fun h ->
-          match latest entries ~handle:h with
-          | Some e -> Some (h, Some e.version)
-          | None -> None)
+          if h = handle then
+            None
+            (* A handle never depends on itself. Filtering here keeps
+               [base_handles_of_toolchain] callers safe even when the
+               toolchain definition's own [depends:] lists the overlay
+               that anchors its compiler (e.g. [toolchain-oxcaml]
+               depends on [oxcaml]); bumping the [oxcaml] overlay must
+               not generate an [oxcaml = ...] self-dep. *)
+          else
+            match latest entries ~handle:h with
+            | Some e -> Some (h, Some e.version)
+            | None -> None)
         base_handles
 
   (* -- v1 overlay materialisation -------------------------------------- *)
@@ -1175,14 +1184,39 @@ module Reporepo = struct
     let pkgs = walk_packages_dir scratch_packages in
     Log.info (fun m ->
         m "Materialising %s: %d package versions" handle (List.length pkgs));
+    (* Copy [<pkg-dir>/files/] (patches and other [extra-files:]) from
+       upstream into the materialised tree. opam reads them by relative
+       path during build, so the v1/ snapshot is incomplete without
+       them. Hardlink first, fall back to byte copy across filesystems. *)
+    let copy_files_dir ~src ~dst =
+      if Sys.file_exists src && Sys.is_directory src then begin
+        mkdir_p ~fs dst;
+        Sys.readdir src
+        |> Array.iter (fun name ->
+            let s = src / name in
+            let d = dst / name in
+            if Sys.file_exists s && not (Sys.is_directory s) then
+              try Unix.link s d
+              with Unix.Unix_error _ ->
+                let bytes = Eio.Path.load Eio.Path.(fs / s) in
+                Eio.Path.save ~create:(`Or_truncate 0o644)
+                  Eio.Path.(fs / d)
+                  bytes)
+      end
+    in
     let outcomes =
       Eio.Fiber.List.map ~max_fibers:max_concurrent_url_resolutions
         (fun (pkg, pkg_ver) ->
           let src = scratch_packages / pkg / pkg_ver / "opam" in
           let dst = tmp_packages / pkg / pkg_ver / "opam" in
-          ( pkg_ver,
+          let outcome =
             process_one_opam ~fs ~sys ~src_opam_path:src ~dst_opam_path:dst
-              ~package:pkg_ver ))
+              ~package:pkg_ver
+          in
+          copy_files_dir
+            ~src:(scratch_packages / pkg / pkg_ver / "files")
+            ~dst:(tmp_packages / pkg / pkg_ver / "files");
+          (pkg_ver, outcome))
         pkgs
     in
     Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / target_root);
@@ -1282,20 +1316,40 @@ module Reporepo = struct
     let commit =
       if url = "" then prev.commit else ls_remote_sha ~sys ?ref_ url
     in
+    (* Auto-derive a fresh, accurate depends list. The set of handles
+       comes from [auto] (bumped explicitly via [base_handles]) plus any
+       extra handles [prev] carried (preserved as-is in the set). Every
+       handle gets bumped to its current latest version, so a fresh
+       bump never leaves a stale pin behind. *)
+    let auto_derive_depends ~auto ~prev =
+      let auto_handles = List.map fst auto in
+      let extras_from_prev =
+        List.filter_map
+          (fun (h, _) ->
+            if List.mem h auto_handles then None
+            else
+              match latest entries ~handle:h with
+              | Some e -> Some (h, Some e.version)
+              | None -> None)
+          prev
+      in
+      auto @ extras_from_prev
+    in
     let depends =
       match depends with
       | Some d -> d
-      | None -> (
+      | None ->
           if is_base_handle handle then prev.depends
           else
-            match base_handles with
-            | Some bh -> auto_base_depends entries ~handle ~base_handles:bh
-            | None ->
-                let auto =
+            let auto =
+              match base_handles with
+              | Some bh -> auto_base_depends entries ~handle ~base_handles:bh
+              | None ->
                   auto_base_depends entries ~handle
                     ~base_handles:default_base_handles
-                in
-                if auto = [] then prev.depends else auto)
+            in
+            if auto = [] then prev.depends
+            else auto_derive_depends ~auto ~prev:prev.depends
     in
     let root_packages =
       match root_packages with Some r -> r | None -> prev.root_packages
