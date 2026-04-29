@@ -61,15 +61,17 @@ let info =
           \  oi run my_script.ml\n\
           \  oi run https://example.com/hello.ml";
         `P
-          "Inside a project, $(b,oi sync) installs the project's dependencies \
-           into $(b,_oi/prefix/) and writes a $(b,.envrc) for $(b,direnv). The \
-           sync also installs dev tools ($(b,odoc), $(b,merlin), \
-           $(b,ocaml-lsp-server), plus $(b,mdx) and $(b,ocamlformat) when the \
-           project uses them) into $(b,_oi/tools/).";
+          "Inside a project, $(b,oi build) syncs the project's dependencies \
+           into $(b,_oi/prefix/), installs dev tools ($(b,odoc), $(b,merlin), \
+           $(b,ocaml-lsp-server), plus $(b,mdx) / $(b,ocamlformat) when the \
+           project uses them) into $(b,_oi/tools/), writes a $(b,.envrc) for \
+           $(b,direnv) (when installed), and runs $(b,dune build). \
+           $(b,oi build --deps-only) stops before the build for after a \
+           manifest edit.";
         `Pre
-          "  oi sync\n\
+          "  oi build\n\
           \  direnv allow      # or: eval \"\\$(oi env)\"\n\
-          \  oi exec dune build";
+          \  oi exec dune test";
         `P
           "Add a new dependency. $(b,oi) edits $(b,dune-project), regenerates \
            the $(b,*.opam) files, and re-syncs:";
@@ -90,26 +92,31 @@ let info =
         `S "COMMAND CATEGORIES";
         `I
           ( "$(b,Getting started)",
-            "$(b,run) executes a binary or an OCaml script, fetching any \
-             missing dependencies and caching them for next time." );
+            "$(b,run) executes a binary or OCaml script, fetching any missing \
+             dependencies. $(b,build) warms the cache for a package, overlay, \
+             or every overlay; with no $(b,PKG) it runs the cwd's project \
+             build." );
         `I
           ( "$(b,Working in a project)",
-            "$(b,sync) installs project dependencies and dev tools. $(b,exec) \
-             runs a command in the project environment. $(b,env) prints that \
+            "$(b,build) syncs deps + dev tools and runs $(b,dune build); \
+             $(b,build --deps-only) stops before the build. $(b,exec) runs a \
+             command in the project environment. $(b,env) prints that \
              environment for use with $(b,eval). $(b,add) records a new \
              dependency in $(b,dune-project)." );
         `I
           ( "$(b,Checking what's going on)",
-            "$(b,show) summarises the build plan and lists any missing system \
-             packages; pass $(b,--tree) for the full per-package plan or \
-             $(b,--only-depexts) for a list suitable for piping into a package \
-             manager. $(b,search) finds a binary or package across caches and \
-             overlays. $(b,config) reports the platform, cache directories, \
-             project state, and dev-tool probes." );
+            "$(b,show) summarises the build plan and lists missing system \
+             packages; $(b,oi show --all) and $(b,oi show @HANDLE) list \
+             cached layers. $(b,search) finds a binary or package. \
+             $(b,config) reports platform, cache directories, project state, \
+             and dev-tool probes." );
         `I
-          ( "$(b,Sharing builds and managing disk)",
-            "$(b,registry) manages the pre-built package cache and source \
-             mirror. $(b,clean) frees disk space." );
+          ( "$(b,Publishing and disk)",
+            "$(b,oi build --export DIR) writes the cache + index + sources \
+             for HTTP serving or $(b,rsync). $(b,oi build --depext) prints \
+             system packages required by the build. $(b,oi registry docker) \
+             generates a multi-distro registry-build compose project. \
+             $(b,clean) frees disk space." );
         `I
           ( "$(b,Picking package sources)",
             "$(b,repo) manages the reporepo (see QUICK START): register \
@@ -161,11 +168,11 @@ let () =
     Cmd.group info
       [
         Oi_cmd.Run.cmd;
+        Oi_cmd.Build.cmd;
         Oi_cmd.Add.cmd;
         Oi_cmd.Exec.cmd;
         Oi_cmd.Search.cmd;
         Oi_cmd.Show.cmd;
-        Oi_cmd.Sync.cmd;
         Oi_cmd.Env.cmd;
         Oi_cmd.Config.cmd;
         Oi_cmd.Registry.cmd;

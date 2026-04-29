@@ -66,7 +66,8 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
           all_hashes;
         D10.Index.delete_layers db ~hashes:all_hashes;
         Fmt.pr
-          "Removed %d layer(s). Run 'oi sync' to rebuild what you still need.@."
+          "Removed %d layer(s). Run 'oi build' to rebuild what you still \
+           need.@."
           (List.length all_hashes)
       end;
       D10.Index.close db;
@@ -205,7 +206,7 @@ let cmd =
             "$(b,PKG) drops every cached version of that package; \
              $(b,PKG.VERSION) drops one. Layers that transitively depend on a \
              removed entry are dropped too, so a poisoned build can't survive \
-             in a downstream layer. Re-run $(b,oi sync) to rebuild.";
+             in a downstream layer. Re-run $(b,oi build) to rebuild.";
           `Pre "  oi clean --layers\n  oi clean dune\n  oi clean dune.3.22.1 -n";
         ]
   in
@@ -213,5 +214,3 @@ let cmd =
     Term.(
       const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir $ all
       $ toolchains $ sources $ binaries $ dune_cache $ repos $ dry_run $ target)
-
-(* -- registry list ------------------------------------------------------- *)

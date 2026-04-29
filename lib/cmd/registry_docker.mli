@@ -3,7 +3,7 @@
     Emits a standalone static musl build of [oi] on alpine (for CI / manual
     release builds) plus one runnable per-distro image that curls the latest
     [oi] binary from the GitHub releases page and ships the target's depexts.
-    The actual [oi registry build] and [oi registry export] invocations live in
+    The actual [oi build --all --export /out] invocation lives in
     [docker-compose.yml] as a [command:] override, so the same image can run
     against different reporepo pins without rebuilding. *)
 
@@ -22,6 +22,12 @@ val dockerfile_one_distro :
     then fetches the latest statically linked [oi-linux-<arch>] from the [oi]
     GitHub releases page and sets [/work] as the working directory. No [CMD] is
     set: the compose file drives the build+export steps. *)
+
+val dockerfile_project :
+  ?overlay_depexts:string list -> Distro.t -> Dockerfile.t
+(** Project-mode Dockerfile: same distro stage as {!dockerfile_one_distro}, plus
+    [WORKDIR /src], [COPY . /src], and [RUN oi build]. Backs
+    [oi build --docker] for a project-rooted build. *)
 
 type opam_vars = {
   os_distribution : string;
@@ -48,7 +54,7 @@ val docker_compose_yaml :
   distros:Distro.t list -> registry_host_path:string -> unit -> string
 (** [docker_compose_yaml ~distros ~registry_host_path ()] emits a compose file
     whose services each bind-mount [registry_host_path] at [/out] and run
-    [oi registry build --refresh --all && oi registry export /out]. Every
+    [oi build --refresh --all --export /out]. Every
     container owns its own oi state — [oi] auto-clones the reporepo from its
     configured default URL (overridable via [OI_REPOREPO_URL] in the service
     environment) on first use — so containers are independent and safe to run in

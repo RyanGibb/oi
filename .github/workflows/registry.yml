@@ -168,27 +168,22 @@ jobs:
         run: oi repo list
 
       - name: Install Homebrew depexts
-        # Mirrors the per-distro RUN apk/apt/dnf install lines that
-        # `oi registry docker` bakes into every Linux Dockerfile.
-        # `oi registry depexts` solves every overlay's x-root-packages
-        # under the host platform and prints the resulting Homebrew
-        # package list one per line.
+        # `oi build --all --depext` solves every overlay's x-root-packages
+        # under the host platform and prints the resulting package list,
+        # mirroring what `oi registry docker` bakes into Linux Dockerfiles.
         # autoconf is appended unconditionally because the oxcaml
-        # toolchain build's autogen.sh requires it and it isn't pulled
-        # in by any opam depext.
+        # toolchain's autogen.sh requires it and it isn't pulled in by
+        # any opam depext.
         run: |
-          deps=$(oi registry depexts --refresh)
+          deps=$(oi build --refresh --all --depext)
           echo "Homebrew depexts:"
           printf '  %s\n' $deps autoconf
           brew install autoconf $deps
 
-      - name: oi registry build --all
-        run: oi registry build --refresh --all
-
-      - name: oi registry export
+      - name: Build + export the registry
         run: |
           mkdir -p "$REGISTRY_LOCAL"
-          oi registry export "$REGISTRY_LOCAL"
+          oi build --refresh --all --export "$REGISTRY_LOCAL"
           find "$REGISTRY_LOCAL" -type f
 
       - name: Rsync to ${{ vars.REGISTRY_RSYNC_DEST }}

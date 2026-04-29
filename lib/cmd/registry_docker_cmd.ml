@@ -2,8 +2,6 @@ open Cmdliner
 
 let ( / ) = Filename.concat
 
-[@@@warning "-32"]
-
 let cmd =
   let default_distros : Registry_docker.Distro.t list =
     [
@@ -16,15 +14,7 @@ let cmd =
   in
   let run () data_dir cache_dir output_dir src_context refresh =
     Harness.run @@ fun env ->
-    let {
-      Harness.proc_mgr = _proc_mgr;
-      fs;
-      clock = _clock;
-      sys;
-      platform;
-      os_key = _os_key;
-      cache;
-    } =
+    let { Harness.fs; sys; platform; cache; _ } =
       Harness.bootstrap env cache_dir
     in
     (try Unix.mkdir output_dir 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
@@ -35,7 +25,7 @@ let cmd =
       (List.length default_distros);
     let per_distro_depexts =
       try
-        Registry_build.compute_overlay_depexts_per_distro ~fs ~sys ~cache
+        Build.compute_overlay_depexts_per_distro ~fs ~sys ~cache
           ~data_dir ~refresh ~platform ~distros:default_distros
       with _ -> List.map (fun d -> (d, [])) default_distros
     in
@@ -72,7 +62,7 @@ let cmd =
     Fmt.pr "Static oi release binary:@.";
     Fmt.pr "  docker buildx build -f %s --output type=local,dest=./oi-bin .@."
       oi_path;
-    Fmt.pr "Run the registry build + export:@.";
+    Fmt.pr "Run the build + export:@.";
     Fmt.pr "  docker compose up --build   # writes ./registry/<os_key>/@."
   in
   let output_dir =
@@ -96,48 +86,25 @@ let cmd =
   in
   let info =
     Cmd.info "docker"
-      ~doc:
-        "Generate per-distro Dockerfiles and a docker-compose.yml that run oi \
-         registry build + export"
+      ~doc:"Generate a multi-distro registry build compose project"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "$(b,oi registry docker) writes a small project that will build \
-             $(b,oi) in a static musl container and then run a $(b,registry \
-             build --all) followed by a $(b,registry export) once per target \
-             distribution. The generated files are $(b,Dockerfile.oi) (the \
-             static $(b,oi) builder), one $(b,Dockerfile.<distro>) per target, \
-             and a $(b,docker-compose.yml) that ties them together. Each \
-             service bind-mounts $(b,./registry) onto $(b,/out) so the \
-             resulting layer archives end up on the host.";
+            "Writes $(b,Dockerfile.oi) (static musl $(b,oi) builder), one \
+             $(b,Dockerfile.<distro>) per target distribution, and a \
+             $(b,docker-compose.yml) that ties them together. Each service \
+             bind-mounts $(b,./registry) on $(b,/out) and runs $(b,oi build \
+             --all --export /out). Containers own their own state and run \
+             in parallel; the resulting tree is ready for static HTTP or \
+             $(b,rsync).";
           `P
-            "The per-distribution images are intentionally generic. They \
-             install the required system packages and drop in the \
-             statically-linked $(b,oi) binary. The real work is driven from \
-             $(b,docker-compose.yml) via a $(b,command:) override. Every \
-             container owns its own $(b,oi) state. On first use it clones the \
-             reporepo from the built-in default URL (override with \
-             $(b,OI_REPOREPO_URL) in the service environment), iterates each \
-             overlay's $(b,x-root-packages) list, builds each one as \
-             $(b,@HANDLE/PKG), and finishes with $(b,oi registry export /out). \
-             The containers do not share state, so they run safely in \
-             parallel.";
-          `P
-            "The resulting tree at $(b,./registry/<os_key>/) carries one \
-             archive per layer along with a sqlite $(b,index.db) tagged with \
-             each layer's overlay handle and version. Clients can scope to a \
-             specific overlay by querying the index directly. Build the whole \
-             project with:";
-          `Pre "  docker compose up --build";
-          `P
-            "$(b,compose up) returns once every distribution has finished. The \
-             output is ready to serve over static HTTP, or to $(b,rsync) onto \
-             a registry server. No further $(b,oi) commands are needed on the \
-             server.";
+            "Override the upstream reporepo URL via $(b,OI_REPOREPO_URL) in \
+             the service environment.";
           `S Manpage.s_examples;
-          `P "Generate the compose project in the current directory:";
-          `Pre "  oi registry docker -o ./registry-build";
+          `Pre
+            "  oi registry docker -o ./registry-build\n\
+            \  cd ./registry-build && docker compose up --build";
         ]
   in
   Cmd.v info

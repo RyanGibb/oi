@@ -1,11 +1,13 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
-let log_src = Logs.Src.create "oi.cmd.registry_build"
+let log_src = Logs.Src.create "oi.cmd.build"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
 
-(* Helper for registry_build_cmd, will move with it when that command lifts. *)
+(* End-of-run per-target summary table. One row per CLI target, in the
+   order requested. Targets that share a solve group repeat the
+   group-level counts. *)
 let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
     ~group_results =
   let module R = struct
@@ -140,13 +142,260 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       | _ -> ())
     rows
 
+(* -- Overlay-wide depext helpers ---------------------------------------- *)
+
+(* Walk the reporepo and return the list of [(handle, root_groups)]
+   pairs that should drive depext computation for [oi registry docker].
+   Excludes the [default] handle (the full opam-repository), toolchain
+   definitions ([x-oi-toolchain-name] set — they're metadata views,
+   not buildable), and any overlay without [x-root-packages]. *)
+let overlay_root_targets reporepo_entries =
+  reporepo_entries
+  |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
+  |> List.sort_uniq String.compare
+  |> List.filter_map (fun h ->
+      if h = "default" then None
+      else
+        match Oi.Source.Reporepo.latest reporepo_entries ~handle:h with
+        | Some e when e.toolchain_name = None && e.root_packages <> [] ->
+            Some (h, e.root_packages)
+        | _ -> None)
+
+(* Resolve the effective [packages_dirs] for a single overlay handle:
+   its own materialised v1/ tree plus every overlay it depends on (via
+   the reporepo's [depends:] entries), followed by the base
+   opam/relocatable trees. First-wins ordering. *)
+let packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle =
+  let roots = [ { Oi.Source.Reporepo.handle; version = None } ] in
+  let transitive =
+    try Oi.Source.Reporepo.resolve reporepo_entries ~roots |> List.rev
+    with Oi.Error.E _ -> []
+  in
+  let reporepo_path = Terms.reporepo_path () in
+  let overlay_dirs =
+    List.filter_map
+      (fun (e : Oi.Source.Reporepo.entry) ->
+        if e.url = "" then None
+        else
+          Some
+            (Oi.Source.Reporepo.assert_overlay_dir ~path:reporepo_path
+               ~handle:e.handle))
+      transitive
+  in
+  let seen = Hashtbl.create 8 in
+  let dedup xs =
+    List.filter
+      (fun d ->
+        if Hashtbl.mem seen d then false
+        else begin
+          Hashtbl.replace seen d ();
+          true
+        end)
+      xs
+  in
+  dedup (overlay_dirs @ base_packages_dirs)
+
+(* Solve every overlay's [x-root-packages] under [host_conf] and return
+   the resulting [(pkg_dirs, solved)] pairs. Solves happen once and are
+   shared across every per-platform depext evaluation, since every
+   target only differs in opam filter variables (os, os-family, …) —
+   those don't influence the solver picks here. *)
+let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
+    ?override ?handle_filter () =
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  let base_packages_dirs =
+    Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
+  in
+  let path = Terms.reporepo_path () in
+  Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
+    ~url:(Terms.reporepo_url ());
+  let reporepo_entries = try Oi.Source.Reporepo.load ~path with _ -> [] in
+  let targets =
+    let all = overlay_root_targets reporepo_entries in
+    match handle_filter with
+    | None -> all
+    | Some h -> List.filter (fun (handle, _) -> handle = h) all
+  in
+  let cache_root = Oi.Cache.root_s cache in
+  let build_prefix = cache_root / "build" / "prefix" in
+  let toolchain_for handle =
+    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf:host_conf
+      ~install:false ~override ~handles:[ handle ] ()
+  in
+  List.concat_map
+    (fun (handle, groups) ->
+      let pkg_dirs =
+        packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle
+      in
+      let toolchain = toolchain_for handle in
+      let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain host_conf in
+      List.filter_map
+        (fun group ->
+          let ctx =
+            Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
+              ~conf ?toolchain:tc_ctx ()
+          in
+          let items = List.map Target.parse_pkg_target group in
+          let names = List.map fst items in
+          let constraints =
+            List.fold_left
+              (fun acc (name, c) ->
+                match c with
+                | None -> acc
+                | Some c -> OpamPackage.Name.Map.add name c acc)
+              OpamPackage.Name.Map.empty items
+          in
+          match
+            Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs:pkg_dirs
+              ~constraints names
+          with
+          | Ok solved -> Some (pkg_dirs, solved)
+          | Error msg ->
+              Log.warn (fun m ->
+                  m "overlay depexts: %s group failed to solve: %s" handle msg);
+              None)
+        groups)
+    targets
+
+let depexts_union ~conf solves =
+  let all =
+    List.fold_left
+      (fun acc (pkg_dirs, solved) ->
+        let entries =
+          Oi.Depexts.compute_for_conf ~conf ~packages_dirs:pkg_dirs solved
+        in
+        List.fold_left
+          (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
+          acc entries)
+      OpamSysPkg.Set.empty solves
+  in
+  OpamSysPkg.Set.elements all |> List.map OpamSysPkg.to_string
+
+let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf
+    ?override ?handle () =
+  let solves =
+    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf:conf
+      ?override ?handle_filter:handle ()
+  in
+  depexts_union ~conf solves
+
+let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
+    ~platform ~distros =
+  let host_conf =
+    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
+  let solves =
+    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf ()
+  in
+  List.map
+    (fun distro ->
+      let vars = Registry_docker.opam_vars_of_distro distro in
+      let distro_conf =
+        {
+          host_conf with
+          os = "linux";
+          os_distribution = vars.os_distribution;
+          os_family = vars.os_family;
+          os_version = vars.os_version;
+        }
+      in
+      (distro, depexts_union ~conf:distro_conf solves))
+    distros
+
+(* -- oi build dispatcher ------------------------------------------------ *)
+
 let cmd =
   let run () data_dir cache_dir refresh dry_run all only skip registry
-      with_repos with_deps jobs toolchain_override targets =
+      with_repos with_deps jobs toolchain_override depext_only export docker
+      envrc_mode deps_only targets =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
     in
+    (* Project mode: no positional, no --all, *.opam present in cwd.
+       Sync the project's dep closure and run [dune build]. Bypasses
+       the bulk solve+layer-build loop below. *)
+    let cwd_s, _ = Workspace.resolved_cwd fs in
+    let project_mode =
+      targets = []
+      && (not all)
+      &&
+      try
+        Sys.readdir cwd_s
+        |> Array.exists (fun f ->
+            Filename.check_suffix f ".opam"
+            && Filename.chop_suffix f ".opam" <> "")
+      with Sys_error _ -> false
+    in
+    let needs_spec what =
+      Oi.Error.config_error
+        "oi build %s: no spec and no project (cwd has no *.opam). Pass a \
+         PKG, @HANDLE, or --all."
+        what
+    in
+    (* Flag validation. Mode-specific dispatch happens after this
+       block; here we only reject combinations that can't possibly
+       proceed: [--export] + [--depext] together, and any flag whose
+       result depends on solving when there's nothing to solve. *)
+    if export <> None && depext_only then
+      Oi.Error.config_error
+        "oi build: --export and --depext are mutually exclusive";
+    if deps_only && not project_mode then
+      Oi.Error.config_error
+        "oi build --deps-only: only valid in project mode (cwd has no \
+         *.opam, or a PKG / @HANDLE / --all was given)";
+    let no_spec = targets = [] && not all && not project_mode in
+    if no_spec && export <> None then needs_spec "--export";
+    if no_spec && depext_only then needs_spec "--depext";
+    (* [--docker]:
+       - project mode: emit ./Dockerfile.oi for a containerised project
+         build (debian-stable base). Skips the local build.
+       - other modes: refuse and point at [oi registry docker]. *)
+    if docker && project_mode then begin
+      let path = cwd_s / "Dockerfile.oi" in
+      let df = Registry_docker.dockerfile_project (`Debian `Stable) in
+      Registry_docker.write_dockerfile path df;
+      Fmt.pr "Wrote %s@.Build with: docker build -t my-project %s@." path
+        cwd_s;
+      exit 0
+    end;
+    if docker then
+      Oi.Error.config_error
+        "oi build --docker is project-mode only; use 'oi registry docker' \
+         for multi-distro registry build projects";
+    if depext_only && all then begin
+      let conf =
+        Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+      in
+      let names =
+        compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh
+          ~conf ?override:toolchain_override ()
+      in
+      List.iter (fun n -> Fmt.pr "%s@." n) names;
+      exit 0
+    end;
+    let do_export_if_set ?(ok = true) () =
+      match export with
+      | Some output when ok && not dry_run ->
+          Registry_export.do_registry_export ~fs
+            ~clock:(clock :> D10.Config.clk)
+            ~sys ~os_key ~cache ~registry ~output
+      | _ -> ()
+    in
+    if project_mode then begin
+      let ec =
+        if depext_only then
+          Project_build.depexts ~fs ~sys ~platform ~cache ~data_dir ~refresh
+            ~with_repos ~with_deps ?toolchain:toolchain_override ~cwd:cwd_s ()
+        else
+          Project_build.run ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
+            ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps ?jobs
+            ?toolchain:toolchain_override ~envrc_mode ~dry_run ~deps_only
+            ~cwd:cwd_s ()
+      in
+      do_export_if_set ~ok:(ec = 0) ();
+      exit ec
+    end;
     (* Timestamp for filtering stale log files out of the end-of-run
        "transient fetch errors" listing. Any [fetch-*.log] with mtime
        older than this was left over by a previous invocation. *)
@@ -230,12 +479,11 @@ let cmd =
           handles
       end
     in
-    (* Each CLI-supplied target is its own (singleton) solve group,
-       preserving the previous behaviour where [oi registry build a b]
-       solved [a] and [b] independently. Reporepo groups may be
-       multi-element (compiler variants etc.). The tokens are still
-       raw — [@handle]-only entries haven't been fanned out to the
-       overlay's packages yet (we need the clone first). *)
+    (* Each CLI-supplied target is its own (singleton) solve group, so
+       [oi build a b] solves [a] and [b] independently. Reporepo groups
+       may be multi-element (compiler variants etc.). The tokens are
+       still raw — [@handle]-only entries haven't been fanned out to
+       the overlay's packages yet (we need the clone first). *)
     let token_groups =
       List.map (fun t -> [ t ]) targets @ reporepo_target_groups
     in
@@ -823,6 +1071,28 @@ let cmd =
         List.rev !acc
     in
     if solutions = [] then Oi.Error.msg "no packages solved successfully";
+    (* [--depext] intercept: every solve group is now resolved, so we
+       have enough to compute depexts without running the build loop.
+       The [--all] / bare [@h] cases short-circuited above; this
+       handles single PKG / @HANDLE/PKG / mixed-target invocations. *)
+    if depext_only then begin
+      let all =
+        List.fold_left
+          (fun acc (_, _, pkg_dirs, pkgs, _, group_conf, _) ->
+            let entries =
+              Oi.Depexts.compute_for_conf ~conf:group_conf
+                ~packages_dirs:pkg_dirs pkgs
+            in
+            List.fold_left
+              (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
+              acc entries)
+          OpamSysPkg.Set.empty solutions
+      in
+      OpamSysPkg.Set.iter
+        (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
+        all;
+      exit 0
+    end;
     (* 2. Each solve group is its own build group (no cross-group
        merging). Dedup-by-layer-hash already happens inside the layer
        cache; merging here would only gain shared plan construction
@@ -978,8 +1248,8 @@ let cmd =
              [Execute.run] (prefix wipe + layer restore), or the
              source-mirror promotion pass. Just emit Cached events for
              the reporter counters and call it done. This is the
-             common case when re-running [oi registry build --all]
-             against an already-populated cache. *)
+             common case when re-running [oi build --all] against an
+             already-populated cache. *)
           Log.info (fun m -> m "all %d packages cached" n_cached);
           (match reporter with
           | None -> ()
@@ -1177,15 +1447,16 @@ let cmd =
           List.iter (fun p -> Fmt.pr "  %s@." p) entries
         end
       end
-    end
+    end;
+    (* [--export DIR]: publish the local cache once the build phase has
+       settled. Skipped under [--dry-run]. *)
+    do_export_if_set ()
   in
   let targets =
     Arg.(
       value & pos_all string []
       & info ~docv:"PKG"
-          ~doc:
-            "The opam packages to build layers for. May be empty when \
-             $(b,--all) is set."
+          ~doc:"Packages to build. Empty in project mode or with $(b,--all)."
           [])
   in
   let all =
@@ -1193,274 +1464,100 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Walk every overlay in the reporepo and build the packages each \
-             one nominates. An overlay that declares $(b,x-root-packages) \
-             contributes each entry as $(b,@HANDLE/PKG); an overlay without \
-             that declaration contributes the $(b,@HANDLE) shortcut, which \
-             asks for every package it ships. The $(b,default) overlay \
-             (ocaml/opam-repository) is excluded by default because building \
-             its ten thousand packages is rarely what you want. Combine with \
-             $(b,--only) or $(b,--skip) to refine the handle set; pass \
-             $(b,--only default) if you do want to build the whole of \
-             opam-repository. Positional $(b,PKG) arguments are honoured in \
-             addition to the derived list."
+            "Build every overlay's $(b,x-root-packages) (and each remaining \
+             overlay's full content via $(b,@HANDLE)). The $(b,default) \
+             overlay is skipped unless $(b,--only default) is given."
           [ "all" ])
   in
   let only =
     Arg.(
       value & opt_all string []
       & info ~docv:"HANDLE"
-          ~doc:
-            "Restrict $(b,--all) to the named overlay handles. May be given \
-             more than once. Has no effect unless $(b,--all) is also set."
+          ~doc:"Restrict $(b,--all) to these handles. Repeatable."
           [ "only" ])
   in
   let skip =
     Arg.(
       value & opt_all string []
       & info ~docv:"HANDLE"
-          ~doc:
-            "Exclude the named overlay handles from $(b,--all). May be given \
-             more than once. Has no effect unless $(b,--all) is also set."
+          ~doc:"Exclude these handles from $(b,--all). Repeatable."
           [ "skip" ])
   in
   let dry_run =
     Arg.(
       value & flag
+      & info ~doc:"Print the build plan; do nothing." [ "n"; "dry-run" ])
+  in
+  let depext_only =
+    Arg.(
+      value & flag
       & info
           ~doc:
-            "Print the merged build plan for every target and exit. No sources \
-             are fetched and no builds are run."
-          [ "n"; "dry-run" ])
+            "Solve only; print system packages required by the result, one \
+             per line. Pipe to a system package manager."
+          [ "depext" ])
+  in
+  let export =
+    Arg.(
+      value
+      & opt (some string) None
+      & info ~docv:"DIR"
+          ~doc:
+            "After the build, publish the local cache (layers + index + \
+             sources) into $(b,DIR). Errors out without a $(b,PKG), \
+             $(b,@HANDLE), $(b,--all), or project."
+          [ "export" ])
+  in
+  let docker =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Project mode: emit a $(b,Dockerfile.oi) that runs the project \
+             build inside a debian-stable container. For multi-distro \
+             registry images use $(b,oi registry docker)."
+          [ "docker" ])
+  in
+  let deps_only =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Project mode: install deps + dev tools into $(b,_oi/), stop \
+             before $(b,dune build). Use after a manifest edit."
+          [ "deps-only" ])
   in
   let info =
     Cmd.info "build"
-      ~doc:"Build packages into the local cache for later publication"
+      ~doc:"Build a project, package, overlay, or every overlay"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Solve, compile, and cache every target. Use to prime a cache \
-             before $(b,oi registry export). Multiple targets share solves and \
-             dedup work — cheaper than a loop.";
-          `P
-            "Per-group toolchain auto-derives from each overlay's \
-             $(b,x-oi-toolchain) tag. $(b,--toolchain=NAME) overrides for \
-             every group; conflicting tags within one group error out.";
-          `S "PACKAGE SPECIFICATIONS";
-          `I
-            ( "$(b,PKG)",
-              "Plain opam package name; solver picks the best version from \
-               enabled overlays." );
-          `I
-            ( "$(b,@HANDLE/PKG)",
-              "Pin $(b,PKG) to the version overlay $(b,HANDLE) provides." );
+            "Solve and build the requested target into the layer cache. With \
+             no $(b,PKG), syncs the cwd's $(b,*.opam) deps + dev tools into \
+             $(b,_oi/) and runs $(b,dune build --profile=release).";
+          `S "TARGETS";
+          `I ("(none)", "Cwd's $(b,*.opam) project.");
+          `I ("$(b,PKG)", "Single package.");
+          `I ("$(b,@HANDLE/PKG)", "Package from overlay $(b,HANDLE).");
           `I ("$(b,@HANDLE)", "Every package in overlay $(b,HANDLE).");
-          `S "OPTIONS";
-          `I
-            ( "$(b,--all)",
-              "Walk every overlay in the reporepo and build its \
-               $(b,x-root-packages) as $(b,@HANDLE/PKG). Restrict with \
-               $(b,--only=HANDLE) / exclude with $(b,--skip=HANDLE)." );
-          `I
-            ( "$(b,--with)",
-              "Extra packages or URL projects as additional build targets." );
-          `I
-            ( "$(b,--toolchain=NAME)",
-              "Force NAME for every group, ignoring per-overlay tags." );
-          `I ("$(b,-j N)", "Cap parallel builds + fetches (default 4).");
-          `I ("$(b,-n) / $(b,--dry-run)", "Print the plan only.");
+          `I ("$(b,--all)", "Every overlay's $(b,x-root-packages).");
           `S Manpage.s_examples;
           `Pre
-            "  oi registry build --all\n\
-            \  oi registry build --all --only=avsm\n\
-            \  oi registry build --all ocaml-lsp-server";
+            "  oi build\n\
+            \  oi build --deps-only\n\
+            \  oi build dune\n\
+            \  oi build @avsm/owntracks\n\
+            \  oi build @avsm\n\
+            \  oi build --all --export ./registry\n\
+            \  oi build --all --depext | sudo apt install -y -";
         ]
   in
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
       $ dry_run $ all $ only $ skip $ Terms.registry $ Terms.with_repos
-      $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ targets)
+      $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ depext_only $ export
+      $ docker $ Sync.envrc_mode_arg $ deps_only $ targets)
 
-(* -- registry docker ---------------------------------------------------- *)
-
-(* Walk the reporepo and return the list of [(handle, root_groups)]
-   pairs that should drive depext computation for [oi registry docker].
-   Excludes the [default] handle (the full opam-repository), toolchain
-   definitions ([x-oi-toolchain-name] set — they're metadata views,
-   not buildable), and any overlay without [x-root-packages]. *)
-let overlay_root_targets reporepo_entries =
-  reporepo_entries
-  |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
-  |> List.sort_uniq String.compare
-  |> List.filter_map (fun h ->
-      if h = "default" then None
-      else
-        match Oi.Source.Reporepo.latest reporepo_entries ~handle:h with
-        | Some e when e.toolchain_name = None && e.root_packages <> [] ->
-            Some (h, e.root_packages)
-        | _ -> None)
-
-(* Resolve the effective [packages_dirs] for a single overlay handle:
-   its own materialised v1/ tree plus every overlay it depends on (via
-   the reporepo's [depends:] entries), followed by the base
-   opam/relocatable trees. Same first-wins ordering the registry build
-   uses. *)
-let packages_dirs_for_overlay ~data_dir:_ ~base_packages_dirs
-    ~reporepo_entries handle =
-  let roots = [ { Oi.Source.Reporepo.handle; version = None } ] in
-  let transitive =
-    try Oi.Source.Reporepo.resolve reporepo_entries ~roots |> List.rev
-    with Oi.Error.E _ -> []
-  in
-  let reporepo_path = Terms.reporepo_path () in
-  let overlay_dirs =
-    List.filter_map
-      (fun (e : Oi.Source.Reporepo.entry) ->
-        if e.url = "" then None
-        else
-          Some
-            (Oi.Source.Reporepo.assert_overlay_dir ~path:reporepo_path
-               ~handle:e.handle))
-      transitive
-  in
-  let seen = Hashtbl.create 8 in
-  let dedup xs =
-    List.filter
-      (fun d ->
-        if Hashtbl.mem seen d then false
-        else begin
-          Hashtbl.replace seen d ();
-          true
-        end)
-      xs
-  in
-  dedup (overlay_dirs @ base_packages_dirs)
-
-(* Solve every overlay's [x-root-packages] under [host_conf] and return
-   the resulting [(pkg_dirs, solved)] pairs. Solves happen once and are
-   shared across every per-platform depext evaluation, since every
-   target only differs in opam filter variables (os, os-family, …) —
-   those don't influence the solver picks here. *)
-let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
-    ?override () =
-  Oi.Pipeline.init_opam_root ~fs ~data_dir;
-  let base_packages_dirs =
-    Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
-  in
-  let path = Terms.reporepo_path () in
-  Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
-    ~url:(Terms.reporepo_url ());
-  let reporepo_entries = try Oi.Source.Reporepo.load ~path with _ -> [] in
-  let targets = overlay_root_targets reporepo_entries in
-  let cache_root = Oi.Cache.root_s cache in
-  let build_prefix = cache_root / "build" / "prefix" in
-  (* Per-overlay toolchain resolution: respect the overlay's own
-     [x-oi-toolchain] tag if set, otherwise fall back to the
-     reporepo's marked default. Solves now require a toolchain on the
-     Ctx (the augment_compiler_constraints no-toolchain branch was
-     dropped when default-toolchain wiring went in). *)
-  (* Per-overlay: the unified resolver picks up [x-oi-toolchain] from the
-     handle's reporepo entry, or matches the handle name against a
-     toolchain definition, or falls back to the reporepo default. The
-     [--toolchain] override (when given by the caller) wins over all
-     three. *)
-  let toolchain_for handle =
-    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf:host_conf
-      ~install:false ~override ~handles:[ handle ] ()
-  in
-  List.concat_map
-    (fun (handle, groups) ->
-      let pkg_dirs =
-        packages_dirs_for_overlay ~data_dir ~base_packages_dirs
-          ~reporepo_entries handle
-      in
-      let toolchain = toolchain_for handle in
-      let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain host_conf in
-      List.filter_map
-        (fun group ->
-          let ctx =
-            Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
-              ~conf ?toolchain:tc_ctx ()
-          in
-          let items = List.map Target.parse_pkg_target group in
-          let names = List.map fst items in
-          let constraints =
-            List.fold_left
-              (fun acc (name, c) ->
-                match c with
-                | None -> acc
-                | Some c -> OpamPackage.Name.Map.add name c acc)
-              OpamPackage.Name.Map.empty items
-          in
-          match
-            Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs:pkg_dirs
-              ~constraints names
-          with
-          | Ok solved -> Some (pkg_dirs, solved)
-          | Error msg ->
-              (* Bumping to [Log.warn] (not [Log.info]) on purpose: a
-                 silent solve failure here means the resulting docker
-                 install line lacks whatever depexts that group's
-                 packages need, so [oi registry build] inside the
-                 container later fails on a [conf-*] probe. Surfacing
-                 the failure makes that connection visible without
-                 needing -vv. *)
-              Log.warn (fun m ->
-                  m "overlay depexts: %s group failed to solve: %s" handle msg);
-              None)
-        groups)
-    targets
-
-(* Union every overlay's depexts under [conf]. *)
-let depexts_union ~conf solves =
-  let all =
-    List.fold_left
-      (fun acc (pkg_dirs, solved) ->
-        let entries =
-          Oi.Depexts.compute_for_conf ~conf ~packages_dirs:pkg_dirs solved
-        in
-        List.fold_left
-          (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
-          acc entries)
-      OpamSysPkg.Set.empty solves
-  in
-  OpamSysPkg.Set.elements all |> List.map OpamSysPkg.to_string
-
-(* Public: per-conf overlay depexts. Used by the [oi registry depexts]
-   command (host or [--os=]-overridden conf) and indirectly by
-   [oi registry docker] via {!compute_overlay_depexts_per_distro}. *)
-let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf
-    ?override () =
-  let solves =
-    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf:conf
-      ?override ()
-  in
-  depexts_union ~conf solves
-
-(* For each target distro, compute the union of depexts declared by
-   every overlay's [x-root-packages]. Reuses one solver pass for all
-   target distros since they only differ in opam filter variables. *)
-let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
-    ~platform ~distros =
-  let host_conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
-  in
-  let solves =
-    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf ()
-  in
-  List.map
-    (fun distro ->
-      let vars = Registry_docker.opam_vars_of_distro distro in
-      let distro_conf =
-        {
-          host_conf with
-          os = "linux";
-          os_distribution = vars.os_distribution;
-          os_family = vars.os_family;
-          os_version = vars.os_version;
-        }
-      in
-      (distro, depexts_union ~conf:distro_conf solves))
-    distros

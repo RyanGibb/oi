@@ -48,11 +48,8 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/oi" config
 
-      - name: Sync project deps with bootstrap oi
-        run: oi sync -v
-
-      - name: Build the PR/changeset from source
-        run: oi exec -- dune build --profile=release
+      - name: Build the PR/changeset with bootstrap oi
+        run: oi build -v
 
       - name: Smoke-test the freshly-built oi
         run: ./_build/default/bin/main.exe config

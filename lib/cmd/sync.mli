@@ -1,12 +1,8 @@
-(** [oi sync]: install a project's dependencies into [_oi/prefix/].
+(** Project sync: install [*.opam] dependencies into [_oi/prefix/], install
+    dev tools into [_oi/tools/], and (optionally) write [.envrc] for direnv.
 
-    Solves [*.opam] in the cwd, builds/fetches every layer, hardlink- assembles
-    them into [_oi/prefix/], probes for dev tools and installs them into
-    [_oi/tools/], and writes [.envrc] for direnv.
-
-    The two helpers exposed below are reused by {!Exec}: [oi exec] auto-syncs
-    when the prefix is older than any [*.opam], and shares the same staleness
-    check + sync routine. *)
+    Library-only; the user-facing entry point is [oi build --deps-only] in
+    [Build] and the auto-sync codepaths in [Exec] / [Env]. *)
 
 val needs_sync : cwd:string -> prefix:string -> bool
 (** [needs_sync ~cwd ~prefix] is [true] when [prefix] is missing or any [*.opam]
@@ -33,6 +29,15 @@ val resolve_project_toolchain :
     [install] controls whether non-relocatable toolchains get prepared on disk.
 *)
 
+type envrc_mode = [ `Skip | `Always | `Detect ]
+(** Controls [.envrc] writing during {!do_sync}. [`Detect] (the default)
+    writes [.envrc] only if [direnv] is on PATH; [`Skip] never writes;
+    [`Always] writes regardless. *)
+
+val envrc_mode_arg : envrc_mode Cmdliner.Term.t
+(** Cmdliner term for [--envrc=skip|always|detect]. Shared between
+    [oi sync] and [oi build]. *)
+
 val do_sync :
   ?quiet:bool ->
   ?refresh:bool ->
@@ -40,6 +45,7 @@ val do_sync :
   ?with_deps:string list ->
   ?jobs:int ->
   ?toolchain:string ->
+  ?envrc_mode:envrc_mode ->
   proc_mgr:Eio_unix.Process.mgr_ty Eio.Resource.t ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   clock:float Eio.Time.clock_ty Eio.Resource.t ->
@@ -56,5 +62,3 @@ val do_sync :
     with the resolved toolchain so callers can reuse it (e.g. [oi exec] reading
     env vars without re-resolving). [quiet] (default [false]) routes narration
     to [Logs.info] instead of stdout. *)
-
-val cmd : unit Cmdliner.Cmd.t

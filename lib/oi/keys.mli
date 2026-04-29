@@ -44,7 +44,7 @@ val toolchain_roots : string
     as an OR). *)
 
 val toolchain_tools : string
-(** [x-oi-toolchain-tools: [...]] — package names that [oi sync] should always
+(** [x-oi-toolchain-tools: [...]] — package names that [oi build] should always
     install into [_oi/tools/] alongside the toolchain (e.g. [odoc], [merlin],
     [ocaml-lsp-server]). *)
 
@@ -60,7 +60,7 @@ val default_toolchain : string
 (** {1 Project / overlay payload} *)
 
 val root_packages : string
-(** [x-root-packages: [...]] — solver root specs the registry build should solve
+(** [x-root-packages: [...]] — solver root specs [oi build --all] should solve
     for under this overlay. Same shape as {!toolchain_roots}: a flat list of
     strings or a list of lists. *)
 

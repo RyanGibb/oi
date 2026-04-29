@@ -21,6 +21,6 @@ val with_attempts :
 
     When [error_log_path] is supplied, per-attempt failures and eventual success
     are appended to that file instead of surfacing as [Log.warn] / [Log.app]
-    messages. Useful for bulk commands ([oi registry build]) that want to keep
+    messages. Useful for bulk commands ([oi build --all]) that want to keep
     stdout/stderr clean and point the user at a log file in the final summary.
 *)

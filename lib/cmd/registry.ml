@@ -1,30 +1,23 @@
 open Cmdliner
 
-[@@@warning "-32"]
-
 let cmd =
   let info =
     Cmd.info "registry"
-      ~doc:"Manage the cache of pre-built packages and the remote registry"
+      ~doc:"Pre-fetch sources and generate registry build images"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Inspect and manage the local cache of pre-built packages and the \
-             remote registry it pulls from.";
+            "$(b,docker) generates a multi-distro registry-build compose \
+             project. $(b,mirror) pre-fetches the source tarballs the \
+             reporepo references.";
           `P
-            "$(b,list) inspects the local cache. $(b,build) and $(b,export) \
-             populate a registry you serve to others. $(b,mirror) handles the \
-             companion mirror of upstream source tarballs.";
+            "Build, publish, depexts, and per-overlay listing all live \
+             on $(b,oi build) / $(b,oi show) directly.";
         ]
   in
   Cmd.group info
     [
-      Registry_list.cmd;
-      Registry_index.cmd;
-      Registry_export.cmd;
-      Registry_build.cmd;
-      Registry_depexts.cmd;
       Registry_docker_cmd.cmd;
       Registry_mirror.cmd;
     ]

@@ -159,7 +159,7 @@ let cmd =
                one is present." );
           `I
             ( "$(b,Dev tools)",
-              "Project-probed tools the next $(b,oi sync) would install. \
+              "Project-probed tools the next $(b,oi build) would install. \
                $(b,hit) means the trigger fired ($(b,.ocamlformat) for \
                $(b,ocamlformat), $(b,dune-project) for $(b,mdx)); $(b,miss) \
                skips that tool. Tools from the active toolchain's \

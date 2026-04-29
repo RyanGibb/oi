@@ -85,7 +85,7 @@ module Reporepo : sig
     toolchain_roots : string list list;
         (** [x-oi-toolchain-roots]: solver root specs for the toolchain. *)
     toolchain_tools : string list;
-        (** [x-oi-toolchain-tools]: package names that [oi sync] should always
+        (** [x-oi-toolchain-tools]: package names that [oi build] should always
             install when this toolchain is active (typically dev tools like
             [odoc], [merlin], [ocaml-lsp-server]). Empty for non-toolchain
             entries and toolchains that don't ship a default tool set. *)
@@ -325,7 +325,7 @@ module Pin : sig
       [<project_root>/_oi/oi.lock] when supplied. With no [project_root], or
       with an empty list, the input is returned unchanged. The lock file is
       transient state under [_oi/] — never committed; deleting it forces a
-      re-resolution on the next [oi sync].
+      re-resolution on the next [oi build].
 
       Errors when a pin's URL cannot be resolved (network down, ref gone). *)
 end

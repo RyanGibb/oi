@@ -1,78 +1,73 @@
-open Cmdliner
+let ( / ) = Filename.concat
 
-let log_src = Logs.Src.create "oi.cmd.registry_export"
+(* Sqlite in WAL mode leaves [<path>-wal] and [<path>-shm] sidecars
+   next to the main [.db] on close. Plain [Sys.remove path] doesn't
+   touch them. *)
+let unlink_sqlite_sidecars path =
+  List.iter
+    (fun s -> try Sys.remove (path ^ s) with Sys_error _ -> ())
+    [ "-wal"; "-shm"; "-journal" ]
 
-module Log = (val Logs.src_log log_src : Logs.LOG)
+let remove_sqlite_scratch path =
+  unlink_sqlite_sidecars path;
+  try Sys.remove path with Sys_error _ -> ()
 
-[@@@warning "-32"]
+(* Collapse any WAL/SHM sidecars into [path] so the published index.db
+   is self-contained. *)
+let finalize_sqlite_for_publish path =
+  if Sys.file_exists path then begin
+    (try
+       let db = Sqlite3.db_open path in
+       Fun.protect
+         ~finally:(fun () -> ignore (Sqlite3.db_close db))
+         (fun () -> ignore (Sqlite3.exec db "PRAGMA journal_mode=DELETE"))
+     with _ -> ());
+    unlink_sqlite_sidecars path
+  end
 
-let cmd =
-  let run () cache_dir registry output =
-    Harness.run @@ fun env ->
-    let {
-      Harness.proc_mgr = _proc_mgr;
-      fs;
-      clock;
-      sys;
-      platform = _platform;
-      os_key;
-      cache;
-    } =
-      Harness.bootstrap env cache_dir
-    in
-    Registry_index.do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry
-      ~output
-  in
-  let output =
-    Arg.(
-      required
-      & pos 0 (some string) None
-      & info ~docv:"DIR"
-          ~doc:
-            "The directory the published registry will be written into. \
-             Created if it does not exist."
-          [])
-  in
-  let info =
-    Cmd.info "export"
-      ~doc:"Publish the local cache to a directory for HTTP serving or rsync"
-      ~man:
-        [
-          `S Manpage.s_description;
-          `P
-            "$(b,oi registry export) copies every package in the local cache \
-             into $(b,DIR) in the on-disk layout that an $(b,oi) client \
-             expects from a remote registry. The result is a tree of \
-             compressed layer archives along with a sqlite $(b,index.db) and a \
-             sha256 $(b,OINDEX.txt) per platform. Serve the tree with any \
-             static HTTP server, or $(b,rsync) it to another machine. No \
-             $(b,oi) code runs on the server.";
-          `P
-            "Source tarballs are written once at the top of $(b,DIR) under \
-             $(b,sources/), rather than once per platform, because the source \
-             for a package is the same regardless of which distribution will \
-             compile it.";
-          `P
-            "The index records the overlay handle and version that produced \
-             each layer, so clients that want to scope to a specific overlay \
-             can query the index directly. There is no separate per-overlay \
-             tree to fetch. Use $(b,oi search) against the published registry \
-             to see what overlays it covers.";
-          `P
-            "When $(b,--registry URL) is given, $(b,oi) downloads the existing \
-             registry's index first and merges its rows into the one being \
-             published. This is the safe way to $(b,rsync) back to a shared \
-             registry: without the merge, your export would overwrite entries \
-             contributed by other machines.";
-        ]
-  in
-  Cmd.v info
-    Term.(const run $ Terms.log $ Terms.cache_dir $ Terms.registry $ output)
+let fetch_remote_to ~sys ~fs ~registry ~rel ~dst =
+  if registry = "" then false
+  else begin
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+      Eio.Path.(fs / Filename.dirname dst);
+    D10.Sysops.Curl.fetch sys
+      ~url:(Layer_index.url_join registry rel)
+      ~dst:Eio.Path.(fs / dst)
+  end
 
-(* Render the per-target summary emitted at the end of [oi registry build].
-   One row per target, in the order the user asked for them. Columns are
-   truncated/padded so the table stays readable even with long overlay
-   package names. Group-level counts are repeated across all targets that
-   shared a group — two targets under the same solver solution get the same
-   "packages / built / cached" figures, which matches how the build itself
-   treated them. *)
+(* Layer-cache + sources publish helper, called by [oi build --export DIR]. *)
+let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
+  let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
+  let dst = Eio.Path.(fs / output) in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
+  let count = D10.Layer.export_all d10 ~dst in
+  Fmt.pr "Exported %d layer(s) to %s@." count output;
+  if Sys.file_exists (output / os_key) then begin
+    let index_path = output / os_key / "index.db" in
+    (try Sys.remove index_path with Sys_error _ -> ());
+    let db = D10.Index.open_ ~path:index_path in
+    D10.Index.rebuild d10 db;
+    if registry <> "" then begin
+      let scratch = output / os_key / ".remote-index.db" in
+      if
+        fetch_remote_to ~sys ~fs ~registry ~rel:(os_key / "index.db")
+          ~dst:scratch
+      then begin
+        (try D10.Index.merge_remote db ~remote_path:scratch
+         with Failure msg ->
+           Logs.warn (fun m -> m "Failed to merge remote layer index: %s" msg));
+        remove_sqlite_scratch scratch
+      end
+      else
+        Logs.info (fun m ->
+            m "No remote layer index at %s/%s/index.db (skipping merge)"
+              registry os_key)
+    end;
+    let nl, nb, _ = D10.Index.stats db ~os_key in
+    D10.Index.close db;
+    finalize_sqlite_for_publish index_path;
+    Fmt.pr "  %s: %d layers, %d binaries@." os_key nl nb
+  end;
+  let n_sources = Oi.Source.Mirror.export ~cache ~dst in
+  if n_sources > 0 then
+    Fmt.pr "  sources: %d blob(s) at %s/sources/@." n_sources output

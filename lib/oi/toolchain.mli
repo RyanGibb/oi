@@ -60,7 +60,7 @@ type info = {
           solves that want to consult the toolchain's opam metadata. *)
   tools : string list;
       (** Package names from the toolchain's [x-oi-toolchain-tools] field.
-          [oi sync] installs these unconditionally into [_oi/tools/] when this
+          [oi build] installs these unconditionally into [_oi/tools/] when this
           toolchain is active. Empty when the toolchain ships no default tool
           set; per-project triggered tools (mdx when dune-project uses it,
           ocamlformat when .ocamlformat is present) live in code, not here. *)
@@ -127,7 +127,7 @@ type summary = {
   roots : string list;
   tools : string list;
       (** Always-on dev tools the toolchain installs into [_oi/tools/] on each
-          [oi sync] (from [x-oi-toolchain-tools]). *)
+          [oi build] (from [x-oi-toolchain-tools]). *)
   installs : (string * bool) list;
       (** Existing install prefixes on disk for this handle, paired with whether
           each one has its [.oi-toolchain-ready] sentinel. The list reflects

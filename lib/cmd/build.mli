@@ -1,4 +1,5 @@
-(** [oi registry build]: bulk-build packages and overlays into the registry. *)
+(** [oi build]: build a project (cwd's [*.opam]), a single package, an
+    overlay handle, or the whole reporepo. *)
 
 val compute_overlay_depexts_for_conf :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -8,15 +9,13 @@ val compute_overlay_depexts_for_conf :
   refresh:bool ->
   conf:Oi.Solver.Ctx.conf ->
   ?override:string ->
+  ?handle:string ->
   unit ->
   string list
-(** Solve every overlay's [x-root-packages] and return the union of depexts
-    declared by the resulting packages, evaluated under [conf]'s opam filter
-    variables (os, os-family, os-distribution, os-version). Backs the
-    [oi registry depexts] command. [?override] passes through a
-    [--toolchain=NAME] flag, overriding each overlay's implicit toolchain
-    selection — useful for "what would the depexts be if I forced ocaml-5.5
-    across the board?". *)
+(** Solve overlays' [x-root-packages] and return the union of depexts under
+    [conf]'s opam filter variables. [?handle] restricts to a single overlay
+    (default: every overlay). [?override] forces a [--toolchain=NAME] across
+    the board. *)
 
 val compute_overlay_depexts_per_distro :
   fs:Eio.Fs.dir_ty Eio.Path.t ->

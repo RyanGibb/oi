@@ -765,10 +765,10 @@ module Bump = struct
           value & flag
           & info
               ~doc:
-                "Mark this toolchain as the default — [oi run] / [oi sync] \
-                 without [--toolchain] will pick it. Auto-clears the flag on \
-                 any other toolchain currently marked default. Only valid on \
-                 entries with [x-oi-toolchain-name] set."
+                "Mark this toolchain as the default — [oi run] / [oi build] \
+                 without [--toolchain] will pick it. Auto-clears any other \
+                 default. Only valid on entries with [x-oi-toolchain-name] \
+                 set."
               [ "default" ])
       in
       let unset =
@@ -873,15 +873,13 @@ module Set_roots = struct
         value & pos_right 0 string []
         & info ~docv:"PKG"
             ~doc:
-              "Package specifications to record as the overlay's root \
-               packages. Each argument becomes one solve group that $(b,oi \
-               registry build --all) will iterate over. A bare package name \
-               becomes a single-package solve; a comma-separated list becomes \
-               a multi-package group that solves together, which is how you \
-               capture a specific compiler variant. For example, \
-               $(b,ocaml-option-flambda,ocaml-option-static,ocaml) forces the \
-               solver to pick an $(b,ocaml) version compatible with both \
-               options at once. Passing no $(b,PKG) arguments clears the list."
+              "Root package groups for the overlay. Each argument becomes one \
+               solve group that $(b,oi build --all) iterates. A bare name is \
+               a single-package solve; a comma-separated list is a \
+               multi-package group that solves together (used for compiler \
+               variants, e.g. \
+               $(b,ocaml-option-flambda,ocaml-option-static,ocaml)). No \
+               $(b,PKG) clears the list."
             [])
     in
     let info =
@@ -891,14 +889,11 @@ module Set_roots = struct
           [
             `S Manpage.s_description;
             `P
-              "$(b,oi repo set-roots) writes an $(b,x-root-packages: [...]) \
-               field on a new bumped version of $(b,HANDLE). The recorded list \
-               drives $(b,oi registry build --all), which walks every overlay \
-               in the reporepo and builds each handle's root groups. A \
-               single-package group solves and builds as one $(b,@HANDLE/PKG); \
-               a multi-package group (written comma-separated on the command \
-               line) solves together, so that the resulting layers capture a \
-               particular variant.";
+              "Writes $(b,x-root-packages: [...]) on a new bumped version of \
+               $(b,HANDLE). $(b,oi build --all) iterates each handle's root \
+               groups: a single-package group builds as one $(b,@HANDLE/PKG); \
+               a comma-separated group solves together so the resulting \
+               layers capture a specific variant.";
             `P
               "Passing zero $(b,PKG) arguments clears the list. The new \
                version is stamped $(b,YYYYMMDD.N) in exactly the same way as \

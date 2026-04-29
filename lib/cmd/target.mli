@@ -10,9 +10,9 @@ val log_overlay : ('a, Format.formatter, unit, unit) format4 -> 'a
 
 (** {1 Build target classification} *)
 
-(** Kinds of "$(b,@handle)-prefixed target" a registry build accepts. [oi run]
-    only accepts the first two; [oi registry build] additionally understands
-    [@handle] alone as "all of it". *)
+(** Kinds of "$(b,@handle)-prefixed target" [oi build] accepts. [oi run] only
+    accepts the first two; [oi build] additionally understands [@handle] alone
+    as "every package in the overlay". *)
 type build_target =
   | Plain_target of string
   | Overlay_pkg of string * string  (** ([handle], [pkg_spec]) *)

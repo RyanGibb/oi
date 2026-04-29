@@ -485,107 +485,80 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Resolve $(b,TARGET)'s dependencies, install them into the shared \
-             cache, and run $(b,TARGET). Repeat invocations with the same \
-             dependency set reuse the cache.";
+             cache, and run $(b,TARGET). Subsequent runs with the same dep \
+             set reuse the cache.";
           `P
-            "$(b,TARGET) is one of: the name of a binary installed by some \
-             opam package, the path to a local $(b,.ml) script, or an \
+            "$(b,TARGET) is a binary name, a local $(b,.ml) script, or an \
              $(b,http)/$(b,https) URL pointing at a remote script.";
           `S "BINARY TARGETS";
           `P
-            "When $(b,TARGET) names a binary, $(b,oi) looks up the opam \
-             package that ships it and installs that package on demand. If the \
-             binary name is not found directly, dash-separated prefixes are \
-             tried in turn, so $(b,ocluster-admin) falls back to looking up \
-             $(b,ocluster). Any packages you pass with $(b,--with) are \
-             searched first, which lets you pin the provider explicitly when \
-             two packages ship the same binary name.";
+            "$(b,oi) looks up the opam package shipping the named binary and \
+             installs it. Dash-prefixes fall back: $(b,ocluster-admin) tries \
+             $(b,ocluster). $(b,--with) packages are searched first.";
           `Pre
             "  oi run utop\n\
             \  oi run ocamlformat -- --help\n\
             \  oi run --with=crockford roguedoi";
           `S "SCRIPT TARGETS";
           `P
-            "When $(b,TARGET) is a $(b,.ml) file, $(b,oi) reads its first line \
-             to discover the dependencies, builds them together with the \
-             script, and caches the result. Re-running the same script without \
-             edits is almost instantaneous; editing the script invalidates the \
-             cache entry and triggers a rebuild. Remote $(b,http) or \
-             $(b,https) URLs are fetched on every invocation and rebuilt only \
-             when the contents differ from the cached copy.";
-          `P
-            "Declare dependencies with an $(b,@@@opam) attribute at the top of \
-             the file:";
+            "For $(b,.ml) scripts, $(b,oi) parses the first line for deps, \
+             builds them with the script, and caches by content hash. Editing \
+             the script triggers a rebuild. Remote URLs are refetched on \
+             every invocation and rebuilt only when contents change.";
+          `P "Declare deps on the first line:";
           `Pre "  [@@@opam fmt cmdliner lwt>=5.0]";
           `P
-            "Each token names an opam package. An optional version constraint \
-             uses the usual relational operators ($(b,>=), $(b,>), $(b,<=), \
-             $(b,<), $(b,=)). A dotted suffix picks a findlib sub-library, for \
-             example $(b,ppx_deriving.show). Any package whose name starts \
-             with $(b,ppx_) is wired in as a PPX preprocessor.";
+            "Each token is an opam package, with optional version constraint \
+             ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
+             sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
+             auto-wired as PPX preprocessors.";
           `Pre
             "  oi run my_script.ml\n\
             \  oi run my_script.ml --with=tls -- arg1 arg2\n\
             \  oi run https://gist.example.com/hello.ml";
           `S "OVERLAYS";
           `P
-            "An overlay is a curated collection of opam packages pinned to \
-             specific git commits (see $(b,oi repo)). Prefix a target or a \
-             $(b,--with) value with $(i,@HANDLE/) to take that package from \
-             the named overlay, or use bare $(i,@HANDLE) to pull the entire \
-             overlay into the solve. Overlays stack, which is how you compose \
-             two users' collections into one solve.";
+            "Prefix $(i,@HANDLE/) on a target or $(b,--with) value to pull \
+             from the named overlay; bare $(i,@HANDLE) stacks the whole \
+             overlay onto the solve. See $(b,oi repo).";
           `Pre
             "  oi run @avsm/owntracks\n\
-            \  oi run @samoht/irmin\n\
             \  oi run --with=@avsm/crockford roguedoi";
           `P
-            "Add $(b,x-repos: [\"@HANDLE\"]) inside an opam file to make the \
-             overlay apply automatically to every $(b,oi) command run in that \
-             project. The same field also accepts plain repository URLs as an \
-             unpinned escape hatch; a leading $(b,@) marks reporepo handles.";
+            "Add $(b,x-repos: [\"@HANDLE\"]) to a project's $(b,*.opam) to \
+             apply the overlay automatically. Plain URLs are also accepted as \
+             unpinned escape hatches.";
           `S "TOOLCHAIN";
-          `P "The active toolchain is picked in this order:";
-          `I ("1.", "$(b,--toolchain=NAME), if given.");
+          `P "Picked in order:";
+          `I ("1.", "$(b,--toolchain=NAME).");
           `I
             ( "2.",
-              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — from \
-               a $(b,@h/pkg) target, $(b,--with-repo=@h), $(b,--with=@h/pkg), \
-               or the project's $(b,x-repos:). Conflicting tags are an error."
-            );
-          `I
-            ( "3.",
-              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
+              "$(b,x-oi-toolchain) on an in-scope $(b,@HANDLE) (target, \
+               $(b,--with-repo=@h), or project $(b,x-repos:)). Conflicts \
+               error." );
+          `I ("3.", "Reporepo's $(b,x-oi-default-toolchain).");
           `S "GIT URLS";
           `P
-            "Passing $(b,--with=URL) clones the repository and treats every \
-             $(b,*.opam) file at its root as a pinned solver root. The \
-             recognised URL schemes are $(b,http://), $(b,https://), \
-             $(b,git+), $(b,git@), $(b,git://), and $(b,ssh://). Append \
-             $(b,#REF) to pin a specific branch, tag, or commit.";
+            "$(b,--with=URL) clones the repo and pins each root $(b,*.opam) \
+             as a solver root. Schemes: $(b,http://), $(b,https://), \
+             $(b,git+), $(b,git@), $(b,git://), $(b,ssh://). Append $(b,#REF) \
+             for a specific commit/tag/branch.";
           `Pre
             "  oi run --with=https://github.com/owner/project.git target\n\
             \  oi run --with=git+https://example.org/foo.git#branch foo";
           `S "VERSION CONSTRAINTS";
-          `P
-            "Pin a $(b,--with) dependency to a specific version with \
-             $(b,pkg.VERSION) or $(b,pkg=VERSION). The same relational \
-             operators as the script format are accepted.";
+          `P "Pin a $(b,--with) dep with $(b,pkg.VERSION) or $(b,pkg=VERSION).";
           `Pre
             "  oi run --with=dune.3.20.0 -- dune --version\n\
             \  oi run --with=fmt>=0.9 my_script.ml";
           `S "DRY RUN";
-          `P
-            "The $(b,-n) and $(b,--dry-run) flags print the plan $(b,oi) would \
-             execute and exit. Each package in the tree carries a tag that \
-             tells you where the bytes would come from:";
-          `I ("$(b,binary)", "Already present in the local cache.");
-          `I ("$(b,remote)", "Available from the configured registry.");
-          `I ("$(b,source)", "Would be compiled from source.");
+          `P "$(b,-n) prints the plan and exits. Per-package tags:";
+          `I ("$(b,binary)", "Already cached.");
+          `I ("$(b,remote)", "Fetchable from the configured registry.");
+          `I ("$(b,source)", "Would compile from source.");
           `I
             ( "$(b,virtual)",
-              "A placeholder such as $(b,conf-pkg-config) with nothing to \
-               build." );
+              "Placeholder ($(b,conf-pkg-config) etc.); nothing to build." );
         ]
   in
   Cmd.v info

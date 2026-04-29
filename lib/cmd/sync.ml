@@ -1,5 +1,3 @@
-open Cmdliner
-
 let ( / ) = Filename.concat
 let short_hash h = String.sub h 0 (min 12 (String.length h))
 
@@ -152,9 +150,36 @@ let resolve_project_toolchain ?(refresh = false) ?(with_repos = [])
    Returns the assembled prefix path and the resolved toolchain. When
    [quiet] is true, narration goes to Logs.info (hidden at default
    verbosity); otherwise it prints to stdout. *)
+type envrc_mode = [ `Skip | `Always | `Detect ]
+
+let pp_envrc_mode ppf = function
+  | `Skip -> Fmt.string ppf "skip"
+  | `Always -> Fmt.string ppf "always"
+  | `Detect -> Fmt.string ppf "detect"
+
+(* True if [direnv] is on PATH. Resolved at sync time so users who add
+   direnv mid-project pick it up on the next [oi sync] / [oi build]. *)
+let direnv_on_path () =
+  match Sys.getenv_opt "PATH" with
+  | None | Some "" -> false
+  | Some path ->
+      String.split_on_char ':' path
+      |> List.exists (fun d ->
+          if d = "" then false
+          else
+            let p = d / "direnv" in
+            try Unix.access p [ Unix.X_OK ]; true
+            with Unix.Unix_error _ -> false)
+
+let envrc_should_write = function
+  | `Skip -> false
+  | `Always -> true
+  | `Detect -> direnv_on_path ()
+
 let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?(toolchain : string option) ~proc_mgr ~fs ~clock
-    ~sys ~platform ~os_key ~cache ~data_dir ~registry ~cwd () =
+    ?(with_deps = []) ?jobs ?(toolchain : string option)
+    ?(envrc_mode = `Detect) ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
+    ~data_dir ~registry ~cwd () =
   let toolchain_override = toolchain in
   let say fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
@@ -240,16 +265,21 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
       ~cache ~data_dir ~conf ~os_key ~extra_repos:all_extras ~pins:project.pins
       ?toolchain ?remote ~cwd ()
   in
-  let envrc_path = Eio.Path.(fs / cwd / ".envrc") in
-  let dune_cache_root = Oi.Cache.dune_root cache in
-  let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
-  let envrc =
-    Oi.Solver.Env.envrc_content ?toolchain:tc_ctx ~prefix ?tools
-      ~dune_cache_root ()
-  in
-  (try Eio.Path.unlink envrc_path with Eio.Exn.Io _ -> ());
-  Eio.Path.save ~create:(`Exclusive 0o644) envrc_path envrc;
-  say "Wrote .envrc (run 'direnv allow' to activate)";
+  if envrc_should_write envrc_mode then begin
+    let envrc_path = Eio.Path.(fs / cwd / ".envrc") in
+    let dune_cache_root = Oi.Cache.dune_root cache in
+    let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
+    let envrc =
+      Oi.Solver.Env.envrc_content ?toolchain:tc_ctx ~prefix ?tools
+        ~dune_cache_root ()
+    in
+    (try Eio.Path.unlink envrc_path with Eio.Exn.Io _ -> ());
+    Eio.Path.save ~create:(`Exclusive 0o644) envrc_path envrc;
+    say "Wrote .envrc (run 'direnv allow' to activate)"
+  end
+  else
+    Logs.info (fun m ->
+        m "Skipping .envrc (--envrc=%a)" pp_envrc_mode envrc_mode);
   say "Prefix assembled at %s (%d packages)" prefix (List.length layer_hashes);
   (prefix, toolchain)
 
@@ -274,66 +304,18 @@ let needs_sync ~cwd ~prefix =
           with Unix.Unix_error _ -> false)
         opam_files
 
-let cmd =
-  let run () data_dir cache_dir refresh registry with_repos with_deps jobs
-      toolchain =
-    Harness.run @@ fun env ->
-    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-      Harness.bootstrap env cache_dir
-    in
-    let cwd, _ = Workspace.resolved_cwd fs in
-    ignore
-      (do_sync ~refresh ~with_repos ~with_deps ?jobs ?toolchain ~proc_mgr ~fs
-         ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry ~cwd ())
+(* Cmdliner term for $(b,--envrc=skip|always|detect). Shared with
+   $(b,oi build). *)
+let envrc_mode_arg =
+  let modes =
+    Cmdliner.Arg.enum
+      [ ("skip", `Skip); ("always", `Always); ("detect", `Detect) ]
   in
-  let info =
-    Cmd.info "sync" ~doc:"Install project dependencies into _oi/prefix/"
-      ~man:
-        [
-          `S Manpage.s_description;
-          `P
-            "Solve the $(b,*.opam) files in the current directory, install the \
-             resulting packages into $(b,_oi/prefix/), and write $(b,.envrc) \
-             for $(b,direnv).";
-          `P
-            "Activate by running $(b,direnv allow), sourcing $(b,.envrc), or \
-             $(b,eval \"\\$(oi env)\"). $(b,oi exec) auto-syncs when the \
-             prefix is missing or older than any $(b,*.opam); explicit $(b,oi \
-             sync) is for after a manifest edit.";
-          `S "DEV TOOLS";
-          `P
-            "Editor tooling is installed into $(b,_oi/tools/bin/), prepended \
-             to $(b,PATH). Two sources:";
-          `I
-            ( "Toolchain",
-              "Packages listed in the active toolchain's \
-               $(b,x-oi-toolchain-tools) field. Shipped toolchains include \
-               $(b,odoc), $(b,merlin), and $(b,ocaml-lsp-server)." );
-          `I
-            ( "Project probe",
-              "$(b,mdx) when $(b,dune-project) uses it. $(b,ocamlformat) \
-               pinned to the version $(b,.ocamlformat) requests." );
-          `P "$(b,oi config) lists both sets for the current project.";
-          `S "OPTIONS";
-          `I
-            ( "$(b,--with=PKG)",
-              "Add an extra dep to the solve (same forms as $(b,oi run))." );
-          `I
-            ( "$(b,--with-repo=URL|HANDLE)",
-              "Layer an extra opam repository onto the solve." );
-          `I
-            ( "$(b,--toolchain=NAME)",
-              "Pin the compiler. Project overlays tagged for a different \
-               toolchain are dropped from scope." );
-          `I ("$(b,-j N)", "Cap parallel builds (default 4).");
-          `I
-            ( "$(b,--refresh)",
-              "Force-refetch repos, pins, and URL clones. Caches refresh on \
-               their own after 24h." );
-        ]
-  in
-  Cmd.v info
-    Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
-      $ Terms.toolchain)
+  Cmdliner.Arg.(
+    value & opt modes `Detect
+    & info ~docv:"MODE"
+        ~doc:
+          "When to write $(b,.envrc): $(b,skip), $(b,always), or \
+           $(b,detect) (default — write only if $(b,direnv) is on PATH)."
+        [ "envrc" ])
+

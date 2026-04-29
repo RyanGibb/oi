@@ -1,4 +1,4 @@
-(** Cross-platform [--os] parsing for [oi show] and [oi registry build].
+(** Cross-platform [--os] parsing for [oi show].
 
     Resolves the string passed to [--os] into an {!Oi.Solver.Ctx.conf}. The
     parser is {!Dockerfile_opam.Distro.distro_of_tag}, which knows every tag

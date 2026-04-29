@@ -418,8 +418,8 @@ type reporter = { pkg_event : pkg_event -> unit }
 (* -- Main loop ------------------------------------------------------------ *)
 
 (* Default reporter: internal Progress bar + inline FAIL prints. Used by
-   [oi run] / [oi sync], which only ever run one [Execute.run] at a time
-   and have no outer UI to coordinate with. [oi registry build] supplies
+   [oi run] / [oi build], which only ever run one [Execute.run] at a time
+   and have no outer UI to coordinate with. [oi build --all] supplies
    its own reporter to drive a cross-invocation bar with live counters. *)
 let with_default_reporter ~total_packages ~n_stages f =
   let config = Progress.Config.v ~persistent:false () in
@@ -474,7 +474,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
   (* Track failed layer-hashes rather than package names so
      cross-overlay builds of the same [name.version] (which resolve to
      different layer hashes) stay independent. The optional arg lets
-     [oi registry build --all] thread one tracker through every build
+     [oi build --all] thread one tracker through every build
      group, so a failure in group 1 skips dependents in group 2
      rather than retrying the same build. Keyed by layer hash; value
      is the failure-log path (empty string for cascaded failures that

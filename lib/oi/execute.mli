@@ -24,7 +24,7 @@ type reporter = { pkg_event : pkg_event -> unit }
 (** Typed progress reporter. [Execute.run] calls [pkg_event] exactly once per
     package for each terminal event (Cached / Built / Build_failed / Dep_failed
     / Install_failed), plus one [Started] event before each source-package build
-    attempt. A caller who owns the display (e.g. [oi registry build]) supplies a
+    attempt. A caller who owns the display (e.g. [oi build --all]) supplies a
     reporter that keeps counters and drives a cross-invocation progress bar;
     callers who don't specify a reporter get a sane default that drives a local
     per-invocation bar. *)
@@ -61,7 +61,7 @@ val run :
     invocations. The key is the failing layer's hash; the value is the path to
     the build-failure log (empty for cascaded failures that inherit a dep's
     log). Any package whose [layer_hash] is in this table (or whose deps' layer
-    hashes are) is skipped — useful for [oi registry build --all] where each
+    hashes are) is skipped — useful for [oi build --all] where each
     solve group is a separate [run] and a failure in one group should prevent
     identical retries in later groups. When omitted, a fresh tracker is used for
     this call only. *)
