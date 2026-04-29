@@ -1163,6 +1163,42 @@ let cmd =
               List.iter
                 (fun t -> Hashtbl.replace solve_failures t (msg, log_path))
                 group;
+              (* Drop a JSON sidecar per failed target so the manifest
+                 picks it up at export time alongside the build/install
+                 records. The "hash" is a stable digest of the solve
+                 key, matching the text log's filename. *)
+              let key =
+                String.concat " " (group @ List.map (fun h -> "@" ^ h) handles)
+              in
+              let hash = Digest.to_hex (Digest.string key) in
+              let tail = Oi.Build_log.tail_of_file ~path:log_path in
+              List.iter
+                (fun target ->
+                  let id = Oi.Build_log.parse_pkg target in
+                  let record : Oi.Build_log.t =
+                    {
+                      schema = 1;
+                      pkg = id;
+                      layer_hash = hash;
+                      os_key;
+                      method_ = Source;
+                      started_at = Unix.gettimeofday ();
+                      duration_s = 0.0;
+                      outcome = Solve_failed { reason = msg };
+                      deps = [];
+                      depexts = Oi.Build_log.empty_depexts;
+                      source = None;
+                      log = Some { text_path = log_path; tail };
+                      overlay =
+                        (match handles with
+                        | [ h ] -> Some { handle = h; version = "" }
+                        | _ -> None);
+                      phases = Oi.Build_log.empty_phases;
+                    }
+                  in
+                  Oi.Build_log.write ~fs ~cache_root:(Oi.Cache.root_s cache)
+                    record)
+                group;
               Log.debug (fun m ->
                   m "solve failed: %s: %s" (group_label group) msg);
               None
@@ -1365,6 +1401,41 @@ let cmd =
                   r.pkg_event
                     (Oi.Execute.Cached { pkg = OpamPackage.to_string n.pkg }))
                 (Oi.Plan.nodes build_plan));
+          (* Drop a JSON sidecar for each cached pkg so the manifest still
+             sees them — the fast path skips Execute.run which is where
+             sidecars normally get written. Depexts come straight from
+             the opam file via [declared_depexts]; we skip the host
+             status query here since the fast path is already optimised
+             for "everything cached, do as little as possible". *)
+          let env = Oi.Solver.Ctx.platform_env group_ctx in
+          List.iter
+            (fun (n : Oi.Plan.node) ->
+              let id = Oi.Build_log.parse_pkg (OpamPackage.to_string n.pkg) in
+              let declared = Oi.Build_log.declared_depexts ~env n.opam in
+              let depexts =
+                if declared = [] then Oi.Build_log.empty_depexts
+                else { Oi.Build_log.empty_depexts with declared }
+              in
+              let record : Oi.Build_log.t =
+                {
+                  schema = 1;
+                  pkg = id;
+                  layer_hash = n.layer_hash;
+                  os_key;
+                  method_ = Binary;
+                  started_at = Unix.gettimeofday ();
+                  duration_s = 0.0;
+                  outcome = Cached;
+                  deps = [];
+                  depexts;
+                  source = None;
+                  log = None;
+                  overlay = None;
+                  phases = Oi.Build_log.empty_phases;
+                }
+              in
+              Oi.Build_log.write ~fs ~cache_root:(Oi.Cache.root_s cache) record)
+            (Oi.Plan.nodes build_plan);
           Hashtbl.replace group_results gi (`Ok (n_pkgs, n_build, n_cached))
         end
         else begin

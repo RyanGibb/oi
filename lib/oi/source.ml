@@ -1732,41 +1732,67 @@ module Mirror = struct
       true
     with Unix.Unix_error _ -> false
 
+  (* Concurrency-safe content-addressed write. Two registry containers
+     building the same source in parallel share the bind-mounted
+     [/out/sources/] tree, so two processes will race on the same
+     [dst]. Both [Unix.link src dst] and [Unix.rename tmp dst] are
+     atomic on POSIX; we lean on that and add a per-PID + nonce tmp
+     name so the two callers never share a tmp path. EEXIST is treated
+     as "someone else won the race", which is fine since the file is
+     content-addressed: same hash means same bytes. *)
+  let unique_tmp dst =
+    Fmt.str "%s.%d.%d.tmp" dst (Unix.getpid ()) (Random.bits ())
+
   let link_or_copy ~fs ~src ~dst =
     let src = resolve_symlink src in
     if dst_is_valid dst then ()
     else begin
       mkdir_p ~fs (Filename.dirname dst);
-      (try Unix.unlink dst with Unix.Unix_error _ -> ());
-      let tmp = dst ^ ".tmp" in
-      (try Unix.unlink tmp with Unix.Unix_error _ -> ());
-      let linked =
-        try
-          Unix.link src tmp;
-          true
-        with
-        | Unix.Unix_error
+      (* Try the fast path: a single hardlink straight to [dst]. This
+         is atomic; if another writer beat us to it we get EEXIST and
+         we're done. *)
+      match Unix.link src dst with
+      | () -> ()
+      | exception Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+      | exception
+          Unix.Unix_error
             ((Unix.EXDEV | Unix.EMLINK | Unix.EPERM | Unix.EOPNOTSUPP), _, _)
-        ->
-          false
-      in
-      if not linked then begin
-        let ic = open_in_bin src in
-        Fun.protect ~finally:(fun () -> close_in_noerr ic) @@ fun () ->
-        let oc = open_out_bin tmp in
-        Fun.protect ~finally:(fun () -> close_out_noerr oc) @@ fun () ->
-        let buf = Bytes.create 65536 in
-        let rec loop () =
-          let n = input ic buf 0 (Bytes.length buf) in
-          if n > 0 then begin
-            output oc buf 0 n;
-            loop ()
+        -> (
+          (* Cross-device or filesystem doesn't support hardlinks
+             (typical for some bind-mounted volumes). Fall back to a
+             byte-copy via a unique tmp path, then atomically link
+             tmp → dst. *)
+          let tmp = unique_tmp dst in
+          (try Unix.unlink tmp with Unix.Unix_error _ -> ());
+          let copy_ok =
+            try
+              let ic = open_in_bin src in
+              Fun.protect
+                ~finally:(fun () -> close_in_noerr ic)
+                (fun () ->
+                  let oc = open_out_bin tmp in
+                  Fun.protect
+                    ~finally:(fun () -> close_out_noerr oc)
+                    (fun () ->
+                      let buf = Bytes.create 65536 in
+                      let rec loop () =
+                        let n = input ic buf 0 (Bytes.length buf) in
+                        if n > 0 then begin
+                          output oc buf 0 n;
+                          loop ()
+                        end
+                      in
+                      loop ()));
+              true
+            with _ -> false
+          in
+          if copy_ok then begin
+            (match Unix.link tmp dst with
+            | () -> ()
+            | exception Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+            try Sys.remove tmp with Sys_error _ -> ()
           end
-        in
-        loop ()
-      end;
-      try Unix.rename tmp dst
-      with Unix.Unix_error _ -> ( try Sys.remove tmp with Sys_error _ -> ())
+          else try Sys.remove tmp with Sys_error _ -> ())
     end
 
   (* Disk-walk helpers — no SQLite metadata; the on-disk layout
@@ -1821,4 +1847,64 @@ module Mirror = struct
           link_or_copy ~fs ~src ~dst:dp)
         blobs;
       List.length blobs
+
+  (* Locate a fetched blob in opam's own download cache. opam keys
+     each blob by its checksums under [download_cache/<algo>/<XX>/<hash>],
+     same layout we use for the mirror. Walk the declared checksums
+     and return the first one that exists on disk. *)
+  let opam_cached_blob checksums =
+    let root =
+      OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
+      |> OpamFilename.Dir.to_string
+    in
+    List.find_map
+      (fun ck ->
+        let path = List.fold_left ( / ) root (OpamHash.to_path ck) in
+        if Sys.file_exists path then Some path else None)
+      checksums
+
+  let promote ~fs ~cache_root checksums =
+    match checksums with
+    | [] -> 0
+    | _ -> (
+        match opam_cached_blob checksums with
+        | None ->
+            Log.debug (fun m ->
+                m "promote: no opam-cached blob for %d checksum(s), skipping"
+                  (List.length checksums));
+            0
+        | Some src ->
+            let mirror_dir = cache_root / "mirror" in
+            (* Deposit under every declared checksum so future lookups
+               against any algo hit the mirror. Always also deposit under
+               the SHA-256 path computed from the actual bytes, so the
+               sources/sha256/ tree is consistent even when the recipe
+               only declared md5. *)
+            let promoted = ref 0 in
+            let put dst =
+              if not (Sys.file_exists dst) then begin
+                link_or_copy ~fs ~src ~dst;
+                incr promoted
+              end
+            in
+            List.iter
+              (fun ck ->
+                let dst =
+                  List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)
+                in
+                put dst)
+              checksums;
+            (if
+               not
+                 (List.exists (fun ck -> OpamHash.kind ck = `SHA256) checksums)
+             then
+               try
+                 let sha256_hash = OpamHash.compute ~kind:`SHA256 src in
+                 let dst =
+                   List.fold_left ( / ) mirror_dir
+                     (OpamHash.to_path sha256_hash)
+                 in
+                 put dst
+               with _ -> ());
+            !promoted)
 end

@@ -360,4 +360,11 @@ module Mirror : sig
   val export : cache:Cache.t -> dst:Eio.Fs.dir_ty Eio.Path.t -> int
   (** Hardlink-copy the mirror tree to [<dst>/sources/]. Returns the number of
       blobs copied. *)
+
+  val promote :
+    fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> OpamHash.t list -> int
+  (** Copy fetched-source blobs out of opam's download-cache and into the mirror
+      at [<cache_root>/mirror/<algo>/<XX>/<hash>] for each declared checksum.
+      Returns the number of blobs newly added; [0] if nothing was promoted (no
+      checksums supplied, or no cached file found). Idempotent. *)
 end

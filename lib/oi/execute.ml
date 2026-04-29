@@ -272,17 +272,27 @@ let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
         Log.info (fun m -> m "Fetching %s from %s" p.pkg src.url);
         let error_log_path = fetch_log_path_of ~cache_root ~p in
         Cache.Logs.ensure ~fs ~cache_root;
-        Retry.with_attempts ~label:(Fmt.str "fetch %s (%s)" p.pkg src.url)
-          ~error_log_path (fun () ->
-            let result =
-              OpamRepository.pull_tree p.pkg ~cache_dir ~cache_urls dst_dir
-                checksums [ url ]
-              |> OpamProcess.Job.run
-            in
-            match result with
-            | OpamTypes.Result _ | OpamTypes.Up_to_date _ -> ()
-            | OpamTypes.Not_available (_, msg) ->
-                Fmt.failwith "Failed to fetch %s: %s" p.pkg msg)
+        try
+          Retry.with_attempts ~label:(Fmt.str "fetch %s (%s)" p.pkg src.url)
+            ~error_log_path (fun () ->
+              let result =
+                OpamRepository.pull_tree p.pkg ~cache_dir ~cache_urls dst_dir
+                  checksums [ url ]
+                |> OpamProcess.Job.run
+              in
+              match result with
+              | OpamTypes.Result _ | OpamTypes.Up_to_date _ ->
+                  (* Promote the just-fetched blob into our content-
+                     addressed mirror so [oi build --export] picks it up
+                     and registry consumers can fetch it offline. *)
+                  let _ = Source.Mirror.promote ~fs ~cache_root checksums in
+                  ()
+              | OpamTypes.Not_available (_, msg) ->
+                  Fmt.failwith "Failed to fetch %s: %s" p.pkg msg)
+        with Failure msg ->
+          (* Re-raise as a typed Fetch_failed so the build loop can
+             classify the outcome distinctly from a Build_failed. *)
+          Error.raise (Fetch_failed { url = src.url; msg })
       end
 
 let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
@@ -309,7 +319,9 @@ let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
                 |> OpamProcess.Job.run
               in
               match result with
-              | OpamTypes.Result () | OpamTypes.Up_to_date () -> ()
+              | OpamTypes.Result () | OpamTypes.Up_to_date () ->
+                  let _ = Source.Mirror.promote ~fs ~cache_root checksums in
+                  ()
               | OpamTypes.Not_available (_, msg) -> Fmt.failwith "%s" msg)
         with Failure msg ->
           (* Match the previous semantics: extra sources are
@@ -377,15 +389,20 @@ let apply_substs (p : Plan.package_plan) =
 
 (* -- Build and install ---------------------------------------------------- *)
 
-let build_package ?(cache_urls = []) ~cache_root ~proc_mgr ~fs
-    (p : Plan.package_plan) =
+(* Split into [do_fetch_phase] and [do_build_phase] so [Execute.run] can
+   time them independently and attribute exceptions to the right phase
+   (fetch vs build). [build_package] is preserved as the combined helper
+   for callers that don't need per-phase timing. *)
+let do_fetch_phase ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
   fetch_source ~cache_urls ~fs ~cache_root p;
   (* Ensure build_dir exists before fetching extra-sources: pull_tree
      (in fetch_source) creates the directory, but packages with no main
      source (e.g. seq.base) still need the directory to exist so that
      extra-source files can be written into it. *)
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / p.build_dir);
-  fetch_extra_sources ~cache_urls ~fs ~cache_root p;
+  fetch_extra_sources ~cache_urls ~fs ~cache_root p
+
+let do_build_phase ~proc_mgr ~fs (p : Plan.package_plan) =
   copy_extra_files p;
   apply_patches ~proc_mgr ~fs p;
   apply_substs p;
@@ -445,6 +462,165 @@ let with_default_reporter ~clock ~total_packages ~n_stages f =
     }
   in
   f reporter
+
+(* -- Per-package trace for build_log JSON sidecars ----------------------- *)
+
+module SSet = Set.Make (String)
+
+type host_depext_status = {
+  installed_set : SSet.t;
+  missing_set : SSet.t;
+  not_found_set : SSet.t;
+}
+
+(* Query the host once for the union of every plan-declared depext.
+   Falls back to "everything missing" if the package manager is
+   unreachable so the JSON still records a usable status without
+   guessing. *)
+let host_depext_status_of_plan plan : host_depext_status =
+  let declared =
+    List.fold_left
+      (fun acc (g : Plan.group) ->
+        List.fold_left
+          (fun acc (p : Plan.package_plan) ->
+            List.fold_left
+              (fun acc d -> OpamSysPkg.Set.add (OpamSysPkg.of_string d) acc)
+              acc p.depexts)
+          acc g.packages)
+      OpamSysPkg.Set.empty plan.Plan.groups
+  in
+  let { Depexts.installed; missing; not_found } = Depexts.status declared in
+  let to_set s =
+    OpamSysPkg.Set.fold
+      (fun p acc -> SSet.add (OpamSysPkg.to_string p) acc)
+      s SSet.empty
+  in
+  {
+    installed_set = to_set installed;
+    missing_set = to_set missing;
+    not_found_set = to_set not_found;
+  }
+
+(* One [trace] per package attempt. The do_work loop creates it on
+   [Started] and turns it into a [Build_log.t] sidecar at every terminal
+   event, so success / cached / failure all leave a JSON record next to
+   any text log. *)
+type trace = {
+  pkg : Plan.package_plan;
+  started_at : float;
+  mutable fetch_dur : float option;
+  mutable build_dur : float option;
+  mutable install_dur : float option;
+  mutable restore_dur : float option;
+  mutable text_log : string option; (* path to the .log when one exists *)
+}
+
+let new_trace ~now p =
+  {
+    pkg = p;
+    started_at = now ();
+    fetch_dur = None;
+    build_dur = None;
+    install_dur = None;
+    restore_dur = None;
+    text_log = None;
+  }
+
+let dep_to_log (d : Plan.dep_layer) : Build_log.dep =
+  let id = Build_log.parse_pkg d.pkg in
+  { name = id.name; version = id.version; hash = d.hash }
+
+let plan_to_overlay (p : Plan.package_plan) : Build_log.overlay option =
+  match (p.overlay_handle, p.overlay_version) with
+  | Some h, Some v -> Some { handle = h; version = v }
+  | _ -> None
+
+let plan_to_source (p : Plan.package_plan) : Build_log.source_info option =
+  Stdlib.Option.map
+    (fun (s : Plan.source_info) : Build_log.source_info ->
+      { url = s.url; checksums = s.checksums })
+    p.source
+
+let method_to_log = function
+  | Plan.Source -> Build_log.Source
+  | Plan.Binary -> Build_log.Binary
+
+(* Classify an outer-loop exception into a Build_log.outcome. The
+   [phase] argument disambiguates Build vs Install for non-Fetch
+   errors (Fetch_failed is already typed). *)
+let outcome_of_exn ~phase exn : Build_log.outcome =
+  match exn with
+  | Error.E (Fetch_failed { url; msg }) ->
+      Fetch_failed { url; kind = Build_log.classify_fetch_msg msg }
+  | Error.E (Build_failed { cmd; _ }) -> (
+      match phase with
+      | `Install -> Install_failed { command = cmd; exit_code = None }
+      | _ -> Build_failed { command = cmd; exit_code = None })
+  | _ ->
+      let msg = Printexc.to_string exn in
+      if phase = `Install then
+        Install_failed { command = msg; exit_code = None }
+      else Build_failed { command = msg; exit_code = None }
+
+(* Per-package depexts. [installed]/[missing]/[not_found] are filled
+   from a host-status snapshot computed once per [Execute.run] (host
+   queries spawn a subprocess; per-package would be wasteful). The
+   snapshot is keyed by pkg name; per-package buckets are derived by
+   intersecting [declared] with the snapshot's three sets. *)
+let per_pkg_depexts ~host_status (p : Plan.package_plan) : Build_log.depexts =
+  let declared = p.depexts in
+  if declared = [] then Build_log.empty_depexts
+  else
+    let set_of_strings = List.fold_left (fun s x -> SSet.add x s) SSet.empty in
+    let declared_set = set_of_strings declared in
+    let inter set = SSet.inter declared_set set |> SSet.elements in
+    {
+      declared;
+      installed = inter host_status.installed_set;
+      missing = inter host_status.missing_set;
+      not_found = inter host_status.not_found_set;
+    }
+
+let write_trace ~fs ~cache_root ~os_key ~host_status ~outcome (t : trace) =
+  let p = t.pkg in
+  let id = Build_log.parse_pkg p.pkg in
+  let now = Unix.gettimeofday () in
+  let log =
+    match t.text_log with
+    | None -> None
+    | Some path ->
+        let tail =
+          match outcome with
+          | Build_log.Ok_built | Cached -> None
+          | _ -> Build_log.tail_of_file ~path
+        in
+        Some Build_log.{ text_path = path; tail }
+  in
+  let record : Build_log.t =
+    {
+      schema = 1;
+      pkg = id;
+      layer_hash = p.layer_hash;
+      os_key;
+      method_ = method_to_log p.method_;
+      started_at = t.started_at;
+      duration_s = now -. t.started_at;
+      outcome;
+      deps = List.map dep_to_log p.dep_layers;
+      depexts = per_pkg_depexts ~host_status p;
+      source = plan_to_source p;
+      log;
+      overlay = plan_to_overlay p;
+      phases =
+        {
+          fetch = t.fetch_dur;
+          build = t.build_dur;
+          install = t.install_dur;
+          restore = t.restore_dur;
+        };
+    }
+  in
+  Build_log.write ~fs ~cache_root record
 
 let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
     ~sys ~os_key plan =
@@ -514,6 +690,24 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
       Eio.Path.(fs / plan.cache_root / "build" / "_build")
   end;
+  (* Per-pkg trace store — looked up by layer_hash so phase 2 (build)
+     and phase 3 (install) update the same record before the JSON
+     sidecar is written at the terminal event. *)
+  let traces : (string, trace) Hashtbl.t = Hashtbl.create 64 in
+  let now () = Unix.gettimeofday () in
+  let trace_for p =
+    match Hashtbl.find_opt traces p.Plan.layer_hash with
+    | Some t -> t
+    | None ->
+        let t = new_trace ~now p in
+        Hashtbl.replace traces p.layer_hash t;
+        t
+  in
+  let host_status = host_depext_status_of_plan plan in
+  let emit_log ~outcome p =
+    let t = trace_for p in
+    write_trace ~fs ~cache_root:plan.cache_root ~os_key ~host_status ~outcome t
+  in
   let do_work (reporter : reporter) =
     if plan_doomed then
       List.iter
@@ -521,11 +715,27 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
           List.iter
             (fun (p : Plan.package_plan) ->
               match p.method_ with
-              | Plan.Binary -> reporter.pkg_event (Cached { pkg = p.pkg })
+              | Plan.Binary ->
+                  reporter.pkg_event (Cached { pkg = p.pkg });
+                  emit_log ~outcome:Cached p
               | Plan.Source ->
                   let upstream_log = cascade_log p in
                   mark_failed ~p ~log_path:upstream_log;
-                  reporter.pkg_event (Dep_failed { pkg = p.pkg; upstream_log }))
+                  reporter.pkg_event (Dep_failed { pkg = p.pkg; upstream_log });
+                  let upstream =
+                    match
+                      List.find_opt
+                        (fun (d : Plan.dep_layer) ->
+                          Hashtbl.mem failed_layers d.hash)
+                        p.dep_layers
+                    with
+                    | Some d -> dep_to_log d
+                    | None -> { name = ""; version = ""; hash = "" }
+                  in
+                  let t = trace_for p in
+                  t.text_log <-
+                    (if upstream_log = "" then None else Some upstream_log);
+                  emit_log ~outcome:(Dep_failed { upstream }) p)
             group.packages)
         plan.groups
     else
@@ -545,8 +755,12 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                        stage = group.stage;
                        total_stages = n_stages;
                      });
+                let t = trace_for p in
+                let t0 = now () in
                 D10.Layer.restore d10 ~hash:p.layer_hash ~prefix;
-                reporter.pkg_event (Cached { pkg = p.pkg })
+                t.restore_dur <- Some (now () -. t0);
+                reporter.pkg_event (Cached { pkg = p.pkg });
+                emit_log ~outcome:Cached p
               end)
             group.packages;
           (* Phase 2: parallel fetch+build for Source packages. Skip
@@ -565,11 +779,26 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                   && not (List.exists is_dep_failed p.dep_layers)
                 then true
                 else begin
-                  if p.method_ = Plan.Source then (
+                  if p.method_ = Plan.Source then begin
                     let upstream_log = cascade_log p in
+                    let upstream =
+                      match
+                        List.find_opt
+                          (fun (d : Plan.dep_layer) ->
+                            Hashtbl.mem failed_layers d.hash)
+                          p.dep_layers
+                      with
+                      | Some d -> dep_to_log d
+                      | None -> { name = ""; version = ""; hash = "" }
+                    in
                     mark_failed ~p ~log_path:upstream_log;
                     reporter.pkg_event
-                      (Dep_failed { pkg = p.pkg; upstream_log }));
+                      (Dep_failed { pkg = p.pkg; upstream_log });
+                    let t = trace_for p in
+                    t.text_log <-
+                      (if upstream_log = "" then None else Some upstream_log);
+                    emit_log ~outcome:(Dep_failed { upstream }) p
+                  end;
                   false
                 end)
               group.packages
@@ -586,17 +815,25 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                        stage = group.stage;
                        total_stages = n_stages;
                      });
+                let t = trace_for p in
                 (try
                    Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / p.build_dir);
-                   build_package ~cache_urls ~cache_root:plan.cache_root
-                     ~proc_mgr ~fs p
+                   let t0 = now () in
+                   do_fetch_phase ~cache_urls ~fs ~cache_root:plan.cache_root p;
+                   t.fetch_dur <- Some (now () -. t0);
+                   let t1 = now () in
+                   do_build_phase ~proc_mgr ~fs p;
+                   t.build_dur <- Some (now () -. t1)
                  with exn ->
                    let log_path =
                      write_failure_log ~fs ~cache_root:plan.cache_root ~p ~exn
                    in
+                   t.text_log <- Some log_path;
+                   let outcome = outcome_of_exn ~phase:`Build exn in
                    mark_failed ~p ~log_path;
                    reporter.pkg_event
-                     (Build_failed { pkg = p.pkg; log = log_path }));
+                     (Build_failed { pkg = p.pkg; log = log_path });
+                   emit_log ~outcome p);
                 active := !active - 1)
               to_build
           end;
@@ -617,8 +854,11 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                        total_stages = n_stages;
                      });
                 let before = D10.Prefix.snapshot ~fs prefix in
+                let t = trace_for p in
                 try
+                  let t0 = now () in
                   install_package ~proc_mgr ~fs p;
+                  t.install_dur <- Some (now () -. t0);
                   let files =
                     D10.Prefix.diff ~fs ~prefix ~before |> List.map fst
                   in
@@ -638,14 +878,18 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                     ~parent_hashes:dep_hashes ~exit_status:0
                     ?overlay_handle:p.overlay_handle
                     ?overlay_version:p.overlay_version ();
-                  reporter.pkg_event (Built { pkg = p.pkg })
+                  reporter.pkg_event (Built { pkg = p.pkg });
+                  emit_log ~outcome:Ok_built p
                 with exn ->
                   let log_path =
                     write_failure_log ~fs ~cache_root:plan.cache_root ~p ~exn
                   in
+                  t.text_log <- Some log_path;
+                  let outcome = outcome_of_exn ~phase:`Install exn in
                   mark_failed ~p ~log_path;
                   reporter.pkg_event
-                    (Install_failed { pkg = p.pkg; log = log_path })
+                    (Install_failed { pkg = p.pkg; log = log_path });
+                  emit_log ~outcome p
               end)
             group.packages)
         plan.groups

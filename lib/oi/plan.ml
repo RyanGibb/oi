@@ -260,6 +260,7 @@ type package_plan = {
   prefix : string;
   overlay_handle : string option;
   overlay_version : string option;
+  depexts : string list;
 }
 
 type group = { stage : int; packages : package_plan list }
@@ -437,6 +438,11 @@ let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
               | None -> (None, None)
               | Some d -> overlay_of_packages_dir d
             in
+            (* Active depexts under the solver's filter env. Single
+               source of truth lives in [Build_log.declared_depexts]. *)
+            let depexts =
+              Build_log.declared_depexts ~env:(Solver.Ctx.platform_env ctx) opam
+            in
             {
               pkg = pkg_s;
               layer_hash;
@@ -456,6 +462,7 @@ let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
               prefix;
               overlay_handle;
               overlay_version;
+              depexts;
             })
           names
       in

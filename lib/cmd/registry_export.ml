@@ -70,4 +70,25 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   end;
   let n_sources = Oi.Source.Mirror.export ~cache ~dst in
   if n_sources > 0 then
-    Fmt.pr "  sources: %d blob(s) at %s/sources/@." n_sources output
+    Fmt.pr "  sources: %d blob(s) at %s/sources/@." n_sources output;
+  (* Build-log manifest: one bundled JSON file with every per-package
+     record from this cache, summarised by outcome. *)
+  let cache_root = Oi.Cache.root_s cache in
+  let records = Oi.Build_log.Manifest.read_sidecars ~fs ~cache_root in
+  if records <> [] then begin
+    let manifest =
+      Oi.Build_log.Manifest.of_records ~os_key
+        ~exported_at:(Unix.gettimeofday ()) records
+    in
+    let logs_dir = output / os_key / "logs" in
+    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / logs_dir);
+    let path = logs_dir / "manifest.json" in
+    match
+      Jsont_bytesrw.encode_string ~format:Jsont.Indent
+        Oi.Build_log.Manifest.codec manifest
+    with
+    | Ok s ->
+        Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) s;
+        Fmt.pr "  logs: %d record(s) at %s@." manifest.n_packages path
+    | Error e -> Logs.warn (fun m -> m "manifest encode failed: %s" e)
+  end

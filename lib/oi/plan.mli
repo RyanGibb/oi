@@ -130,6 +130,11 @@ type package_plan = {
   overlay_version : string option;
       (** Reporepo overlay version (e.g. ["20260418.6"]). Present iff
           [overlay_handle] is. *)
+  depexts : string list;
+      (** Declared system packages active under the build's filter env. Names
+          are taken straight from [OpamFile.OPAM.depexts] and only retained for
+          the entries whose filter evaluates true. Empty if the package declares
+          none. *)
 }
 
 type group = { stage : int; packages : package_plan list }
