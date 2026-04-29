@@ -79,20 +79,22 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
 
 let cmd =
   let run () cache_dir data_dir all toolchains sources binaries dune_cache repos
-      dry_run target =
+      opam_root dry_run target =
     Harness.run @@ fun env ->
     let { Harness.fs; clock; sys; os_key; cache; _ } =
       Harness.bootstrap env cache_dir
     in
     let bulk_flags =
       all || toolchains || sources || binaries || dune_cache || repos
+      || opam_root
     in
     match target with
     | Some t ->
         if bulk_flags then begin
           Fmt.epr
             "oi clean: PKG positional cannot be combined with --all / \
-             --toolchains / --sources / --layers / --dune / --repos.@.";
+             --toolchains / --sources / --layers / --dune / --repos / \
+             --opam-root.@.";
           exit 1
         end
         else
@@ -148,6 +150,7 @@ let cmd =
           if all || binaries then rm "runs";
           if all || dune_cache then rm "dune";
           if all || repos then rm "repos";
+          if all || opam_root then rm "opam-root";
           Fmt.pr "Done.@."
         end
   in
@@ -176,6 +179,15 @@ let cmd =
       value & flag
       & info ~doc:"Reporepo and $(b,--with-repo) clones." [ "repos" ])
   in
+  let opam_root =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Opam scaffolding under $(b,\\$OI_DATA_DIR/opam-root/). \
+             Regenerated on demand."
+          [ "opam-root" ])
+  in
   let dry_run =
     Arg.(
       value & flag
@@ -200,8 +212,10 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Remove rebuildable cache data. With no flags or $(b,PKG), lists \
-             each category and its disk usage. Flags are additive. A project's \
-             $(b,_oi/) is never touched.";
+             each category and its disk usage. Flags are additive. A \
+             project's $(b,_oi/) and the reporepo (your overlay catalogue) \
+             are never touched — the reporepo is user-authored data, not \
+             cache.";
           `P
             "$(b,PKG) drops every cached version of that package; \
              $(b,PKG.VERSION) drops one. Layers that transitively depend on a \
@@ -213,4 +227,5 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir $ all
-      $ toolchains $ sources $ binaries $ dune_cache $ repos $ dry_run $ target)
+      $ toolchains $ sources $ binaries $ dune_cache $ repos $ opam_root
+      $ dry_run $ target)

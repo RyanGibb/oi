@@ -108,6 +108,11 @@ let cleanable_items t ~data_dir =
     { label = "dune"; path = p "dune"; description = "Dune shared build cache" };
     { label = "repos"; path = d "repos"; description = "Cloned repositories" };
     {
+      label = "opam-root";
+      path = d "opam-root";
+      description = "Opam scaffolding (regenerated on demand)";
+    };
+    {
       label = "pins";
       path = p "pins";
       description = "Pin-depends sources and synthesized packages trees";
