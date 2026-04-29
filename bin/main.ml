@@ -23,126 +23,74 @@ let info =
       [
         `S Manpage.s_description;
         `P
-          "$(b,oi) is a fast, stateless OCaml package manager. It reads the \
-           $(b,*.opam) manifests that OCaml projects ship, consults the \
-           community's opam repositories, resolves what is needed, and then \
-           builds, installs, or runs the result on demand. Every build it \
-           performs is cached, so repeated invocations reuse the work done \
-           before.";
-        `P
-          "$(b,oi) is designed to stay out of your way. It does not require a \
-           persistent switch, does not pollute your home directory outside of \
-           clearly-named cache and data directories, and does not leave any \
-           long-lived state.";
+          "$(b,oi) reads the $(b,*.opam) manifests OCaml projects ship, \
+           solves against opam-repository, and builds, runs, or publishes \
+           the result. Every build is content-addressed and cached, so \
+           repeat invocations are quick, and no global state is required \
+           to reproduce most commands.";
         `S "QUICK START";
-        `P
-          "Run any tool from the opam ecosystem. The first invocation builds \
-           what it needs; every later invocation hits the cache and starts \
-           instantly.";
-        `Pre "  oi run utop\n  oi run ocamlformat -- --help";
-        `P
-          "Pin a dependency to a specific version with $(b,pkg.VERSION), \
-           $(b,pkg=VERSION), or any of the opam relational operators:";
+        `P "$(b,1.) Run any tool published on opam:";
         `Pre
-          "  oi run --with=dune.3.20.0 -- dune --version\n\
-          \  oi run --with=fmt>=0.9 my_script.ml";
-        `P
-          "Run a package straight from a git repository. $(b,oi) clones the \
-           URL and treats every $(b,*.opam) file at its root as a pin:";
+          "  oi run utop\n\
+          \  oi run ocamlformat -- --help\n\
+          \  oi run --with=dune.3.20.0 -- dune --version";
+        `P "$(b,2.) Run an $(b,.ml) script with deps on the first line:";
         `Pre
-          "  oi run --with=https://github.com/owner/project.git target\n\
-          \  oi run --with=git+https://example.org/foo.git#branch foo";
+          "  echo '[@@@opam fmt cmdliner]' > hello.ml\n\
+          \  oi run hello.ml";
         `P
-          "Run a standalone OCaml script. Declare its dependencies on the \
-           first line of the file:";
+          "$(b,3.) Build, test, and develop in a project. From the project \
+           root:";
         `Pre
-          "  [@@@opam fmt cmdliner lwt>=5.0 ppx_deriving.show]\n\
-          \  let () = ...\n\n\
-          \  oi run my_script.ml\n\
-          \  oi run https://example.com/hello.ml";
+          "  oi build               # sync deps + dev tools, run dune build\n\
+          \  oi test                # dune runtest\n\
+          \  oi build --deps-only   # sync only (after editing a *.opam)\n\
+          \  oi exec -- dune utop   # any command, project env applied\n\
+          \  oi add logs            # edit dune-project + re-solve";
         `P
-          "Inside a project, $(b,oi build) syncs the project's dependencies \
-           into $(b,_oi/prefix/), installs dev tools ($(b,odoc), $(b,merlin), \
-           $(b,ocaml-lsp-server), plus $(b,mdx) / $(b,ocamlformat) when the \
-           project uses them) into $(b,_oi/tools/), writes a $(b,.envrc) for \
-           $(b,direnv) (when installed), and runs $(b,dune build). \
-           $(b,oi build --deps-only) stops before the build for after a \
-           manifest edit.";
+          "If $(b,direnv) is installed, $(b,oi build) writes $(b,.envrc) so \
+           your shell auto-activates the prefix. Otherwise:";
+        `Pre "  eval \"\\$(oi env)\"";
+        `P
+          "$(b,4.) Pull packages from somebody's curated overlay (a \
+           git-pinned opam-repository). The $(i,reporepo) lists known \
+           overlay handles; $(b,oi repo) manages it.";
         `Pre
-          "  oi build\n\
-          \  direnv allow      # or: eval \"\\$(oi env)\"\n\
-          \  oi exec dune test";
-        `P
-          "Add a new dependency. $(b,oi) edits $(b,dune-project), regenerates \
-           the $(b,*.opam) files, and re-syncs:";
-        `Pre "  oi add logs\n  oi add \"fmt>=0.9\"";
-        `P
-          "An $(i,overlay) is somebody's curated opam repository, pinned to a \
-           specific git commit and referred to by a short $(i,handle). The \
-           $(i,reporepo) is the directory of overlays that $(b,oi) knows \
-           about. See $(b,oi repo) for how to manage it. Prefix any target or \
-           $(b,--with) value with $(i,@HANDLE/) to take a package from a \
-           specific overlay:";
+          "  oi run @avsm/owntracks\n\
+          \  oi run --with=@avsm/crockford roguedoi";
+        `P "$(b,5.) Inspect, search, dry-run before doing anything:";
         `Pre
-          "  oi run @avsm/owntracks\n  oi run --with=@avsm/crockford roguedoi";
-        `P "Find a binary or package across every source $(b,oi) knows about:";
-        `Pre "  oi search dune\n  oi search 'ocaml*'\n  oi search @avsm/irmin";
-        `P "Preview without actually doing anything:";
-        `Pre "  oi show utop\n  oi show --tree utop\n  oi run -n utop";
-        `S "COMMAND CATEGORIES";
-        `I
-          ( "$(b,Getting started)",
-            "$(b,run) executes a binary or OCaml script, fetching any missing \
-             dependencies. $(b,build) warms the cache for a package, overlay, \
-             or every overlay; with no $(b,PKG) it runs the cwd's project \
-             build." );
-        `I
-          ( "$(b,Working in a project)",
-            "$(b,build) syncs deps + dev tools and runs $(b,dune build); \
-             $(b,build --deps-only) stops before the build. $(b,exec) runs a \
-             command in the project environment. $(b,env) prints that \
-             environment for use with $(b,eval). $(b,add) records a new \
-             dependency in $(b,dune-project)." );
-        `I
-          ( "$(b,Checking what's going on)",
-            "$(b,show) summarises the build plan and lists missing system \
-             packages; $(b,oi show --all) and $(b,oi show @HANDLE) list \
-             cached layers. $(b,search) finds a binary or package. \
-             $(b,config) reports platform, cache directories, project state, \
-             and dev-tool probes." );
-        `I
-          ( "$(b,Publishing and disk)",
-            "$(b,oi build --export DIR) writes the cache + index + sources \
-             for HTTP serving or $(b,rsync). $(b,oi build --depext) prints \
-             system packages required by the build. $(b,oi registry docker) \
-             generates a multi-distro registry-build compose project. \
-             $(b,clean) frees disk space." );
-        `I
-          ( "$(b,Picking package sources)",
-            "$(b,repo) manages the reporepo (see QUICK START): register \
-             overlays, inspect their pinned commits, and bump them forward." );
+          "  oi show utop                 # build plan + depexts\n\
+          \  oi show --all                # every cached layer\n\
+          \  oi search dune               # find a binary or package\n\
+          \  oi run -n utop               # show the plan, run nothing";
+        `P
+          "$(b,6.) Publish a registry of pre-built layers + source mirror \
+           to a static HTTP server:";
+        `Pre
+          "  oi build --all --export ./registry\n\
+          \  rsync -a ./registry/ user@server:/srv/oi-registry/\n\
+          \  oi run --registry=https://server/oi-registry @avsm/owntracks";
+        `P "$(b,7.) Generate Dockerfiles for CI:";
+        `Pre
+          "  oi docker                                    # project build\n\
+          \  oi docker --test --distro=alpine-3.23        # project tests\n\
+          \  oi docker --all -o ./registry-build          # multi-distro";
         `S "SCRIPT FORMAT";
-        `P
-          "The first line of a $(b,.ml) script declares its dependencies using \
-           an attribute:";
+        `P "The first line of a $(b,.ml) script declares its dependencies:";
         `Pre "  [@@@opam fmt cmdliner>=1.2.0 lwt]";
         `P
-          "Each token names an opam package. An optional version constraint \
-           uses the usual relational operators ($(b,>=), $(b,>), $(b,<=), \
-           $(b,<), $(b,=)). A dotted suffix selects a findlib sub-library, for \
-           example $(b,ppx_deriving.show).";
-        `P
-          "Any package whose name starts with $(b,ppx_) is wired in as a PPX \
-           preprocessor. Run $(b,oi run -vv SCRIPT.ml) to see the generated \
-           build file.";
+          "Each token is an opam package, with optional version constraint \
+           ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
+           wired in as preprocessors automatically. $(b,oi run -vv \
+           SCRIPT.ml) prints the generated dune project.";
         `S Manpage.s_environment;
         `P
-          "$(b,oi) works out of two directories. The data directory holds \
-           long-lived state: cloned opam repositories and the relocatable \
-           compiler toolchains. The cache directory holds rebuildable data: \
-           pre-built packages, assembled prefixes, and the source mirror. Each \
-           directory can be pointed elsewhere by setting one environment \
-           variable, or by passing a command-line flag that takes precedence.";
+          "$(b,oi) uses two directories. The data directory holds long-lived \
+           state (opam-repository clones, toolchains). The cache directory \
+           holds rebuildable data (layers, prefixes, source mirror). Each \
+           is overridable.";
         `I
           ( "$(b,OI_DATA_DIR)",
             "Override the data directory. Falls back to $(b,XDG_DATA_HOME/oi), \
@@ -169,13 +117,14 @@ let () =
       [
         Oi_cmd.Run.cmd;
         Oi_cmd.Build.cmd;
+        Oi_cmd.Build.test_cmd;
+        Oi_cmd.Docker.cmd;
         Oi_cmd.Add.cmd;
         Oi_cmd.Exec.cmd;
         Oi_cmd.Search.cmd;
         Oi_cmd.Show.cmd;
         Oi_cmd.Env.cmd;
         Oi_cmd.Config.cmd;
-        Oi_cmd.Registry.cmd;
         Oi_cmd.Repo.cmd;
         Oi_cmd.Clean.cmd;
       ]

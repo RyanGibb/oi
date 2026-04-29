@@ -148,30 +148,45 @@ let depexts ~fs ~sys ~platform ~cache ~data_dir ?(refresh = false)
     all;
   0
 
-(* Project-mode build: run [oi sync] to assemble a consumer prefix from
-   the cwd's [*.opam] dep closure, then drive the local build. With a
-   [dune-project] present, a single [dune build] suffices and dune
-   handles the inter-package ordering itself. Without one, project mode
-   is currently unsupported (a future iteration may resolve opam
-   [build:] commands per package). [dry_run] prints the topo order +
-   the command that would run. *)
-let run ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
-    ?(refresh = false) ?(with_repos = []) ?(with_deps = []) ?jobs ?toolchain
-    ?envrc_mode ?(dry_run = false) ?(deps_only = false) ~cwd () =
+(* Drive the cwd's [*.opam] project after a successful [Sync.do_sync].
+   Dispatches on [action]:
+   - [`Deps_only]: stop after sync (deps + tools + maybe .envrc).
+   - [`Build]: run [dune build --profile=release].
+   - [`Test]: run [dune runtest --profile=release].
+   Non-dune projects only support [`Deps_only] for now. *)
+type action = [ `Build | `Test | `Deps_only ]
+
+let dune_target = function
+  | `Build -> Some "build"
+  | `Test -> Some "runtest"
+  | `Deps_only -> None
+
+let action_label = function
+  | `Build -> "Build"
+  | `Test -> "Test"
+  | `Deps_only -> "Sync"
+
+let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
+    ~registry ?(refresh = false) ?(with_repos = []) ?(with_deps = []) ?jobs
+    ?toolchain ?envrc_mode ?(dry_run = false) ~cwd () =
+  let label = action_label action in
+  let label_lc = String.lowercase_ascii label in
   let opams = read_opams ~cwd in
   if opams = [] then
-    Oi.Error.config_error "oi build: no *.opam files in %s" cwd;
+    Oi.Error.config_error "oi %s: no *.opam files in %s" label_lc cwd;
   let dune_project = cwd / "dune-project" in
-  if (not deps_only) && not (Sys.file_exists dune_project) then
+  let needs_dune = action <> `Deps_only in
+  if needs_dune && not (Sys.file_exists dune_project) then
     Oi.Error.config_error
-      "oi build: %s has no dune-project. Native opam-build for non-dune \
-       projects is not yet supported (use $(b,--deps-only) to install \
-       dependencies without building)."
-      cwd;
+      "oi %s: %s has no dune-project. Non-dune projects are not yet \
+       supported."
+      label_lc cwd;
   let order = topo_sort_local opams in
   if dry_run then begin
     let cmd_line =
-      if deps_only then "(deps + tools only)" else "dune build --profile=release"
+      match dune_target action with
+      | None -> "(deps + tools only)"
+      | Some t -> Fmt.str "dune %s --profile=release" t
     in
     Fmt.pr "@[<v>%a@,@,  cd %s@,  %s@,@,%a packages: %s@,@]@."
       Fmt.(styled `Bold string)
@@ -187,29 +202,28 @@ let run ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
         ?toolchain ?envrc_mode ~proc_mgr ~fs ~clock ~sys ~platform ~os_key
         ~cache ~data_dir ~registry ~cwd ()
     in
-    if deps_only then 0
-    else begin
-      let dune_cache_root = Oi.Cache.dune_root cache in
-      let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info tc in
-      let env =
-        Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
-      in
-      Fmt.pr "@.%a %d package(s): %s@."
-        Fmt.(styled `Bold string)
-        "Building" (List.length opams) (String.concat ", " order);
-      let ec =
-        Subprocess.run proc_mgr ~env
-          [ "dune"; "build"; "--profile=release" ]
-      in
-      if ec <> 0 then begin
-        Fmt.epr "%a (dune build exit %d)@."
-          Fmt.(styled `Red string)
-          "Build failed" ec;
-        ec
-      end
-      else begin
-        Fmt.pr "%a@." Fmt.(styled `Green string) "Build successful";
-        0
-      end
-    end
+    match dune_target action with
+    | None -> 0
+    | Some target ->
+        let dune_cache_root = Oi.Cache.dune_root cache in
+        let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info tc in
+        let env =
+          Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
+        in
+        Fmt.pr "@.%a %d package(s): %s@."
+          Fmt.(styled `Bold string)
+          (label ^ "ing") (List.length opams) (String.concat ", " order);
+        let ec =
+          Subprocess.run proc_mgr ~env [ "dune"; target; "--profile=release" ]
+        in
+        if ec <> 0 then begin
+          Fmt.epr "%a (dune %s exit %d)@."
+            Fmt.(styled `Red string)
+            (label ^ " failed") target ec;
+          ec
+        end
+        else begin
+          Fmt.pr "%a@." Fmt.(styled `Green string) (label ^ " successful");
+          0
+        end
   end

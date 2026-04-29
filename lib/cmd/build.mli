@@ -1,5 +1,5 @@
-(** [oi build]: build a project (cwd's [*.opam]), a single package, an
-    overlay handle, or the whole reporepo. *)
+(** [oi build] and [oi test]: build (or run tests for) a project, package,
+    overlay, or the whole reporepo. *)
 
 val compute_overlay_depexts_for_conf :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -27,7 +27,13 @@ val compute_overlay_depexts_per_distro :
   distros:Registry_docker.Distro.t list ->
   (Registry_docker.Distro.t * string list) list
 (** Solve every overlay's root packages on each [distros] entry and return the
-    per-distro union of declared depexts. Shared with [oi registry docker] which
+    per-distro union of declared depexts. Shared with [oi docker --all] which
     needs the same data to parametrise the generated Dockerfiles. *)
 
 val cmd : unit Cmdliner.Cmd.t
+(** $(b,oi build). *)
+
+val test_cmd : unit Cmdliner.Cmd.t
+(** $(b,oi test). Defined here so the test path shares
+    [find_target_layer], [run_target_test], and the rest of the build
+    machinery without a one-function module. *)

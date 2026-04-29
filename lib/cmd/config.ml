@@ -1,9 +1,20 @@
 open Cmdliner
 
+(* Human-readable byte size ("1.2GB", "47MB", …) for the source-mirror
+   summary. Matches the format the old [oi mirror stats] used. *)
+let human_bytes b =
+  if Int64.compare b 1_000_000_000L > 0 then
+    Fmt.str "%.1fGB" (Int64.to_float b /. 1e9)
+  else if Int64.compare b 1_000_000L > 0 then
+    Fmt.str "%.1fMB" (Int64.to_float b /. 1e6)
+  else if Int64.compare b 1_000L > 0 then
+    Fmt.str "%.1fKB" (Int64.to_float b /. 1e3)
+  else Fmt.str "%LdB" b
+
 let cmd =
   let run () cache_dir data_dir =
     Harness.run @@ fun env ->
-    let { Harness.fs; os_key; _ } = Harness.bootstrap env cache_dir in
+    let { Harness.fs; os_key; cache; _ } = Harness.bootstrap env cache_dir in
     Fmt.pr "@[<v>%a@," Fmt.(styled `Bold string) "Platform";
     Fmt.pr "  os-key:     %s@," os_key;
     Fmt.pr "  ocaml:      %s (relocatable)@," Workspace.ocaml_version;
@@ -13,6 +24,11 @@ let cmd =
     Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Registry";
     Fmt.pr "  url:        %s@," Terms.default_registry;
     Fmt.pr "  index TTL:  %gs@," Layer_index.remote_index_max_age;
+    Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Source mirror";
+    let mirror_stats = Oi.Source.Mirror.stats ~cache in
+    Fmt.pr "  dir:        %s@," (Oi.Source.Mirror.dir ~cache);
+    Fmt.pr "  blobs:      %d@," mirror_stats.count;
+    Fmt.pr "  total size: %s@," (human_bytes mirror_stats.total_size);
     Fmt.pr "@,%a@," Fmt.(styled `Bold string) "Toolchains";
     Fmt.pr "  install root:  %s@," (Oi.Toolchain.default_root ());
     List.iter
@@ -152,6 +168,12 @@ let cmd =
                $(b,--toolchain=NAME)), tagged $(b,[relocatable]) or \
                $(b,[fixed-prefix]), with their primary source URL and any \
                existing installs under \\$XDG_CACHE_HOME/oi/toolchains." );
+          `I
+            ( "$(b,Source mirror)",
+              "Local opam $(b,cache_url) mirror at \
+               \\$XDG_CACHE_HOME/oi/mirror, populated as a side effect of \
+               builds. Use $(b,oi build --all --export DIR) to publish a \
+               consistent snapshot." );
           `I
             ( "$(b,Project extras)",
               "Any $(b,x-repos:) and $(b,pin-depends:) entries declared in the \

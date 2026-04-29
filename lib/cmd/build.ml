@@ -145,7 +145,7 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
 (* -- Overlay-wide depext helpers ---------------------------------------- *)
 
 (* Walk the reporepo and return the list of [(handle, root_groups)]
-   pairs that should drive depext computation for [oi registry docker].
+   pairs that should drive depext computation for [oi docker --all].
    Excludes the [default] handle (the full opam-repository), toolchain
    definitions ([x-oi-toolchain-name] set — they're metadata views,
    not buildable), and any overlay without [x-root-packages]. *)
@@ -302,11 +302,159 @@ let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
       (distro, depexts_union ~conf:distro_conf solves))
     distros
 
+(* -- Single-target test mode ------------------------------------------- *)
+
+(* Locate the layer whose package name matches [pkg_name]. The dotted
+   prefix match keys on [name + "."], so the exact version found by the
+   solver doesn't have to be hardcoded. *)
+let find_target_layer ~fs ~cache ~os_key ~pkg_name layer_hashes =
+  let layers_dir = Oi.Cache.root_s cache / "layers" / os_key in
+  let prefix = pkg_name ^ "." in
+  List.find_map
+    (fun h ->
+      match
+        D10.Layer.load_meta Eio.Path.(fs / layers_dir / h / "layer.json")
+      with
+      | Some (m : D10.Layer.meta)
+        when String.length m.package >= String.length prefix
+             && String.sub m.package 0 (String.length prefix) = prefix ->
+          Some (h, m.package)
+      | _ -> None)
+    layer_hashes
+
+(* Build [target]'s closure, then run [dune runtest --profile=release]
+   inside the target's persisted build dir against the assembled
+   consumer prefix. Backs [oi build PKG --test] / [oi build @h/PKG
+   --test]. *)
+let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
+    ~data_dir ~registry ?(refresh = false) ?(with_repos = [])
+    ?(with_deps = []) ?jobs ?toolchain ?(dry_run = false) () =
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+  let conf =
+    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
+  let remote = Terms.remote_of_registry registry in
+  let target_display = target in
+  let target, with_repos, with_deps, target_pin =
+    match Target.split_handle_prefix target with
+    | None -> (target, with_repos, with_deps, None)
+    | Some (h, pkg_spec) ->
+        let pkg, user_constr = OpamFormula.atom_of_string pkg_spec in
+        let pin = { Target.handle = h; pkg; user_constr } in
+        ( OpamPackage.Name.to_string pkg,
+          with_repos @ [ h ],
+          with_deps @ [ pkg_spec ],
+          Some pin )
+  in
+  let with_deps, with_repos, with_pins =
+    Target.extract_handle_pins ~with_repos with_deps
+  in
+  let extra_deps, url_project =
+    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+  in
+  let handle_pins = Stdlib.Option.to_list target_pin @ with_pins in
+  let tc_handles =
+    Target.pin_handles handle_pins
+    @ Target.handles_of_tokens with_repos
+    @ url_project.overlays
+    |> List.sort_uniq String.compare
+  in
+  let toolchain =
+    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+      ~override:toolchain ~handles:tc_handles ()
+  in
+  let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in
+  let all_extras =
+    Target.merge_extras ~cli:cli_extras ~project:url_project.extra_repos
+  in
+  let handle_constraints =
+    Target.handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras
+      handle_pins
+  in
+  let extra_constraints =
+    OpamPackage.Name.Map.union
+      (fun a _ -> a)
+      handle_constraints
+      (Oi.Project.Script.constraints extra_deps)
+  in
+  let pkg_name = OpamPackage.Name.of_string target in
+  let names =
+    [ pkg_name ]
+    |> Oi.Pipeline.drop_override_compiler_roots ~override:None ~toolchain
+  in
+  if dry_run then begin
+    Fmt.pr
+      "@[<v>%a@,@,  oi build %s@,  cd <build_dir>@,  dune runtest \
+       --profile=release@,@]@."
+      Fmt.(styled `Bold string)
+      "Would run:" target_display;
+    0
+  end
+  else begin
+    let layer_hashes =
+      Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+        ~os_key ~extra_repos:all_extras ~pins:url_project.pins ~refresh
+        ~constraints:extra_constraints ?remote ?jobs ?toolchain names
+    in
+    match find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes with
+    | None ->
+        Oi.Error.not_found target
+          "no built layer matched %s; the solve may have substituted a \
+           different package."
+          target
+    | Some (layer_hash, pkg_full) ->
+        let short =
+          String.sub layer_hash 0 (min 12 (String.length layer_hash))
+        in
+        let build_dir =
+          Oi.Cache.root_s cache / "build" / "_build" / (pkg_full ^ "-" ^ short)
+        in
+        if not (Sys.file_exists build_dir) then
+          Oi.Error.not_found target
+            "build dir %s missing (layer was cached without preserved \
+             source). Pass --refresh to rebuild from source."
+            build_dir;
+        if not (Sys.file_exists (build_dir / "dune-project")) then
+          Oi.Error.config_error
+            "%s has no dune-project; native opam test commands not yet \
+             supported."
+            build_dir;
+        let prefix =
+          Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key
+            ~layer_hashes
+        in
+        let dune_cache_root = Oi.Cache.dune_root cache in
+        let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
+        let env =
+          Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
+        in
+        Fmt.pr "@.%a %s@.%a %s@."
+          Fmt.(styled `Bold string)
+          "Testing" pkg_full
+          Fmt.(styled `Faint string)
+          "→" build_dir;
+        let cmd =
+          Fmt.str "cd %s && dune runtest --profile=release" build_dir
+        in
+        let ec = Subprocess.run proc_mgr ~env [ "/bin/sh"; "-c"; cmd ] in
+        if ec <> 0 then begin
+          Fmt.epr "%a (dune runtest exit %d)@."
+            Fmt.(styled `Red string)
+            "Test failed" ec;
+          ec
+        end
+        else begin
+          Fmt.pr "%a@." Fmt.(styled `Green string) "Test successful";
+          0
+        end
+  end
+
 (* -- oi build dispatcher ------------------------------------------------ *)
 
 let cmd =
   let run () data_dir cache_dir refresh dry_run all only skip registry
-      with_repos with_deps jobs toolchain_override depext_only export docker
+      with_repos with_deps jobs toolchain_override depext_only export
       envrc_mode deps_only targets =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
@@ -347,22 +495,6 @@ let cmd =
     let no_spec = targets = [] && not all && not project_mode in
     if no_spec && export <> None then needs_spec "--export";
     if no_spec && depext_only then needs_spec "--depext";
-    (* [--docker]:
-       - project mode: emit ./Dockerfile.oi for a containerised project
-         build (debian-stable base). Skips the local build.
-       - other modes: refuse and point at [oi registry docker]. *)
-    if docker && project_mode then begin
-      let path = cwd_s / "Dockerfile.oi" in
-      let df = Registry_docker.dockerfile_project (`Debian `Stable) in
-      Registry_docker.write_dockerfile path df;
-      Fmt.pr "Wrote %s@.Build with: docker build -t my-project %s@." path
-        cwd_s;
-      exit 0
-    end;
-    if docker then
-      Oi.Error.config_error
-        "oi build --docker is project-mode only; use 'oi registry docker' \
-         for multi-distro registry build projects";
     if depext_only && all then begin
       let conf =
         Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
@@ -388,9 +520,10 @@ let cmd =
           Project_build.depexts ~fs ~sys ~platform ~cache ~data_dir ~refresh
             ~with_repos ~with_deps ?toolchain:toolchain_override ~cwd:cwd_s ()
         else
-          Project_build.run ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
-            ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps ?jobs
-            ?toolchain:toolchain_override ~envrc_mode ~dry_run ~deps_only
+          let action = if deps_only then `Deps_only else `Build in
+          Project_build.run ~action ~fs ~proc_mgr ~clock ~sys ~platform
+            ~os_key ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps
+            ?jobs ?toolchain:toolchain_override ~envrc_mode ~dry_run
             ~cwd:cwd_s ()
       in
       do_export_if_set ~ok:(ec = 0) ();
@@ -1508,16 +1641,6 @@ let cmd =
              $(b,@HANDLE), $(b,--all), or project."
           [ "export" ])
   in
-  let docker =
-    Arg.(
-      value & flag
-      & info
-          ~doc:
-            "Project mode: emit a $(b,Dockerfile.oi) that runs the project \
-             build inside a debian-stable container. For multi-distro \
-             registry images use $(b,oi registry docker)."
-          [ "docker" ])
-  in
   let deps_only =
     Arg.(
       value & flag
@@ -1559,5 +1682,89 @@ let cmd =
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
       $ dry_run $ all $ only $ skip $ Terms.registry $ Terms.with_repos
       $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ depext_only $ export
-      $ docker $ Sync.envrc_mode_arg $ deps_only $ targets)
+      $ Sync.envrc_mode_arg $ deps_only $ targets)
 
+
+
+(* -- oi test ------------------------------------------------------------ *)
+
+let test_cmd =
+  let run () data_dir cache_dir refresh registry with_repos with_deps jobs
+      toolchain_override envrc_mode dry_run targets =
+    Harness.run @@ fun env ->
+    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
+      Harness.bootstrap env cache_dir
+    in
+    let cwd_s, _ = Workspace.resolved_cwd fs in
+    let project_mode =
+      targets = []
+      &&
+      try
+        Sys.readdir cwd_s
+        |> Array.exists (fun f ->
+            Filename.check_suffix f ".opam"
+            && Filename.chop_suffix f ".opam" <> "")
+      with Sys_error _ -> false
+    in
+    match targets with
+    | [] ->
+        if not project_mode then
+          Oi.Error.config_error
+            "oi test: no *.opam in %s. Run from a project, or pass a PKG / \
+             @HANDLE/PKG."
+            cwd_s;
+        let ec =
+          Project_build.run ~action:`Test ~fs ~proc_mgr ~clock ~sys ~platform
+            ~os_key ~cache ~data_dir ~registry ~refresh ~with_repos
+            ~with_deps ?jobs ?toolchain:toolchain_override ~envrc_mode
+            ~dry_run ~cwd:cwd_s ()
+        in
+        exit ec
+    | [ target ] ->
+        let ec =
+          run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
+            ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps ?jobs
+            ?toolchain:toolchain_override ~dry_run ()
+        in
+        exit ec
+    | _ ->
+        Oi.Error.config_error
+          "oi test takes at most one PKG / @HANDLE/PKG target."
+  in
+  let dry_run =
+    Arg.(
+      value & flag
+      & info ~doc:"Print the test command; do nothing." [ "n"; "dry-run" ])
+  in
+  let targets =
+    Arg.(
+      value & pos_all string []
+      & info ~docv:"PKG"
+          ~doc:
+            "Single package or $(b,@HANDLE/PKG). Builds it (and its deps), \
+             then runs $(b,dune runtest) in the package's build dir."
+          [])
+  in
+  let info =
+    Cmd.info "test" ~doc:"Run a project's or a package's tests"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "With no $(b,PKG): syncs the cwd's $(b,*.opam) deps + dev tools \
+             into $(b,_oi/) and runs $(b,dune runtest --profile=release).";
+          `P
+            "With $(b,PKG) or $(b,@HANDLE/PKG): builds the package's layer \
+             closure (same as $(b,oi build PKG)), then runs $(b,dune \
+             runtest) in the package's build dir against the assembled \
+             prefix.";
+          `P "Use $(b,oi docker --test) to generate a CI Dockerfile.";
+          `S Manpage.s_examples;
+          `Pre "  oi test\n  oi test @avsm/owntracks";
+        ]
+  in
+  Cmd.v info
+    Term.(
+      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
+      $ Terms.registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
+      $ Terms.toolchain $ Sync.envrc_mode_arg $ dry_run $ targets)

@@ -353,41 +353,10 @@ module Mirror : sig
   val remote_url : registry:string -> OpamUrl.t
   (** [<registry>/sources] as an [OpamUrl.t]. *)
 
-  type populate_summary = {
-    total : int;  (** opam files walked *)
-    fetched : int;  (** tarballs newly downloaded *)
-    skipped : int;
-        (** already present, no checksum, or git URL (clone-only). *)
-    failed : (string * string) list;
-        (** [(pkg.version, reason)] for tarballs we couldn't fetch or whose
-            checksum mismatched. *)
-  }
-
-  val populate :
-    fs:Eio.Fs.dir_ty Eio.Path.t ->
-    sys:D10.Sysops.t ->
-    reporepo_path:string ->
-    dst:string ->
-    populate_summary
-  (** Walk every opam file under [<reporepo>/v1/<handle>/packages/], fetch
-      the tarball for any [url{}] with at least one checksum, verify it, and
-      store it content-addressed under
-      [<dst>/<algo>/<XX>/<full-hash>] — opam's standard cache layout, so
-      the result is directly usable as a [cache_url].
-
-      Idempotent: tarballs already present (matching the primary checksum)
-      are not re-fetched. Concurrency is bounded internally. Git sources
-      are not cached here — opam clones them directly from the sha-pinned
-      git URLs in v1/. *)
-
   type stats = { count : int; total_size : int64 }
 
   val stats : cache:Cache.t -> stats
   (** Walk the mirror directory and report blob count + total size. *)
-
-  val verify : sys:D10.Sysops.t -> cache:Cache.t -> (string * string) list
-  (** Re-hash every blob and return [(hash, reason)] for any whose contents
-      no longer match the filename. *)
 
   val export : cache:Cache.t -> dst:Eio.Fs.dir_ty Eio.Path.t -> int
   (** Hardlink-copy the mirror tree to [<dst>/sources/]. Returns the number

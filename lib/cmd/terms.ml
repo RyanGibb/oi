@@ -42,10 +42,8 @@ let refresh =
     value & flag
     & info
         ~doc:
-          "Re-fetch opam repositories, pinned sources, and git URLs even if \
-           they are still fresh. Caches older than 24 hours refresh on their \
-           own, so this flag is only needed when you want to pick up an \
-           upstream change immediately."
+          "Re-fetch repos, pinned sources, and git URLs even if fresh. \
+           Caches refresh on their own after 24h."
         [ "refresh" ])
 
 let with_repos =
@@ -53,9 +51,8 @@ let with_repos =
     value & opt_all string []
     & info ~docv:"URL"
         ~doc:
-          "Add another opam repository to the solve. The argument is either a \
-           git URL or a short reporepo handle (see $(b,oi repo)). May be given \
-           more than once to stack repositories."
+          "Stack an opam repository (git URL or reporepo handle) on the \
+           solve. Repeatable."
         [ "with-repo" ])
 
 let jobs =
@@ -63,10 +60,7 @@ let jobs =
     value
     & opt (some int) None
     & info ~docv:"N"
-        ~doc:
-          "Build at most $(b,N) packages in parallel. The default is 4. Higher \
-           values speed up clean builds on multi-core machines; lower values \
-           reduce memory pressure."
+        ~doc:"Cap parallel builds and fetches. Default 4."
         [ "j"; "jobs" ])
 
 let with_deps =
@@ -74,11 +68,9 @@ let with_deps =
     value & opt_all string []
     & info ~docv:"PKG"
         ~doc:
-          "Include an extra dependency in the solve. The argument is a plain \
-           package name, an opam atom such as $(b,fmt>=0.9) or \
-           $(b,dune.3.20.0), or a git URL. A URL is cloned and every \
-           $(b,*.opam) file at its root becomes a pin. May be given more than \
-           once."
+          "Add a solver root: a package name, opam atom ($(b,fmt>=0.9), \
+           $(b,dune.3.20.0)), or git URL (every $(b,*.opam) at its root \
+           becomes a pin). Repeatable."
         [ "with" ])
 
 let toolchain =
@@ -87,11 +79,10 @@ let toolchain =
     & opt (some string) None
     & info ~docv:"HANDLE"
         ~doc:
-          "Resolve the toolchain named $(docv) from the reporepo and pin its \
-           compiler set into the consumer solve. $(b,oi config) lists \
-           available toolchains. Relocatable toolchains build into the \
-           consumer prefix; non-relocatable ones (oxcaml) install once into \
-           \\$XDG_CACHE_HOME/oi/toolchains/ on first use."
+          "Pin the compiler set from the named reporepo toolchain. \
+           $(b,oi config) lists handles. Non-relocatable toolchains \
+           (oxcaml) install into $(b,\\$XDG_CACHE_HOME/oi/toolchains/) on \
+           first use."
         [ "toolchain" ])
 
 let default_registry = "https://oi.ci.dev"
@@ -99,8 +90,8 @@ let default_registry = "https://oi.ci.dev"
 let registry =
   let doc =
     Fmt.str
-      "Remote layer registry URL (default: %s). Layers are fetched as \
-       <URL>/<os_key>/<hash>.tar.zst before building from source."
+      "Remote layer registry URL (default: %s). Layers fetched from \
+       $(docv)/$(b,<os>/<hash>.tar.zst) before building from source."
       default_registry
   in
   Arg.(

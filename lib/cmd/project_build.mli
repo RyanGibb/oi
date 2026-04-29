@@ -1,12 +1,17 @@
-(** [oi build] project mode: drive the cwd's local [*.opam] build.
+(** [oi build] / [oi test] project mode: drive the cwd's local [*.opam]
+    build or test run.
 
-    Sync the project's dependency closure into [_oi/prefix/], then run
-    [dune build] with that prefix on PATH. Dune handles inter-package
-    ordering of sibling [*.opam] files itself. Non-dune projects error
-    out for now; a future iteration may resolve opam [build:] commands
-    per package. *)
+    Sync the project's dependency closure into [_oi/prefix/], then run a
+    dune target with that prefix on PATH. Dune handles inter-package
+    ordering of sibling [*.opam] files itself. Non-dune projects only
+    support [`Deps_only] for now. *)
+
+type action = [ `Build | `Test | `Deps_only ]
+(** [`Build] runs $(b,dune build --profile=release); [`Test] runs
+    $(b,dune runtest --profile=release); [`Deps_only] stops after sync. *)
 
 val run :
+  action:action ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   proc_mgr:Eio_unix.Process.mgr_ty Eio.Resource.t ->
   clock:float Eio.Time.clock_ty Eio.Resource.t ->
@@ -23,13 +28,13 @@ val run :
   ?toolchain:string ->
   ?envrc_mode:Sync.envrc_mode ->
   ?dry_run:bool ->
-  ?deps_only:bool ->
   cwd:string ->
   unit ->
   int
-(** [run ~cwd ()] sync's the project then runs [dune build]. Returns the
-    build's exit code (0 on success). Errors out via {!Oi.Error.E} when
-    [cwd] has no [*.opam] files or no [dune-project]. *)
+(** [run ~action ~cwd ()] sync's the project then runs the action's dune
+    target (or stops after sync for [`Deps_only]). Returns the dune
+    invocation's exit code (0 on success). Errors out via {!Oi.Error.E}
+    when [cwd] has no [*.opam] files or no [dune-project]. *)
 
 val depexts :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
