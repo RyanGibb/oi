@@ -59,13 +59,12 @@ val docker_compose_yaml :
   distros:Distro.t list -> registry_host_path:string -> unit -> string
 (** [docker_compose_yaml ~distros ~registry_host_path ()] emits a compose file
     whose services each bind-mount [registry_host_path] at [/out] and run
-    [oi build --refresh --all --export /out]. Every
-    container owns its own oi state — [oi] auto-clones the reporepo from its
-    configured default URL (overridable via [OI_REPOREPO_URL] in the service
-    environment) on first use — so containers are independent and safe to run in
-    parallel. Layers are tagged with their overlay handle and version in the
-    per-distro sqlite index so clients can scope queries to a specific overlay.
-*)
+    [oi build --refresh --all --export /out]. Every container owns its own oi
+    state — [oi] auto-clones the reporepo from its configured default URL
+    (overridable via [OI_REPOREPO_URL] in the service environment) on first use
+    — so containers are independent and safe to run in parallel. Layers are
+    tagged with their overlay handle and version in the per-distro sqlite index
+    so clients can scope queries to a specific overlay. *)
 
 val write_dockerfile : string -> Dockerfile.t -> unit
 (** Serialise a {!Dockerfile.t} to [path] in Dockerfile syntax. *)

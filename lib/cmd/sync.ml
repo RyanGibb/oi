@@ -168,7 +168,9 @@ let direnv_on_path () =
           if d = "" then false
           else
             let p = d / "direnv" in
-            try Unix.access p [ Unix.X_OK ]; true
+            try
+              Unix.access p [ Unix.X_OK ];
+              true
             with Unix.Unix_error _ -> false)
 
 let envrc_should_write = function
@@ -177,9 +179,9 @@ let envrc_should_write = function
   | `Detect -> direnv_on_path ()
 
 let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?(toolchain : string option)
-    ?(envrc_mode = `Detect) ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
-    ~data_dir ~registry ~cwd () =
+    ?(with_deps = []) ?jobs ?(toolchain : string option) ?(envrc_mode = `Detect)
+    ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry ~cwd
+    () =
   let toolchain_override = toolchain in
   let say fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
@@ -315,7 +317,6 @@ let envrc_mode_arg =
     value & opt modes `Detect
     & info ~docv:"MODE"
         ~doc:
-          "When to write $(b,.envrc): $(b,skip), $(b,always), or \
-           $(b,detect) (default — write only if $(b,direnv) is on PATH)."
+          "When to write $(b,.envrc): $(b,skip), $(b,always), or $(b,detect) \
+           (default — write only if $(b,direnv) is on PATH)."
         [ "envrc" ])
-

@@ -17,6 +17,7 @@ type extra_repo = {
          [Source.Repo.ensure_extra] returns it without cloning. Used for
          reporepo-handle overlays that live in [<reporepo>/v1/<handle>/]. *)
 }
+
 type pin = { pkg : OpamPackage.t; url : OpamUrl.t; declared_in : string }
 
 type t = {

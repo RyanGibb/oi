@@ -317,8 +317,7 @@ let service_name d =
    single-shot [oi build --all --export /out] iterates every overlay's
    [x-root-packages] and publishes the cache to the bind-mounted
    registry tree. *)
-let build_export_cmd () =
-  "oi build --refresh --all --export /out"
+let build_export_cmd () = "oi build --refresh --all --export /out"
 
 let docker_compose_yaml ~distros ~registry_host_path () =
   let buf = Buffer.create 1024 in

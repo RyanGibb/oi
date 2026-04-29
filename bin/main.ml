@@ -23,11 +23,11 @@ let info =
       [
         `S Manpage.s_description;
         `P
-          "$(b,oi) reads the $(b,*.opam) manifests OCaml projects ship, \
-           solves against opam-repository, and builds, runs, or publishes \
-           the result. Every build is content-addressed and cached, so \
-           repeat invocations are quick, and no global state is required \
-           to reproduce most commands.";
+          "$(b,oi) reads the $(b,*.opam) manifests OCaml projects ship, solves \
+           against opam-repository, and builds, runs, or publishes the result. \
+           Every build is content-addressed and cached, so repeat invocations \
+           are quick, and no global state is required to reproduce most \
+           commands.";
         `S "QUICK START";
         `P "$(b,1.) Run any tool published on opam:";
         `Pre
@@ -35,9 +35,7 @@ let info =
           \  oi run ocamlformat -- --help\n\
           \  oi run --with=dune.3.20.0 -- dune --version";
         `P "$(b,2.) Run an $(b,.ml) script with deps on the first line:";
-        `Pre
-          "  echo '[@@@opam fmt cmdliner]' > hello.ml\n\
-          \  oi run hello.ml";
+        `Pre "  echo '[@@@opam fmt cmdliner]' > hello.ml\n  oi run hello.ml";
         `P
           "$(b,3.) Build, test, and develop in a project. From the project \
            root:";
@@ -52,12 +50,11 @@ let info =
            your shell auto-activates the prefix. Otherwise:";
         `Pre "  eval \"\\$(oi env)\"";
         `P
-          "$(b,4.) Pull packages from somebody's curated overlay (a \
-           git-pinned opam-repository). The $(i,reporepo) lists known \
-           overlay handles; $(b,oi repo) manages it.";
+          "$(b,4.) Pull packages from somebody's curated overlay (a git-pinned \
+           opam-repository). The $(i,reporepo) lists known overlay handles; \
+           $(b,oi repo) manages it.";
         `Pre
-          "  oi run @avsm/owntracks\n\
-          \  oi run --with=@avsm/crockford roguedoi";
+          "  oi run @avsm/owntracks\n  oi run --with=@avsm/crockford roguedoi";
         `P "$(b,5.) Inspect, search, dry-run before doing anything:";
         `Pre
           "  oi show utop                 # build plan + depexts\n\
@@ -65,8 +62,8 @@ let info =
           \  oi search dune               # find a binary or package\n\
           \  oi run -n utop               # show the plan, run nothing";
         `P
-          "$(b,6.) Publish a registry of pre-built layers + source mirror \
-           to a static HTTP server:";
+          "$(b,6.) Publish a registry of pre-built layers + source mirror to a \
+           static HTTP server:";
         `Pre
           "  oi build --all --export ./registry\n\
           \  rsync -a ./registry/ user@server:/srv/oi-registry/\n\
@@ -82,15 +79,15 @@ let info =
         `P
           "Each token is an opam package, with optional version constraint \
            ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
-           wired in as preprocessors automatically. $(b,oi run -vv \
-           SCRIPT.ml) prints the generated dune project.";
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
+           in as preprocessors automatically. $(b,oi run -vv SCRIPT.ml) prints \
+           the generated dune project.";
         `S Manpage.s_environment;
         `P
           "$(b,oi) uses two directories. The data directory holds long-lived \
            state (opam-repository clones, toolchains). The cache directory \
-           holds rebuildable data (layers, prefixes, source mirror). Each \
-           is overridable.";
+           holds rebuildable data (layers, prefixes, source mirror). Each is \
+           overridable.";
         `I
           ( "$(b,OI_DATA_DIR)",
             "Override the data directory. Falls back to $(b,XDG_DATA_HOME/oi), \

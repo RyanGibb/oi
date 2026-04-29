@@ -327,8 +327,8 @@ let find_target_layer ~fs ~cache ~os_key ~pkg_name layer_hashes =
    consumer prefix. Backs [oi build PKG --test] / [oi build @h/PKG
    --test]. *)
 let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
-    ~data_dir ~registry ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?toolchain ?(dry_run = false) () =
+    ~data_dir ~registry ?(refresh = false) ?(with_repos = []) ?(with_deps = [])
+    ?jobs ?toolchain ?(dry_run = false) () =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let conf =
@@ -369,8 +369,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
     Target.merge_extras ~cli:cli_extras ~project:url_project.extra_repos
   in
   let handle_constraints =
-    Target.handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras
-      handle_pins
+    Target.handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras handle_pins
   in
   let extra_constraints =
     OpamPackage.Name.Map.union
@@ -385,19 +384,25 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
   in
   if dry_run then begin
     Fmt.pr
-      "@[<v>%a@,@,  oi build %s@,  cd <build_dir>@,  dune runtest \
-       --profile=release@,@]@."
+      "@[<v>%a@,\
+       @,\
+      \  oi build %s@,\
+      \  cd <build_dir>@,\
+      \  dune runtest --profile=release@,\
+       @]@."
       Fmt.(styled `Bold string)
       "Would run:" target_display;
     0
   end
   else begin
     let layer_hashes =
-      Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-        ~os_key ~extra_repos:all_extras ~pins:url_project.pins ~refresh
+      Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
+        ~extra_repos:all_extras ~pins:url_project.pins ~refresh
         ~constraints:extra_constraints ?remote ?jobs ?toolchain names
     in
-    match find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes with
+    match
+      find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes
+    with
     | None ->
         Oi.Error.not_found target
           "no built layer matched %s; the solve may have substituted a \
@@ -412,8 +417,8 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
         in
         if not (Sys.file_exists build_dir) then
           Oi.Error.not_found target
-            "build dir %s missing (layer was cached without preserved \
-             source). Pass --refresh to rebuild from source."
+            "build dir %s missing (layer was cached without preserved source). \
+             Pass --refresh to rebuild from source."
             build_dir;
         if not (Sys.file_exists (build_dir / "dune-project")) then
           Oi.Error.config_error
@@ -434,9 +439,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
           "Testing" pkg_full
           Fmt.(styled `Faint string)
           "→" build_dir;
-        let cmd =
-          Fmt.str "cd %s && dune runtest --profile=release" build_dir
-        in
+        let cmd = Fmt.str "cd %s && dune runtest --profile=release" build_dir in
         let ec = Subprocess.run proc_mgr ~env [ "/bin/sh"; "-c"; cmd ] in
         if ec <> 0 then begin
           Fmt.epr "%a (dune runtest exit %d)@."
@@ -454,8 +457,8 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
 
 let cmd =
   let run () data_dir cache_dir refresh dry_run all only skip registry
-      with_repos with_deps jobs toolchain_override depext_only export
-      envrc_mode deps_only targets =
+      with_repos with_deps jobs toolchain_override depext_only export envrc_mode
+      deps_only targets =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
@@ -465,20 +468,19 @@ let cmd =
        the bulk solve+layer-build loop below. *)
     let cwd_s, _ = Workspace.resolved_cwd fs in
     let project_mode =
-      targets = []
-      && (not all)
+      targets = [] && (not all)
       &&
-      try
-        Sys.readdir cwd_s
-        |> Array.exists (fun f ->
-            Filename.check_suffix f ".opam"
-            && Filename.chop_suffix f ".opam" <> "")
-      with Sys_error _ -> false
+        try
+          Sys.readdir cwd_s
+          |> Array.exists (fun f ->
+              Filename.check_suffix f ".opam"
+              && Filename.chop_suffix f ".opam" <> "")
+        with Sys_error _ -> false
     in
     let needs_spec what =
       Oi.Error.config_error
-        "oi build %s: no spec and no project (cwd has no *.opam). Pass a \
-         PKG, @HANDLE, or --all."
+        "oi build %s: no spec and no project (cwd has no *.opam). Pass a PKG, \
+         @HANDLE, or --all."
         what
     in
     (* Flag validation. Mode-specific dispatch happens after this
@@ -490,9 +492,9 @@ let cmd =
         "oi build: --export and --depext are mutually exclusive";
     if deps_only && not project_mode then
       Oi.Error.config_error
-        "oi build --deps-only: only valid in project mode (cwd has no \
-         *.opam, or a PKG / @HANDLE / --all was given)";
-    let no_spec = targets = [] && not all && not project_mode in
+        "oi build --deps-only: only valid in project mode (cwd has no *.opam, \
+         or a PKG / @HANDLE / --all was given)";
+    let no_spec = targets = [] && (not all) && not project_mode in
     if no_spec && export <> None then needs_spec "--export";
     if no_spec && depext_only then needs_spec "--depext";
     if depext_only && all then begin
@@ -521,10 +523,9 @@ let cmd =
             ~with_repos ~with_deps ?toolchain:toolchain_override ~cwd:cwd_s ()
         else
           let action = if deps_only then `Deps_only else `Build in
-          Project_build.run ~action ~fs ~proc_mgr ~clock ~sys ~platform
-            ~os_key ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps
-            ?jobs ?toolchain:toolchain_override ~envrc_mode ~dry_run
-            ~cwd:cwd_s ()
+          Project_build.run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
+            ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps ?jobs
+            ?toolchain:toolchain_override ~envrc_mode ~dry_run ~cwd:cwd_s ()
       in
       do_export_if_set ~ok:(ec = 0) ();
       exit ec
@@ -831,8 +832,8 @@ let cmd =
               | Some e when e.url = "" -> None
               | Some _ ->
                   let d =
-                    Oi.Source.Reporepo.overlay_packages_dir
-                      ~path:reporepo_path ~handle:h
+                    Oi.Source.Reporepo.overlay_packages_dir ~path:reporepo_path
+                      ~handle:h
                   in
                   if Sys.file_exists d then Some d else None
             in
@@ -1221,9 +1222,7 @@ let cmd =
               acc entries)
           OpamSysPkg.Set.empty solutions
       in
-      OpamSysPkg.Set.iter
-        (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
-        all;
+      OpamSysPkg.Set.iter (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p)) all;
       exit 0
     end;
     (* 2. Each solve group is its own build group (no cross-group
@@ -1589,8 +1588,7 @@ let cmd =
     Arg.(
       value & pos_all string []
       & info ~docv:"PKG"
-          ~doc:"Packages to build. Empty in project mode or with $(b,--all)."
-          [])
+          ~doc:"Packages to build. Empty in project mode or with $(b,--all)." [])
   in
   let all =
     Arg.(
@@ -1606,15 +1604,13 @@ let cmd =
     Arg.(
       value & opt_all string []
       & info ~docv:"HANDLE"
-          ~doc:"Restrict $(b,--all) to these handles. Repeatable."
-          [ "only" ])
+          ~doc:"Restrict $(b,--all) to these handles. Repeatable." [ "only" ])
   in
   let skip =
     Arg.(
       value & opt_all string []
       & info ~docv:"HANDLE"
-          ~doc:"Exclude these handles from $(b,--all). Repeatable."
-          [ "skip" ])
+          ~doc:"Exclude these handles from $(b,--all). Repeatable." [ "skip" ])
   in
   let dry_run =
     Arg.(
@@ -1626,8 +1622,8 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Solve only; print system packages required by the result, one \
-             per line. Pipe to a system package manager."
+            "Solve only; print system packages required by the result, one per \
+             line. Pipe to a system package manager."
           [ "depext" ])
   in
   let export =
@@ -1651,8 +1647,7 @@ let cmd =
           [ "deps-only" ])
   in
   let info =
-    Cmd.info "build"
-      ~doc:"Build a project, package, overlay, or every overlay"
+    Cmd.info "build" ~doc:"Build a project, package, overlay, or every overlay"
       ~man:
         [
           `S Manpage.s_description;
@@ -1684,8 +1679,6 @@ let cmd =
       $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ depext_only $ export
       $ Sync.envrc_mode_arg $ deps_only $ targets)
 
-
-
 (* -- oi test ------------------------------------------------------------ *)
 
 let test_cmd =
@@ -1699,12 +1692,12 @@ let test_cmd =
     let project_mode =
       targets = []
       &&
-      try
-        Sys.readdir cwd_s
-        |> Array.exists (fun f ->
-            Filename.check_suffix f ".opam"
-            && Filename.chop_suffix f ".opam" <> "")
-      with Sys_error _ -> false
+        try
+          Sys.readdir cwd_s
+          |> Array.exists (fun f ->
+              Filename.check_suffix f ".opam"
+              && Filename.chop_suffix f ".opam" <> "")
+        with Sys_error _ -> false
     in
     match targets with
     | [] ->
@@ -1715,9 +1708,9 @@ let test_cmd =
             cwd_s;
         let ec =
           Project_build.run ~action:`Test ~fs ~proc_mgr ~clock ~sys ~platform
-            ~os_key ~cache ~data_dir ~registry ~refresh ~with_repos
-            ~with_deps ?jobs ?toolchain:toolchain_override ~envrc_mode
-            ~dry_run ~cwd:cwd_s ()
+            ~os_key ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps
+            ?jobs ?toolchain:toolchain_override ~envrc_mode ~dry_run ~cwd:cwd_s
+            ()
         in
         exit ec
     | [ target ] ->
@@ -1755,9 +1748,8 @@ let test_cmd =
              into $(b,_oi/) and runs $(b,dune runtest --profile=release).";
           `P
             "With $(b,PKG) or $(b,@HANDLE/PKG): builds the package's layer \
-             closure (same as $(b,oi build PKG)), then runs $(b,dune \
-             runtest) in the package's build dir against the assembled \
-             prefix.";
+             closure (same as $(b,oi build PKG)), then runs $(b,dune runtest) \
+             in the package's build dir against the assembled prefix.";
           `P "Use $(b,oi docker --test) to generate a CI Dockerfile.";
           `S Manpage.s_examples;
           `Pre "  oi test\n  oi test @avsm/owntracks";

@@ -14,8 +14,8 @@ val compute_overlay_depexts_for_conf :
   string list
 (** Solve overlays' [x-root-packages] and return the union of depexts under
     [conf]'s opam filter variables. [?handle] restricts to a single overlay
-    (default: every overlay). [?override] forces a [--toolchain=NAME] across
-    the board. *)
+    (default: every overlay). [?override] forces a [--toolchain=NAME] across the
+    board. *)
 
 val compute_overlay_depexts_per_distro :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -34,6 +34,6 @@ val cmd : unit Cmdliner.Cmd.t
 (** $(b,oi build). *)
 
 val test_cmd : unit Cmdliner.Cmd.t
-(** $(b,oi test). Defined here so the test path shares
-    [find_target_layer], [run_target_test], and the rest of the build
-    machinery without a one-function module. *)
+(** $(b,oi test). Defined here so the test path shares [find_target_layer],
+    [run_target_test], and the rest of the build machinery without a
+    one-function module. *)

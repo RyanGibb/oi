@@ -728,8 +728,7 @@ module Cache = struct
     in
     let status =
       read_process_output
-        (Printf.sprintf
-           "git -C %s status --porcelain -- %s 2>/dev/null"
+        (Printf.sprintf "git -C %s status --porcelain -- %s 2>/dev/null"
            (Filename.quote repo)
            (Filename.quote packages_dir))
     in

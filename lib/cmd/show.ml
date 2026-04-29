@@ -228,8 +228,7 @@ let show_repositories ?toolchain ~with_repos () =
 let show_indented_meta_line ~indent label = function
   | "" -> ()
   | v ->
-      Fmt.pr "%s%a %s@,"
-        (String.make indent ' ')
+      Fmt.pr "%s%a %s@," (String.make indent ' ')
         Fmt.(styled `Bold string)
         (Fmt.str "%-11s" (label ^ ":"))
         v
@@ -369,7 +368,8 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
       List.iter
         (fun (name, body) ->
           let label =
-            if name = "" then "Description:" else Fmt.str "Description (%s):" name
+            if name = "" then "Description:"
+            else Fmt.str "Description (%s):" name
           in
           Fmt.pr "@,%a@," Fmt.(styled `Bold string) label;
           String.split_on_char '\n' body
@@ -397,9 +397,9 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
           with
           | None -> None
           | Some m
-            when (match handle with
+            when match handle with
                  | None -> true
-                 | Some h -> m.overlay_handle = Some h) ->
+                 | Some h -> m.overlay_handle = Some h ->
               let sz =
                 Oi.Cache.size ~sys Eio.Path.(fs / layers_dir / hash / "fs")
               in
@@ -483,7 +483,8 @@ let cmd =
     let bare_handle =
       match targets with
       | [ t ]
-        when String.length t > 1 && t.[0] = '@' && not (String.contains t '/') ->
+        when String.length t > 1 && t.[0] = '@' && not (String.contains t '/')
+        ->
           Some (String.sub t 1 (String.length t - 1))
       | _ -> None
     in
@@ -803,8 +804,8 @@ let cmd =
           `S "MODES";
           `I
             ( "(default)",
-              "Metadata, package counts, binaries, depexts (with missing \
-               ones marked), pinned overlays." );
+              "Metadata, package counts, binaries, depexts (with missing ones \
+               marked), pinned overlays." );
           `I
             ( "$(b,--tree)",
               "Full per-package build plan: layer hashes, source URLs, \

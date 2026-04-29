@@ -39,9 +39,7 @@ let emit_project ~cmd ~suffix ~tag_label ~generator ~cwd_s ~distro ~output =
     | Some p -> p
     | None -> cwd_s / Fmt.str "Dockerfile.oi-%s.%s" suffix tag
   in
-  let df =
-    Registry_docker.dockerfile_project ~cmd ~generator distro
-  in
+  let df = Registry_docker.dockerfile_project ~cmd ~generator distro in
   Registry_docker.write_dockerfile path df;
   Fmt.pr "Wrote %s@.Build with: docker build -t %s -f %s %s@." path tag_label
     path cwd_s
@@ -70,9 +68,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
         let fname = Registry_docker.one_distro_filename d in
         let path = output / fname in
         let overlay_depexts =
-          Stdlib.Option.value
-            (List.assoc_opt d per_distro_depexts)
-            ~default:[]
+          Stdlib.Option.value (List.assoc_opt d per_distro_depexts) ~default:[]
         in
         let df = Registry_docker.dockerfile_one_distro ~overlay_depexts d in
         Registry_docker.write_dockerfile path df;
@@ -107,28 +103,26 @@ let cmd =
       Harness.bootstrap env cache_dir
     in
     if test_mode && all then
-      Oi.Error.config_error
-        "oi docker: --test and --all are mutually exclusive";
+      Oi.Error.config_error "oi docker: --test and --all are mutually exclusive";
     let cwd_s, _ = Workspace.resolved_cwd fs in
     if all then
       let dir = Stdlib.Option.value output ~default:cwd_s in
       emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context
         ~output:dir ()
     else if test_mode then
-      emit_project ~cmd:"oi test" ~suffix:"test"
-        ~tag_label:"my-project-test"
+      emit_project ~cmd:"oi test" ~suffix:"test" ~tag_label:"my-project-test"
         ~generator:"oi docker --test" ~cwd_s ~distro ~output
     else
-      emit_project ~cmd:"oi build" ~suffix:"build"
-        ~tag_label:"my-project" ~generator:"oi docker" ~cwd_s ~distro ~output
+      emit_project ~cmd:"oi build" ~suffix:"build" ~tag_label:"my-project"
+        ~generator:"oi docker" ~cwd_s ~distro ~output
   in
   let test_mode =
     Arg.(
       value & flag
       & info
           ~doc:
-            "Project mode: emit a Dockerfile that runs $(b,oi test) instead \
-             of $(b,oi build)."
+            "Project mode: emit a Dockerfile that runs $(b,oi test) instead of \
+             $(b,oi build)."
           [ "test" ])
   in
   let all =
@@ -151,8 +145,8 @@ let cmd =
       & info ~docv:"DISTRO"
           ~doc:
             "Project-mode base distro (any $(b,dockerfile-opam) tag, e.g. \
-             $(b,debian-13), $(b,alpine-3.23), $(b,fedora-43)). Ignored \
-             with $(b,--all)."
+             $(b,debian-13), $(b,alpine-3.23), $(b,fedora-43)). Ignored with \
+             $(b,--all)."
           [ "distro" ])
   in
   let src_context =
@@ -160,8 +154,8 @@ let cmd =
       value & opt string "."
       & info ~docv:"DIR"
           ~doc:
-            "$(b,--all) only: path to the $(b,oi) source tree relative to \
-             the Docker build context. Defaults to the context root."
+            "$(b,--all) only: path to the $(b,oi) source tree relative to the \
+             Docker build context. Defaults to the context root."
           [ "src" ])
   in
   let output =
@@ -171,9 +165,8 @@ let cmd =
       & info ~docv:"PATH"
           ~doc:
             "Project mode: write Dockerfile to $(b,PATH) (default: \
-             $(b,Dockerfile.oi-{build,test}.<distro>) in the cwd). \
-             $(b,--all) mode: directory for the multi-file project \
-             (default: cwd)."
+             $(b,Dockerfile.oi-{build,test}.<distro>) in the cwd). $(b,--all) \
+             mode: directory for the multi-file project (default: cwd)."
           [ "o"; "output" ])
   in
   let info =
@@ -181,20 +174,19 @@ let cmd =
       ~man:
         [
           `S Manpage.s_description;
-          `P
-            "Three modes:";
+          `P "Three modes:";
           `I
             ( "(default)",
-              "Project build: $(b,Dockerfile.oi-build.<distro>) running \
-               $(b,oi build) inside the chosen distro." );
+              "Project build: $(b,Dockerfile.oi-build.<distro>) running $(b,oi \
+               build) inside the chosen distro." );
           `I
             ( "$(b,--test)",
-              "Project test: $(b,Dockerfile.oi-test.<distro>) running \
-               $(b,oi test)." );
+              "Project test: $(b,Dockerfile.oi-test.<distro>) running $(b,oi \
+               test)." );
           `I
             ( "$(b,--all)",
-              "Multi-distro registry build project: $(b,Dockerfile.oi) + per-\
-               distro Dockerfiles + $(b,docker-compose.yml). Each service \
+              "Multi-distro registry build project: $(b,Dockerfile.oi) + \
+               per-distro Dockerfiles + $(b,docker-compose.yml). Each service \
                runs $(b,oi build --all --export /out) on its bind-mounted \
                registry tree." );
           `S Manpage.s_examples;

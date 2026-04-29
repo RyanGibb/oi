@@ -61,7 +61,7 @@ val run :
     invocations. The key is the failing layer's hash; the value is the path to
     the build-failure log (empty for cascaded failures that inherit a dep's
     log). Any package whose [layer_hash] is in this table (or whose deps' layer
-    hashes are) is skipped — useful for [oi build --all] where each
-    solve group is a separate [run] and a failure in one group should prevent
-    identical retries in later groups. When omitted, a fresh tracker is used for
-    this call only. *)
+    hashes are) is skipped — useful for [oi build --all] where each solve group
+    is a separate [run] and a failure in one group should prevent identical
+    retries in later groups. When omitted, a fresh tracker is used for this call
+    only. *)

@@ -485,8 +485,8 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Resolve $(b,TARGET)'s dependencies, install them into the shared \
-             cache, and run $(b,TARGET). Subsequent runs with the same dep \
-             set reuse the cache.";
+             cache, and run $(b,TARGET). Subsequent runs with the same dep set \
+             reuse the cache.";
           `P
             "$(b,TARGET) is a binary name, a local $(b,.ml) script, or an \
              $(b,http)/$(b,https) URL pointing at a remote script.";
@@ -503,8 +503,8 @@ let cmd =
           `P
             "For $(b,.ml) scripts, $(b,oi) parses the first line for deps, \
              builds them with the script, and caches by content hash. Editing \
-             the script triggers a rebuild. Remote URLs are refetched on \
-             every invocation and rebuilt only when contents change.";
+             the script triggers a rebuild. Remote URLs are refetched on every \
+             invocation and rebuilt only when contents change.";
           `P "Declare deps on the first line:";
           `Pre "  [@@@opam fmt cmdliner lwt>=5.0]";
           `P
@@ -522,8 +522,7 @@ let cmd =
              from the named overlay; bare $(i,@HANDLE) stacks the whole \
              overlay onto the solve. See $(b,oi repo).";
           `Pre
-            "  oi run @avsm/owntracks\n\
-            \  oi run --with=@avsm/crockford roguedoi";
+            "  oi run @avsm/owntracks\n  oi run --with=@avsm/crockford roguedoi";
           `P
             "Add $(b,x-repos: [\"@HANDLE\"]) to a project's $(b,*.opam) to \
              apply the overlay automatically. Plain URLs are also accepted as \
@@ -539,10 +538,10 @@ let cmd =
           `I ("3.", "Reporepo's $(b,x-oi-default-toolchain).");
           `S "GIT URLS";
           `P
-            "$(b,--with=URL) clones the repo and pins each root $(b,*.opam) \
-             as a solver root. Schemes: $(b,http://), $(b,https://), \
-             $(b,git+), $(b,git@), $(b,git://), $(b,ssh://). Append $(b,#REF) \
-             for a specific commit/tag/branch.";
+            "$(b,--with=URL) clones the repo and pins each root $(b,*.opam) as \
+             a solver root. Schemes: $(b,http://), $(b,https://), $(b,git+), \
+             $(b,git@), $(b,git://), $(b,ssh://). Append $(b,#REF) for a \
+             specific commit/tag/branch.";
           `Pre
             "  oi run --with=https://github.com/owner/project.git target\n\
             \  oi run --with=git+https://example.org/foo.git#branch foo";

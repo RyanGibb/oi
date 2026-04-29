@@ -1,5 +1,5 @@
-(** Project sync: install [*.opam] dependencies into [_oi/prefix/], install
-    dev tools into [_oi/tools/], and (optionally) write [.envrc] for direnv.
+(** Project sync: install [*.opam] dependencies into [_oi/prefix/], install dev
+    tools into [_oi/tools/], and (optionally) write [.envrc] for direnv.
 
     Library-only; the user-facing entry point is [oi build --deps-only] in
     [Build] and the auto-sync codepaths in [Exec] / [Env]. *)
@@ -30,13 +30,13 @@ val resolve_project_toolchain :
 *)
 
 type envrc_mode = [ `Skip | `Always | `Detect ]
-(** Controls [.envrc] writing during {!do_sync}. [`Detect] (the default)
-    writes [.envrc] only if [direnv] is on PATH; [`Skip] never writes;
-    [`Always] writes regardless. *)
+(** Controls [.envrc] writing during {!do_sync}. [`Detect] (the default) writes
+    [.envrc] only if [direnv] is on PATH; [`Skip] never writes; [`Always] writes
+    regardless. *)
 
 val envrc_mode_arg : envrc_mode Cmdliner.Term.t
-(** Cmdliner term for [--envrc=skip|always|detect]. Shared between
-    [oi sync] and [oi build]. *)
+(** Cmdliner term for [--envrc=skip|always|detect]. Shared between [oi sync] and
+    [oi build]. *)
 
 val do_sync :
   ?quiet:bool ->

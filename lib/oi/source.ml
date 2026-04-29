@@ -142,7 +142,9 @@ module Reporepo = struct
   let meta_root ~path = v1_root ~path / "reporepo"
   let meta_packages_dir ~path = meta_root ~path / "packages"
   let overlay_dir ~path ~handle = v1_root ~path / handle
-  let overlay_packages_dir ~path ~handle = overlay_dir ~path ~handle / "packages"
+
+  let overlay_packages_dir ~path ~handle =
+    overlay_dir ~path ~handle / "packages"
 
   type entry = {
     handle : string;
@@ -592,8 +594,8 @@ module Reporepo = struct
       let packages_dir = meta_packages_dir ~path in
       if not (Sys.file_exists packages_dir) then
         Error.config_error
-          "reporepo at %s has no v1/reporepo/packages/ tree (run 'oi repo \
-           add' or migrate from the old layout)"
+          "reporepo at %s has no v1/reporepo/packages/ tree (run 'oi repo add' \
+           or migrate from the old layout)"
           path;
       let constraints =
         List.fold_left
@@ -860,9 +862,7 @@ module Reporepo = struct
     Buffer.contents buf
 
   let write_entry ~fs ~path ~handle ~version content =
-    let pkg_dir =
-      meta_packages_dir ~path / handle / (handle ^ "." ^ version)
-    in
+    let pkg_dir = meta_packages_dir ~path / handle / (handle ^ "." ^ version) in
     let opam_path = pkg_dir / "opam" in
     write_file ~fs opam_path content;
     opam_path
@@ -913,8 +913,8 @@ module Reporepo = struct
           match b with `rsync -> "rsync" | `darcs -> "darcs" | `hg -> "hg"
         in
         Error.config_error
-          "%s: %s URLs are not supported in v1 materialisation (URL: %s)"
-          where name (OpamUrl.to_string u)
+          "%s: %s URLs are not supported in v1 materialisation (URL: %s)" where
+          name (OpamUrl.to_string u)
 
   (* Special-case host rewrite: tangled.org's plain HTTPS clone path is
      flaky in our hands, but the same content is mirrored on
@@ -924,11 +924,14 @@ module Reporepo = struct
   let rewrite_host (u : OpamUrl.t) : OpamUrl.t =
     let prefix = "tangled.org/" in
     if u.transport = "https" && String.starts_with ~prefix u.path then
-      let after = String.sub u.path (String.length prefix)
-        (String.length u.path - String.length prefix) in
       let after =
-        if String.length after >= 4
-           && String.sub after (String.length after - 4) 4 = ".git"
+        String.sub u.path (String.length prefix)
+          (String.length u.path - String.length prefix)
+      in
+      let after =
+        if
+          String.length after >= 4
+          && String.sub after (String.length after - 4) 4 = ".git"
         then String.sub after 0 (String.length after - 4)
         else after
       in
@@ -948,8 +951,8 @@ module Reporepo = struct
     let u = rewrite_host u_in in
     let host_changed = u.path <> u_in.path in
     match classify_url ~where u with
-    | `Git -> begin
-        match u.hash with
+    | `Git ->
+        begin match u.hash with
         | Some sha when is_sha_string sha ->
             if host_changed then `Replace_url u else `Keep
         | ref_opt -> begin
@@ -968,10 +971,9 @@ module Reporepo = struct
                    (match ref_opt with None -> "" | Some r -> " " ^ r)
                    (Printexc.to_string exn))
           end
-      end
+        end
     | `Tarball ->
-        if has_checksum then
-          if host_changed then `Replace_url u else `Keep
+        if has_checksum then if host_changed then `Replace_url u else `Keep
         else begin
           let url_str = OpamUrl.to_string u in
           let tmp = Filename.temp_file "oi-bump-tarball-" ".bin" in
@@ -998,11 +1000,12 @@ module Reporepo = struct
 
   let set_extension key str opam =
     let v : OpamParserTypes.FullPos.value =
-      { pelem = OpamParserTypes.FullPos.String str; pos = OpamTypesBase.pos_null }
+      {
+        pelem = OpamParserTypes.FullPos.String str;
+        pos = OpamTypesBase.pos_null;
+      }
     in
-    let exts =
-      OpamStd.String.Map.add key v (OpamFile.OPAM.extensions opam)
-    in
+    let exts = OpamStd.String.Map.add key v (OpamFile.OPAM.extensions opam) in
     OpamFile.OPAM.with_extensions exts opam
 
   (* Tag the rewritten file with the pre-rewrite URL so that incremental
@@ -1040,8 +1043,7 @@ module Reporepo = struct
                and fail there if it really is broken. The package stays
                solvable, which preserves the pre-v1 behaviour for
                overlays whose upstream URLs are flaky. *)
-            Log.warn (fun m ->
-                m "%s: leaving URL unpinned (%s)" package reason);
+            Log.warn (fun m -> m "%s: leaving URL unpinned (%s)" package reason);
             (stamp_source_url opam original, Pkg_kept, 0)
       end
 
@@ -1067,8 +1069,7 @@ module Reporepo = struct
                     where (OpamUrl.to_string url));
               ((pkg, url), 0)
           | `Failed reason ->
-              Log.warn (fun m ->
-                  m "%s: leaving pin unpinned (%s)" where reason);
+              Log.warn (fun m -> m "%s: leaving pin unpinned (%s)" where reason);
               ((pkg, url), 0)
         in
         let rewritten, count =
@@ -1087,9 +1088,7 @@ module Reporepo = struct
     let write_dst opam =
       Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
         Eio.Path.(fs / Filename.dirname dst_opam_path);
-      OpamFile.OPAM.write
-        (OpamFile.make (OpamFilename.raw dst_opam_path))
-        opam
+      OpamFile.OPAM.write (OpamFile.make (OpamFilename.raw dst_opam_path)) opam
     in
     let opam, outcome =
       try
@@ -1168,8 +1167,7 @@ module Reporepo = struct
     mkdir_p ~fs tmp_packages;
     write_file ~fs (tmp_root / "repo") "opam-version: \"2.0\"\n";
     let scratch = scratch_clone ~fs ~sys ~url ~commit in
-    Fun.protect
-      ~finally:(fun () ->
+    Fun.protect ~finally:(fun () ->
         try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch)
         with _ -> ())
     @@ fun () ->
@@ -1405,13 +1403,14 @@ module Pin = struct
       let tbl = Hashtbl.create 16 in
       List.iter
         (function
-          | Sexplib0.Sexp.List (Atom "pin" :: Atom pkg :: fields) -> begin
-              match (find_kv "origin" fields, find_kv "resolved" fields) with
+          | Sexplib0.Sexp.List (Atom "pin" :: Atom pkg :: fields) ->
+              begin match
+                (find_kv "origin" fields, find_kv "resolved" fields)
+              with
               | Some origin, Some resolved ->
-                  Hashtbl.replace tbl (pkg, origin)
-                    { pkg; origin; resolved }
+                  Hashtbl.replace tbl (pkg, origin) { pkg; origin; resolved }
               | _ -> ()
-            end
+              end
           | _ -> ())
         sexps;
       tbl
@@ -1440,15 +1439,14 @@ module Pin = struct
          ;; builds skip the ls-remote round-trip; safe to delete to force a\n\
          ;; refresh.\n";
       Buffer.add_string buf "(version 1)\n";
-      let sorted =
-        List.sort (fun a b -> String.compare a.pkg b.pkg) entries
-      in
+      let sorted = List.sort (fun a b -> String.compare a.pkg b.pkg) entries in
       List.iter
         (fun e ->
           Printf.bprintf buf "(pin %s\n  (origin   %S)\n  (resolved %S))\n"
             e.pkg e.origin e.resolved)
         sorted;
-      Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path)
+      Eio.Path.save ~create:(`Or_truncate 0o644)
+        Eio.Path.(fs / path)
         (Buffer.contents buf)
   end
 
@@ -1476,8 +1474,8 @@ module Pin = struct
                  slot, so we leave the URL alone. *)
               | `Add_checksum _ -> pin.url
               | `Failed reason ->
-                  Error.config_error "pin %s: cannot resolve URL %s: %s"
-                    pkg_s origin reason)
+                  Error.config_error "pin %s: cannot resolve URL %s: %s" pkg_s
+                    origin reason)
         in
         let pins', entries =
           List.fold_right
@@ -1734,8 +1732,7 @@ module Mirror = struct
               Sys.readdir shard_dir |> Array.to_list
               |> List.filter_map (fun hash ->
                   let path = shard_dir / hash in
-                  if Sys.is_directory path then None
-                  else Some (algo, hash, path))))
+                  if Sys.is_directory path then None else Some (algo, hash, path))))
       algos
 
   type stats = { count : int; total_size : int64 }

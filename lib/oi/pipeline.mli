@@ -6,9 +6,9 @@
 
     The CLI commands compose these operations: most do {!resolve_toolchain} →
     {!build} → {!assemble_prefix}, then exec into the result. The smaller
-    helpers ({!cache_urls}, {!fetch_remote_layers}) are exported so callers
-    can intercept the pipeline at intermediate points (e.g. registry-build
-    wraps {!build} with its own progress reporter). *)
+    helpers ({!cache_urls}, {!fetch_remote_layers}) are exported so callers can
+    intercept the pipeline at intermediate points (e.g. registry-build wraps
+    {!build} with its own progress reporter). *)
 
 (** {1 Platform configuration and d10 wiring} *)
 
@@ -147,9 +147,9 @@ val build :
     source via the build prefix when not cached), and returns the layer hashes
     in topological order.
 
-    [project_root] is the directory that holds the project's [_oi/] tree;
-    when supplied, every pin's URL is sha-pinned via [_oi/oi.lock] before
-    fetch. The lock is transient build state, regenerated as needed.
+    [project_root] is the directory that holds the project's [_oi/] tree; when
+    supplied, every pin's URL is sha-pinned via [_oi/oi.lock] before fetch. The
+    lock is transient build state, regenerated as needed.
 
     When [dry_run] is [true] the function prints the build plan and calls
     [Stdlib.exit 0] — same behaviour as [oi show]. *)

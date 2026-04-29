@@ -98,51 +98,51 @@ let cmd =
             Fmt.(styled `Bold string)
             e.handle e.version status e.url)
         base;
-    Fmt.pr "@]@.";
-    let cwd_s, _ = Workspace.resolved_cwd fs in
-    let proj =
-      match Oi.Project.load ~fs cwd_s with
-      | exception Sys_error _ -> None
-      | exception Eio.Exn.Io _ -> None
-      | p -> Some p
-    in
-    match proj with
-    | None -> ()
-    | Some p ->
-        if p.extra_repos <> [] then begin
-          Fmt.pr "@.Project extra repositories:@.";
-          List.iter
-            (fun (r : Oi.Project.extra_repo) ->
-              Fmt.pr "  %-20s %s@." r.name r.url)
-            p.extra_repos
-        end;
-        if p.pins <> [] then begin
-          Fmt.pr "@.Project pin-depends:@.";
-          List.iter
-            (fun (pin : Oi.Project.pin) ->
-              Fmt.pr "  %-20s %s@."
-                (OpamPackage.to_string pin.pkg)
-                (OpamUrl.to_string pin.url))
-            p.pins
-        end;
-        if p.overlays <> [] then begin
-          Fmt.pr "@.Project overlays (x-repos @-handles):@.";
-          List.iter (fun h -> Fmt.pr "  %s@." h) p.overlays
-        end;
-        (* Dev tools: run the probe registry against cwd and print one
+      Fmt.pr "@]@.";
+      let cwd_s, _ = Workspace.resolved_cwd fs in
+      let proj =
+        match Oi.Project.load ~fs cwd_s with
+        | exception Sys_error _ -> None
+        | exception Eio.Exn.Io _ -> None
+        | p -> Some p
+      in
+      match proj with
+      | None -> ()
+      | Some p ->
+          if p.extra_repos <> [] then begin
+            Fmt.pr "@.Project extra repositories:@.";
+            List.iter
+              (fun (r : Oi.Project.extra_repo) ->
+                Fmt.pr "  %-20s %s@." r.name r.url)
+              p.extra_repos
+          end;
+          if p.pins <> [] then begin
+            Fmt.pr "@.Project pin-depends:@.";
+            List.iter
+              (fun (pin : Oi.Project.pin) ->
+                Fmt.pr "  %-20s %s@."
+                  (OpamPackage.to_string pin.pkg)
+                  (OpamUrl.to_string pin.url))
+              p.pins
+          end;
+          if p.overlays <> [] then begin
+            Fmt.pr "@.Project overlays (x-repos @-handles):@.";
+            List.iter (fun h -> Fmt.pr "  %s@." h) p.overlays
+          end;
+          (* Dev tools: run the probe registry against cwd and print one
            row per tool. Shown in every project (even one with no
            hits), so it's obvious when merlin / odoc would end up in
            [_oi/tools/] after the next sync. *)
-        let tool_results = Oi.Project.Tool.probe ~fs cwd_s in
-        Fmt.pr "@.Dev tools:@.";
-        List.iter
-          (fun (r : Oi.Project.Tool.result) ->
-            let mark =
-              if r.hit then Fmt.str "%a" Fmt.(styled `Green string) "hit"
-              else Fmt.str "%a" Fmt.(styled `Faint string) "miss"
-            in
-            Fmt.pr "  %-18s %-4s %s@." r.spec.name mark r.detail)
-          tool_results
+          let tool_results = Oi.Project.Tool.probe ~fs cwd_s in
+          Fmt.pr "@.Dev tools:@.";
+          List.iter
+            (fun (r : Oi.Project.Tool.result) ->
+              let mark =
+                if r.hit then Fmt.str "%a" Fmt.(styled `Green string) "hit"
+                else Fmt.str "%a" Fmt.(styled `Faint string) "miss"
+              in
+              Fmt.pr "  %-18s %-4s %s@." r.spec.name mark r.detail)
+            tool_results
   in
   let info =
     Cmd.info "config" ~doc:"Show oi's view of this machine and project"

@@ -1,5 +1,5 @@
-(** Publish helper: writes the local layer cache, index, and source mirror
-    into a tree an [oi] client expects from a remote registry. Driven by
+(** Publish helper: writes the local layer cache, index, and source mirror into
+    a tree an [oi] client expects from a remote registry. Driven by
     [oi build --export DIR]; no standalone command. *)
 
 val do_registry_export :

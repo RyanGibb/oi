@@ -126,11 +126,11 @@ module Reporepo : sig
   (** {2 v1 overlay layout}
 
       The reporepo's [v1/] subtree carries one fully-materialised opam
-      repository per handle. Each handle's [opam] files have had every
-      [url{}] block rewritten to be content-addressed (sha-pinned git URL or
-      tarball+checksum), turning the reporepo into a deterministic snapshot
-      of every overlay's package data. The [v1] prefix is a schema marker;
-      a future incompatible change becomes [v2]. *)
+      repository per handle. Each handle's [opam] files have had every [url{}]
+      block rewritten to be content-addressed (sha-pinned git URL or
+      tarball+checksum), turning the reporepo into a deterministic snapshot of
+      every overlay's package data. The [v1] prefix is a schema marker; a future
+      incompatible change becomes [v2]. *)
 
   val v1_root : path:string -> string
   (** [<reporepo>/v1]. *)
@@ -143,8 +143,8 @@ module Reporepo : sig
       [packages_dir]. *)
 
   val assert_overlay_dir : path:string -> handle:string -> string
-  (** Like {!overlay_packages_dir}, but errors with a "run [oi repo bump]"
-      hint when the directory is missing on disk. *)
+  (** Like {!overlay_packages_dir}, but errors with a "run [oi repo bump]" hint
+      when the directory is missing on disk. *)
 
   type materialise_summary = {
     handle : string;
@@ -164,16 +164,16 @@ module Reporepo : sig
     commit:string ->
     materialise_summary
   (** Clone [url] at [commit] into a scratch directory, walk every
-      [packages/<pkg>/<pkg>.<ver>/opam] file, rewrite each [url{}] block
-      and pin-depends entry to a content-addressed form, and write the
-      result to [<reporepo>/v1/<handle>/]. The write is atomic from the
-      caller's POV: a sibling [v1/<handle>.tmp/] is built first, then
-      rotated into place at the end.
+      [packages/<pkg>/<pkg>.<ver>/opam] file, rewrite each [url{}] block and
+      pin-depends entry to a content-addressed form, and write the result to
+      [<reporepo>/v1/<handle>/]. The write is atomic from the caller's POV: a
+      sibling [v1/<handle>.tmp/] is built first, then rotated into place at the
+      end.
 
       Hard-errors on unsupported VCS backends (darcs, hg, rsync). Persistent
-      network failures (git ls-remote unreachable, tarball 404 after retry)
-      mark the offending package [available: false] with an
-      [x-oi-unavailable:] explanation rather than failing the whole bump. *)
+      network failures (git ls-remote unreachable, tarball 404 after retry) mark
+      the offending package [available: false] with an [x-oi-unavailable:]
+      explanation rather than failing the whole bump. *)
 
   val try_resolve_url :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -189,9 +189,9 @@ module Reporepo : sig
       content-address resolution as the per-overlay materialiser does for one
       [url{}] block: applies host rewrites, returns [`Keep] when the URL is
       already pinned, [`Replace_url] for a sha-pinned/host-rewritten git URL,
-      [`Add_checksum] for a tarball whose sha-256 we just computed, or
-      [`Failed] when the URL cannot be content-addressed. [where] is a
-      free-form label used in error messages. *)
+      [`Add_checksum] for a tarball whose sha-256 we just computed, or [`Failed]
+      when the URL cannot be content-addressed. [where] is a free-form label
+      used in error messages. *)
 
   (** {2 Base overlay resolution} *)
 
@@ -203,10 +203,10 @@ module Reporepo : sig
     unit ->
     string list
   (** Resolves the [relocatable] overlay (and its transitive deps) from the
-      reporepo and returns the [packages/] directories under [v1/<handle>/]
-      in solver priority order. Auto-clones the reporepo itself if it doesn't
-      already exist on disk. Errors when any base handle's [v1/] tree is
-      missing — run [oi repo bump <handle>] to populate. *)
+      reporepo and returns the [packages/] directories under [v1/<handle>/] in
+      solver priority order. Auto-clones the reporepo itself if it doesn't
+      already exist on disk. Errors when any base handle's [v1/] tree is missing
+      — run [oi repo bump <handle>] to populate. *)
 
   val base_entries : unit -> entry list
   (** Resolved base overlays without cloning. Useful for display in [oi config].
@@ -338,9 +338,8 @@ end
 
     <mirror>/<algo>/<first-2-chars>/<full-hash>
 
-    where <algo> is [md5], [sha256], or [sha512]. The directory itself is
-    the only metadata — [stats], [verify], and [export] all walk it
-    directly. *)
+    where <algo> is [md5], [sha256], or [sha512]. The directory itself is the
+    only metadata — [stats], [verify], and [export] all walk it directly. *)
 
 module Mirror : sig
   val dir : cache:Cache.t -> string
@@ -359,6 +358,6 @@ module Mirror : sig
   (** Walk the mirror directory and report blob count + total size. *)
 
   val export : cache:Cache.t -> dst:Eio.Fs.dir_ty Eio.Path.t -> int
-  (** Hardlink-copy the mirror tree to [<dst>/sources/]. Returns the number
-      of blobs copied. *)
+  (** Hardlink-copy the mirror tree to [<dst>/sources/]. Returns the number of
+      blobs copied. *)
 end

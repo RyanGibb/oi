@@ -28,7 +28,8 @@ let topo_sort_local opams =
       (fun acc (n, _) ->
         let ns = OpamPackage.Name.to_string n in
         if List.mem ns local_set then ns :: acc else acc)
-      [] (OpamFile.OPAM.depends opam)
+      []
+      (OpamFile.OPAM.depends opam)
   in
   let alpha = List.sort (fun (a, _) (b, _) -> String.compare a b) in
   let rec loop order = function
@@ -143,9 +144,7 @@ let depexts ~fs ~sys ~platform ~cache ~data_dir ?(refresh = false)
       (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
       OpamSysPkg.Set.empty entries
   in
-  OpamSysPkg.Set.iter
-    (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
-    all;
+  OpamSysPkg.Set.iter (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p)) all;
   0
 
 (* Drive the cwd's [*.opam] project after a successful [Sync.do_sync].
@@ -178,8 +177,7 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
   let needs_dune = action <> `Deps_only in
   if needs_dune && not (Sys.file_exists dune_project) then
     Oi.Error.config_error
-      "oi %s: %s has no dune-project. Non-dune projects are not yet \
-       supported."
+      "oi %s: %s has no dune-project. Non-dune projects are not yet supported."
       label_lc cwd;
   let order = topo_sort_local opams in
   if dry_run then begin
@@ -192,15 +190,14 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
       Fmt.(styled `Bold string)
       "Would run:" cwd cmd_line
       Fmt.(styled `Faint string)
-      "→"
-      (String.concat ", " order);
+      "→" (String.concat ", " order);
     0
   end
   else begin
     let prefix, tc =
-      Sync.do_sync ~quiet:false ~refresh ~with_repos ~with_deps ?jobs
-        ?toolchain ?envrc_mode ~proc_mgr ~fs ~clock ~sys ~platform ~os_key
-        ~cache ~data_dir ~registry ~cwd ()
+      Sync.do_sync ~quiet:false ~refresh ~with_repos ~with_deps ?jobs ?toolchain
+        ?envrc_mode ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
+        ~registry ~cwd ()
     in
     match dune_target action with
     | None -> 0

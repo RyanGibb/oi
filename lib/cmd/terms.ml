@@ -42,8 +42,8 @@ let refresh =
     value & flag
     & info
         ~doc:
-          "Re-fetch repos, pinned sources, and git URLs even if fresh. \
-           Caches refresh on their own after 24h."
+          "Re-fetch repos, pinned sources, and git URLs even if fresh. Caches \
+           refresh on their own after 24h."
         [ "refresh" ])
 
 let with_repos =
@@ -51,16 +51,15 @@ let with_repos =
     value & opt_all string []
     & info ~docv:"URL"
         ~doc:
-          "Stack an opam repository (git URL or reporepo handle) on the \
-           solve. Repeatable."
+          "Stack an opam repository (git URL or reporepo handle) on the solve. \
+           Repeatable."
         [ "with-repo" ])
 
 let jobs =
   Arg.(
     value
     & opt (some int) None
-    & info ~docv:"N"
-        ~doc:"Cap parallel builds and fetches. Default 4."
+    & info ~docv:"N" ~doc:"Cap parallel builds and fetches. Default 4."
         [ "j"; "jobs" ])
 
 let with_deps =
@@ -79,10 +78,9 @@ let toolchain =
     & opt (some string) None
     & info ~docv:"HANDLE"
         ~doc:
-          "Pin the compiler set from the named reporepo toolchain. \
-           $(b,oi config) lists handles. Non-relocatable toolchains \
-           (oxcaml) install into $(b,\\$XDG_CACHE_HOME/oi/toolchains/) on \
-           first use."
+          "Pin the compiler set from the named reporepo toolchain. $(b,oi \
+           config) lists handles. Non-relocatable toolchains (oxcaml) install \
+           into $(b,\\$XDG_CACHE_HOME/oi/toolchains/) on first use."
         [ "toolchain" ])
 
 let default_registry = "https://oi.ci.dev"

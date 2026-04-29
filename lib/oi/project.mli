@@ -13,9 +13,9 @@ type extra_repo = {
   name : string;
   url : string;
   local_packages_dir : string option;
-      (** When set, the entry resolves to this on-disk [packages/] directory
-          and {!Source.Repo.ensure_extra} returns it without cloning. Used
-          for reporepo-handle overlays already materialised under
+      (** When set, the entry resolves to this on-disk [packages/] directory and
+          {!Source.Repo.ensure_extra} returns it without cloning. Used for
+          reporepo-handle overlays already materialised under
           [<reporepo>/v1/<handle>/]. *)
 }
 

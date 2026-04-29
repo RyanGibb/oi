@@ -627,8 +627,8 @@ module Bump = struct
           Fmt.pr "Clearing default flag on %s (replaced by %s)@." prev.handle
             handle;
           match
-            Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo
-              ~handle:prev.handle ~default:false ()
+            Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle:prev.handle
+              ~default:false ()
           with
           | `Bumped b -> Fmt.pr "  -> %s.%s@." b.handle b.version
           | `Unchanged _ -> ()
@@ -639,13 +639,11 @@ module Bump = struct
       Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle ?url ?ref_
         ?toolchain ?base_handles ?depends ?default ()
     in
-    let entry =
-      match bumped with `Bumped e -> e | `Unchanged e -> e
-    in
+    let entry = match bumped with `Bumped e -> e | `Unchanged e -> e in
     (match bumped with
     | `Bumped e ->
-        Fmt.pr "Bumped %s to %s@ commit=%s@ at %s@." e.handle e.version
-          e.commit e.opam_path;
+        Fmt.pr "Bumped %s to %s@ commit=%s@ at %s@." e.handle e.version e.commit
+          e.opam_path;
         if e.default_toolchain then Fmt.pr "  marked as default toolchain@."
     | `Unchanged e ->
         Fmt.pr
@@ -654,8 +652,8 @@ module Bump = struct
     if entry.url = "" then ()
     else begin
       Fmt.pr
-        "Materialising v1/%s/ from %s @ %s — this resolves every package's \
-         url and may take a while.@."
+        "Materialising v1/%s/ from %s @ %s — this resolves every package's url \
+         and may take a while.@."
         entry.handle entry.url
         (String.sub entry.commit 0 (min 7 (String.length entry.commit)));
       let summary =
@@ -718,9 +716,7 @@ module Bump = struct
           in
           List.iter
             (fun h ->
-              Fmt.pr "@.%a@."
-                Fmt.(styled `Bold string)
-                ("== " ^ h ^ " ==");
+              Fmt.pr "@.%a@." Fmt.(styled `Bold string) ("== " ^ h ^ " ==");
               try
                 bump_one ~fs ~sys ~reporepo ~handle:h ~url:None ~ref_:None
                   ~toolchain:None ~depends:None ~default:None
@@ -799,23 +795,21 @@ module Bump = struct
             `P
               "Re-fetch the upstream commit on $(b,HANDLE)'s tracked branch \
                and record a new $(b,YYYYMMDD.N) meta-entry. Then walk the \
-               upstream's packages, sha-pin every URL, and write the result \
-               to $(b,<reporepo>/v1/<HANDLE>/). Pass $(b,--all) to bump \
-               every overlay.";
+               upstream's packages, sha-pin every URL, and write the result to \
+               $(b,<reporepo>/v1/<HANDLE>/). Pass $(b,--all) to bump every \
+               overlay.";
             `P
               "Idempotent on the meta-entry: prints $(b,No change) when \
-               nothing in commit/URL/ref/depends/flags has moved. The \
-               $(b,v1/) tree is rebuilt either way to catch upstream tag \
-               drift.";
+               nothing in commit/URL/ref/depends/flags has moved. The $(b,v1/) \
+               tree is rebuilt either way to catch upstream tag drift.";
             `P
               "Non-base overlays auto-relock against the current \
-               $(b,default)/$(b,relocatable) (or the toolchain's own base \
-               set when $(b,x-oi-toolchain) is set); $(b,--depend) \
-               overrides.";
+               $(b,default)/$(b,relocatable) (or the toolchain's own base set \
+               when $(b,x-oi-toolchain) is set); $(b,--depend) overrides.";
             `P
               "$(b,--default) flips $(b,x-oi-default-toolchain) on \
-               toolchain-defining entries; setting it on one auto-clears \
-               any other.";
+               toolchain-defining entries; setting it on one auto-clears any \
+               other.";
           ]
     in
     Cmd.v info
@@ -874,10 +868,9 @@ module Set_roots = struct
         & info ~docv:"PKG"
             ~doc:
               "Root package groups for the overlay. Each argument becomes one \
-               solve group that $(b,oi build --all) iterates. A bare name is \
-               a single-package solve; a comma-separated list is a \
-               multi-package group that solves together (used for compiler \
-               variants, e.g. \
+               solve group that $(b,oi build --all) iterates. A bare name is a \
+               single-package solve; a comma-separated list is a multi-package \
+               group that solves together (used for compiler variants, e.g. \
                $(b,ocaml-option-flambda,ocaml-option-static,ocaml)). No \
                $(b,PKG) clears the list."
             [])
@@ -892,8 +885,8 @@ module Set_roots = struct
               "Writes $(b,x-root-packages: [...]) on a new bumped version of \
                $(b,HANDLE). $(b,oi build --all) iterates each handle's root \
                groups: a single-package group builds as one $(b,@HANDLE/PKG); \
-               a comma-separated group solves together so the resulting \
-               layers capture a specific variant.";
+               a comma-separated group solves together so the resulting layers \
+               capture a specific variant.";
             `P
               "Passing zero $(b,PKG) arguments clears the list. The new \
                version is stamped $(b,YYYYMMDD.N) in exactly the same way as \
