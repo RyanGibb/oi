@@ -620,7 +620,16 @@ let write_trace ~fs ~cache_root ~os_key ~host_status ~outcome (t : trace) =
         };
     }
   in
-  Build_log.write ~fs ~cache_root record
+  Build_log.write ~fs ~cache_root record;
+  (* Stash a copy inside the layer dir on a successful source build.
+     This is the proof-of-build that survives subsequent cache hits,
+     so a manifest reconstructed at export time can show the original
+     [Ok_built] outcome instead of "cached" for every restore. We
+     deliberately don't overwrite the layer record on [Cached] — that
+     would replace the original build's record with the current run's
+     view, hiding the actual outcome. *)
+  if outcome = Build_log.Ok_built then
+    Build_log.write_layer ~fs ~cache_root ~os_key record
 
 let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
     ~sys ~os_key plan =

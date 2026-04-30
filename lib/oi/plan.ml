@@ -261,7 +261,9 @@ type t = {
    Anything else (pin-depends trees, raw URLs) returns [None]. *)
 let overlay_of_packages_dir pkgs_dir =
   let base = Filename.basename (Filename.dirname pkgs_dir) in
-  let parent = Filename.basename (Filename.dirname (Filename.dirname pkgs_dir)) in
+  let parent =
+    Filename.basename (Filename.dirname (Filename.dirname pkgs_dir))
+  in
   if String.starts_with ~prefix:"overlay-" base then
     let rest =
       String.sub base (String.length "overlay-")

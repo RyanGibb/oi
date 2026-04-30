@@ -26,8 +26,8 @@ let build_depexts = function
        libncurses-dev"
   | `Yum ->
       "gcc gcc-c++ make m4 perl pkgconf-pkg-config autoconf git curl bash \
-       patch tar xz zstd rsync sudo ca-certificates findutils which \
-       diffutils openssl-devel zlib-devel sqlite-devel gmp-devel libffi-devel \
+       patch tar xz zstd rsync sudo ca-certificates findutils which diffutils \
+       openssl-devel zlib-devel sqlite-devel gmp-devel libffi-devel \
        libev-devel capnproto capnproto-devel ncurses-devel"
   | _ -> failwith "unsupported package manager"
 
@@ -325,8 +325,7 @@ let service_name d =
    registry's cached binaries would short-circuit most of the work and
    the produced manifest would be all "cached" outcomes. The point of
    this flow is to re-validate every layer end-to-end. *)
-let build_export_cmd () =
-  "oi build --refresh --all --registry= --export /out"
+let build_export_cmd () = "oi build --refresh --all --registry= --export /out"
 
 let docker_compose_yaml ~distros ~registry_host_path () =
   let buf = Buffer.create 1024 in

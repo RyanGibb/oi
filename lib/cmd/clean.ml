@@ -113,8 +113,9 @@ let cmd =
               (fun (item : Oi.Cache.item) ->
                 let flag = "--" ^ item.label in
                 let size =
-                  if Eio.Path.is_directory item.path
-                     || Eio.Path.is_file item.path
+                  if
+                    Eio.Path.is_directory item.path
+                    || Eio.Path.is_file item.path
                   then
                     Tty.Span.text
                       (Fmt.str "%a" Oi.Cache.pp_size
@@ -145,9 +146,7 @@ let cmd =
             match find_item label with
             | None -> ()
             | Some item ->
-                if
-                  Eio.Path.is_directory item.path
-                  || Eio.Path.is_file item.path
+                if Eio.Path.is_directory item.path || Eio.Path.is_file item.path
                 then begin
                   let sz = Oi.Cache.size ~sys item.path in
                   if dry_run then

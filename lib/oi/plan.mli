@@ -60,9 +60,7 @@ val nodes : graph -> node list
 val find : graph -> OpamPackage.Name.t -> node
 
 val overlay_of_pkg :
-  packages_dirs:string list ->
-  OpamPackage.t ->
-  string option * string option
+  packages_dirs:string list -> OpamPackage.t -> string option * string option
 (** Resolve the overlay [(handle, version)] that contributed [pkg]'s opam file,
     by walking [packages_dirs] for a [<dir>/<name>/<name.version>/opam] hit.
     Returns [(None, None)] for packages that came from a non-overlay source

@@ -80,11 +80,26 @@ val n_tail_lines : int
 
 val sidecar_path :
   cache_root:string -> name:string -> version:string -> hash:string -> string
-(** Path of the JSON sidecar for a (name, version, hash) tuple. *)
+(** Path of the transient JSON sidecar for a (name, version, hash) tuple under
+    [<cache_root>/build/logs/]. Wiped by [oi clean]; read again on next export.
+*)
 
 val write : fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> t -> unit
 (** Encode [t] and write to {!sidecar_path}. Errors are logged and swallowed: a
     logging failure must never abort the build. *)
+
+val layer_log_path : cache_root:string -> os_key:string -> hash:string -> string
+(** Path of the per-layer proof-of-build at
+    [<cache_root>/layers/<os_key>/<hash>/build_log.json]. Lives next to
+    [layer.json] and survives subsequent cache hits, so a manifest reconstructed
+    from these records reflects how each layer was originally built rather than
+    "cached" for every restore. *)
+
+val write_layer :
+  fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> os_key:string -> t -> unit
+(** Write [t] to {!layer_log_path} when the layer dir exists. No-op when the
+    layer hasn't been committed yet (e.g. mid-build) so the proof can never
+    drift from the layer it documents. *)
 
 val tail_of_file : path:string -> string option
 (** Last {!n_tail_lines} of [path], or [None] when the file is missing. *)
@@ -134,4 +149,17 @@ module Manifest : sig
   val read_sidecars : fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> t list
   (** Read every [*.json] under [<cache_root>/build/logs/]. Files that fail to
       decode are skipped with a debug log. *)
+
+  val read_layer_logs :
+    fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> os_key:string -> t list
+  (** Read [<cache_root>/layers/<os_key>/*/build_log.json] — the proof-of-build
+      records attached to each cached layer. *)
+
+  val read_all :
+    fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> os_key:string -> t list
+  (** Union of {!read_layer_logs} and the {!read_sidecars} entries that match
+      [os_key], keyed by [layer_hash]. Layer-stored records take precedence so a
+      [Cached] sidecar from this run is replaced by the original [Ok_built]
+      proof. Transient-only entries (failures, [Solve_failed], etc.) are kept
+      as-is. *)
 end

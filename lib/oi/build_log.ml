@@ -473,19 +473,36 @@ let sidecar_path ~cache_root ~name ~version ~hash =
   cache_root / "build" / "logs"
   / Fmt.str "%s-%s.json" safe_pkg (short_hash hash)
 
+let encode_to ~fs ~path ~ctx r =
+  match Jsont_bytesrw.encode_string ~format:Jsont.Indent codec r with
+  | Ok s -> (
+      try Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) s
+      with exn ->
+        Log.warn (fun m ->
+            m "build_log: %s %s failed: %s" ctx path (Printexc.to_string exn)))
+  | Error e -> Log.warn (fun m -> m "build_log: %s %s encode: %s" ctx path e)
+
 let write ~fs ~cache_root r =
   let path =
     sidecar_path ~cache_root ~name:r.pkg.name ~version:r.pkg.version
       ~hash:r.layer_hash
   in
   Cache.Logs.ensure ~fs ~cache_root;
-  match Jsont_bytesrw.encode_string ~format:Jsont.Indent codec r with
-  | Ok s -> (
-      try Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) s
-      with exn ->
-        Log.warn (fun m ->
-            m "build_log: write %s failed: %s" path (Printexc.to_string exn)))
-  | Error e -> Log.warn (fun m -> m "build_log: encode %s failed: %s" path e)
+  encode_to ~fs ~path ~ctx:"write_sidecar" r
+
+let layer_log_path ~cache_root ~os_key ~hash =
+  cache_root / "layers" / os_key / hash / "build_log.json"
+
+(* Only writes when the layer dir already exists. The layer is
+   committed by [D10.Layer.store]; calling [write_layer] before that
+   would attach the proof to a non-existent layer (which a future
+   [D10.Layer.exists] check would treat as the absence of a
+   build). *)
+let write_layer ~fs ~cache_root ~os_key r =
+  let dir = cache_root / "layers" / os_key / r.layer_hash in
+  if Sys.file_exists dir then
+    let path = layer_log_path ~cache_root ~os_key ~hash:r.layer_hash in
+    encode_to ~fs ~path ~ctx:"write_layer" r
 
 (* -- Tail extraction ------------------------------------------------------ *)
 
@@ -625,6 +642,21 @@ module Manifest = struct
       results;
     }
 
+  let try_decode ~fs ~path : t option =
+    try
+      let s = Eio.Path.load Eio.Path.(fs / path) in
+      match
+        Jsont_bytesrw.decode_string ~locs:true ~file:path record_codec s
+      with
+      | Ok (r : t) -> Some r
+      | Error e ->
+          Log.debug (fun m -> m "build_log: bad %s: %s" path e);
+          None
+    with exn ->
+      Log.debug (fun m ->
+          m "build_log: read %s: %s" path (Printexc.to_string exn));
+      None
+
   let read_sidecars ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root : t list =
     let dir = Cache.Logs.dir ~cache_root in
     let dir_p = Eio.Path.(fs / dir) in
@@ -633,19 +665,42 @@ module Manifest = struct
     | entries ->
         entries
         |> List.filter (fun f -> Filename.check_suffix f ".json")
-        |> List.filter_map (fun f ->
-            let path = dir / f in
-            try
-              let s = Eio.Path.load Eio.Path.(fs / path) in
-              match
-                Jsont_bytesrw.decode_string ~locs:true ~file:path record_codec s
-              with
-              | Ok (r : t) -> Some r
-              | Error e ->
-                  Log.debug (fun m -> m "build_log: bad sidecar %s: %s" path e);
-                  None
-            with exn ->
-              Log.debug (fun m ->
-                  m "build_log: read %s: %s" path (Printexc.to_string exn));
-              None)
+        |> List.filter_map (fun f -> try_decode ~fs ~path:(dir / f))
+
+  (* Walk every [<cache>/layers/<os_key>/<hash>/build_log.json]. Layer
+     dirs without a [build_log.json] (built by an older oi, or
+     restored from the registry without a proof) are silently skipped
+     — the export will fall back to the transient sidecar if any. *)
+  let read_layer_logs ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root ~os_key :
+      t list =
+    let layers_dir = cache_root / "layers" / os_key in
+    match Eio.Path.read_dir Eio.Path.(fs / layers_dir) with
+    | exception Eio.Exn.Io _ -> []
+    | hashes ->
+        List.filter_map
+          (fun hash ->
+            if String.contains hash '.' then None
+            else
+              let path = layer_log_path ~cache_root ~os_key ~hash in
+              if Eio.Path.is_file Eio.Path.(fs / path) then try_decode ~fs ~path
+              else None)
+          hashes
+
+  let read_all ~fs ~cache_root ~os_key : t list =
+    let from_layers = read_layer_logs ~fs ~cache_root ~os_key in
+    let from_sidecars =
+      read_sidecars ~fs ~cache_root
+      |> List.filter (fun (r : t) -> r.os_key = os_key)
+    in
+    (* Layer-stored wins when the same layer_hash appears in both. The
+       sidecars contribute records with no layer (failures, solve
+       errors) which the layer scan can't see. *)
+    let by_hash = Hashtbl.create 256 in
+    List.iter
+      (fun (r : t) -> Hashtbl.replace by_hash r.layer_hash r)
+      from_sidecars;
+    List.iter
+      (fun (r : t) -> Hashtbl.replace by_hash r.layer_hash r)
+      from_layers;
+    Hashtbl.fold (fun _ v acc -> v :: acc) by_hash []
 end

@@ -74,7 +74,7 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   (* Build-log manifest: one bundled JSON file with every per-package
      record from this cache, summarised by outcome. *)
   let cache_root = Oi.Cache.root_s cache in
-  let records = Oi.Build_log.Manifest.read_sidecars ~fs ~cache_root in
+  let records = Oi.Build_log.Manifest.read_all ~fs ~cache_root ~os_key in
   if records <> [] then begin
     let manifest =
       Oi.Build_log.Manifest.of_records ~os_key
