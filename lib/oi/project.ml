@@ -479,6 +479,29 @@ module Url = struct
                 Some (synth_pin ~src_dir url name, name)))
     | _ -> None
 
+  let rebase_local_pin ~src_dir (pin : pin) : pin =
+    let url = pin.url in
+    match url.OpamUrl.transport with
+    | "file" ->
+        let path = url.OpamUrl.path in
+        if Sys.file_exists path then pin
+        else
+          (* The path was resolved against cwd by OpamUrl.parse; try it
+             relative to the cloned project directory instead. *)
+          let cwd = Sys.getcwd () in
+          let rel =
+            if String.starts_with ~prefix:(cwd ^ "/") path then
+              String.sub path (String.length cwd + 1)
+                (String.length path - String.length cwd - 1)
+            else path
+          in
+          let rebased = src_dir / rel in
+          if Sys.file_exists rebased then
+            let url' = { url with OpamUrl.path = rebased } in
+            { pin with url = url' }
+          else pin
+    | _ -> pin
+
   let materialize_one ~fs ~sys:_ ~cache ~refresh url_s =
     let url = to_opam_url url_s in
     let src_dir = fetch ~fs ~cache ~refresh url in
@@ -491,8 +514,9 @@ module Url = struct
           | Some (pin, name) -> ([ pin ], [ name ]))
       | names -> (List.map (synth_pin ~src_dir url) names, names)
     in
+    let rebased_pins = List.map (rebase_local_pin ~src_dir) project.pins in
     {
-      pins = synth_pins @ project.pins;
+      pins = synth_pins @ rebased_pins;
       roots = synth_roots;
       extra_repos = project.extra_repos;
       overlays = project.overlays;
