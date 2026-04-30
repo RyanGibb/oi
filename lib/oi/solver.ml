@@ -737,24 +737,32 @@ module Cache = struct
         Some (h ^ ":" ^ Digest.to_hex (Digest.string s))
     | _ -> None
 
-  let git_signature_for_packages_dir packages_dir =
+  (* For non-git packages_dirs (e.g. materialized pin sets), fall back
+     to the absolute path as the signature. Pin set dirs are already
+     content-addressed — the hash in the path captures the identity of
+     the pin set (name + version + git revision per pin). *)
+  let signature_for_packages_dir packages_dir =
     match Hashtbl.find_opt signature_memo packages_dir with
     | Some r -> r
     | None ->
-        let r = compute_git_signature packages_dir in
+        let r =
+          match compute_git_signature packages_dir with
+          | Some _ as s -> s
+          | None -> Some ("path:" ^ Digest.to_hex (Digest.string packages_dir))
+        in
         Hashtbl.add signature_memo packages_dir r;
         r
 
   let key ~(conf : Ctx.conf) ~packages_dirs ~constraints ~names ?toolchain () =
     let signatures =
-      List.map (fun d -> (d, git_signature_for_packages_dir d)) packages_dirs
+      List.map (fun d -> (d, signature_for_packages_dir d)) packages_dirs
     in
     if List.exists (fun (_, s) -> s = None) signatures then begin
       List.iter
         (fun (d, s) ->
           if s = None then
             Log.info (fun m ->
-                m "solve cache disabled: %s is not a git working tree" d))
+                m "solve cache disabled: %s has no usable signature" d))
         signatures;
       None
     end
