@@ -97,7 +97,7 @@ module Reporepo = struct
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
   let default_path =
-    let data_base =
+    let data_home =
       match Sys.getenv_opt "OI_DATA_DIR" with
       | Some v when v <> "" -> v
       | _ -> (
@@ -108,7 +108,7 @@ module Reporepo = struct
               | Some h -> h / ".local" / "share" / "oi"
               | None -> "/tmp/oi"))
     in
-    data_base / "reporepo"
+    data_home / "reporepo"
 
   let env_path () =
     match Sys.getenv_opt "OI_REPOREPO" with

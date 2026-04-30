@@ -18,7 +18,7 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
   let name, version_opt = parse_target target in
   let layers_root = Oi.Cache.root_s cache / "layers" / os_key in
   let index_path = Layer_index.ensure_local ~sys ~fs ~clock ~cache ~os_key in
-  if not (Sys.file_exists index_path) then begin
+  if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then begin
     Fmt.pr "No layer index for %s; nothing to do.@." os_key;
     0
   end
@@ -111,10 +111,11 @@ let cmd =
           let rows =
             List.map
               (fun (item : Oi.Cache.item) ->
-                let path_s = Eio.Path.native_exn item.path in
                 let flag = "--" ^ item.label in
                 let size =
-                  if Sys.file_exists path_s then
+                  if Eio.Path.is_directory item.path
+                     || Eio.Path.is_file item.path
+                  then
                     Tty.Span.text
                       (Fmt.str "%a" Oi.Cache.pp_size
                          (Oi.Cache.size ~sys item.path))
@@ -144,14 +145,16 @@ let cmd =
             match find_item label with
             | None -> ()
             | Some item ->
-                let path_s = Eio.Path.native_exn item.path in
-                if Sys.file_exists path_s then begin
+                if
+                  Eio.Path.is_directory item.path
+                  || Eio.Path.is_file item.path
+                then begin
                   let sz = Oi.Cache.size ~sys item.path in
                   if dry_run then
                     Fmt.pr "Would remove %s (%a) %s@." label Oi.Cache.pp_size sz
-                      path_s
+                      (Eio.Path.native_exn item.path)
                   else begin
-                    Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / path_s);
+                    Eio.Path.rmtree ~missing_ok:true item.path;
                     Fmt.pr "Removed %s (%a)@." label Oi.Cache.pp_size sz
                   end
                 end

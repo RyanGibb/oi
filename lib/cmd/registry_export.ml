@@ -42,7 +42,7 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
   let count = D10.Layer.export_all d10 ~dst in
   Fmt.pr "Exported %d layer(s) to %s@." count output;
-  if Sys.file_exists (output / os_key) then begin
+  if Eio.Path.is_directory Eio.Path.(fs / output / os_key) then begin
     let index_path = output / os_key / "index.db" in
     (try Sys.remove index_path with Sys_error _ -> ());
     let db = D10.Index.open_ ~path:index_path in

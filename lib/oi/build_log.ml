@@ -627,10 +627,11 @@ module Manifest = struct
 
   let read_sidecars ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root : t list =
     let dir = Cache.Logs.dir ~cache_root in
-    if not (Sys.file_exists dir) then []
-    else
-      try
-        Sys.readdir dir |> Array.to_list
+    let dir_p = Eio.Path.(fs / dir) in
+    match Eio.Path.read_dir dir_p with
+    | exception Eio.Exn.Io _ -> []
+    | entries ->
+        entries
         |> List.filter (fun f -> Filename.check_suffix f ".json")
         |> List.filter_map (fun f ->
             let path = dir / f in
@@ -647,5 +648,4 @@ module Manifest = struct
               Log.debug (fun m ->
                   m "build_log: read %s: %s" path (Printexc.to_string exn));
               None)
-      with _ -> []
 end

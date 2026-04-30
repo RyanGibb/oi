@@ -57,25 +57,16 @@ val build :
 val nodes : graph -> node list
 (** [nodes g] is the list of all nodes in topological order. *)
 
-val roots : graph -> node list
-(** [roots g] is the list of nodes with no in-plan dependencies (can start
-    immediately). *)
-
-val dependents : graph -> OpamPackage.Name.t -> node list
-(** [dependents g name] is the list of nodes that directly depend on [name]. *)
-
-val total : graph -> int
-(** [total g] is the number of nodes in the plan. *)
-
 val find : graph -> OpamPackage.Name.t -> node
-val dep_pkgs_of : graph -> node -> OpamPackage.t list
-val nodes_by_name : graph -> node OpamPackage.Name.Map.t
-val topo_order : graph -> OpamPackage.Name.t list
-val parallel_groups : graph -> OpamPackage.Name.t list list
 
-val layer_hash_for : graph -> OpamPackage.Name.t -> string option
-(** [layer_hash_for g name] returns the layer hash for a specific package, or
-    [None] if the package is not in the plan. *)
+val overlay_of_pkg :
+  packages_dirs:string list ->
+  OpamPackage.t ->
+  string option * string option
+(** Resolve the overlay [(handle, version)] that contributed [pkg]'s opam file,
+    by walking [packages_dirs] for a [<dir>/<name>/<name.version>/opam] hit.
+    Returns [(None, None)] for packages that came from a non-overlay source
+    (pin-depends, raw URL, etc). *)
 
 val layer_hashes : graph -> string list
 (** [layer_hashes g] returns the layer hash for each package in the plan, in

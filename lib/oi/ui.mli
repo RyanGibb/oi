@@ -36,7 +36,3 @@ val suspend : t -> (unit -> 'a) -> 'a
 val finish : ?msg:string -> t -> unit
 (** Render at 100% and emit a newline. Optionally replaces the message with a
     summary. *)
-
-val position : t -> int
-val total : t -> int
-val title : t -> string

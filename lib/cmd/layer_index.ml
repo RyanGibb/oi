@@ -9,13 +9,14 @@ let url_join registry rel =
   in
   stripped ^ "/" ^ rel
 
-let count_on_disk_layers ~os_layer_dir =
-  match Sys.readdir os_layer_dir with
-  | exception Sys_error _ -> 0
+let count_on_disk_layers ~fs ~os_layer_dir =
+  let dir_p = Eio.Path.(fs / os_layer_dir) in
+  match Eio.Path.read_dir dir_p with
+  | exception Eio.Exn.Io _ -> 0
   | entries ->
-      Array.fold_left
+      List.fold_left
         (fun n name ->
-          if Sys.is_directory (os_layer_dir / name) then n + 1 else n)
+          if Eio.Path.is_directory Eio.Path.(dir_p / name) then n + 1 else n)
         0 entries
 
 let ensure_local ~sys ~fs ~clock ~cache ~os_key =
@@ -30,9 +31,9 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
     D10.Index.rebuild d10 db;
     D10.Index.close db
   in
-  if not (Sys.file_exists index_path) then rebuild "Building"
+  if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then rebuild "Building"
   else begin
-    let disk = count_on_disk_layers ~os_layer_dir:layers_dir in
+    let disk = count_on_disk_layers ~fs ~os_layer_dir:layers_dir in
     let db = D10.Index.open_ ~path:index_path in
     let indexed, _, _ = D10.Index.stats db ~os_key in
     D10.Index.close db;
@@ -70,7 +71,7 @@ let ensure_remote ~sys ~fs ~cache ~os_key ~registry =
       end
       else begin
         (try Unix.unlink tmp_path with Unix.Unix_error _ -> ());
-        if Sys.file_exists local_path then begin
+        if Eio.Path.is_file Eio.Path.(fs / local_path) then begin
           Logs.warn (fun m ->
               m "Failed to fetch registry index, using stale cache");
           Some local_path
@@ -101,7 +102,7 @@ let binary_to_package ~sys ~fs ~clock ~cache ~os_key ~registry name =
   (match ensure_remote ~sys ~fs ~cache ~os_key ~registry with
   | Some remote_path -> merge_remote_into_local ~index_path ~remote_path
   | None -> ());
-  if not (Sys.file_exists index_path) then None
+  if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then None
   else
     let db = D10.Index.open_ ~path:index_path in
     let results = D10.Index.find_binary db ~binary:name ~os_key in

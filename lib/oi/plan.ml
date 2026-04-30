@@ -146,28 +146,13 @@ let build ctx ?d10 ~packages_dirs pkgs =
 (* -- Graph accessors ----------------------------------------------------- *)
 
 let find g name = OpamPackage.Name.Map.find name g.nodes_by_name
-let nodes_by_name g = g.nodes_by_name
-let topo_order g = g.topo_order
 let nodes g = List.map (find g) g.topo_order
-let total g = List.length g.topo_order
 
-let roots g =
-  List.filter_map
-    (fun name ->
-      let node = find g name in
-      if node.deps = [] then Some node else None)
-    g.topo_order
-
-let dependents g name =
-  List.filter_map
-    (fun n ->
-      let node = find g n in
-      if List.exists (OpamPackage.Name.equal name) node.deps then Some node
-      else None)
-    g.topo_order
-
+(* Group [g]'s nodes into stages where every node in a stage can build
+   in parallel: each stage contains nodes whose dependencies are all
+   present in some earlier stage. Used by [pp_tree] and [resolve]. *)
 let parallel_groups g =
-  let assigned = Hashtbl.create (total g) in
+  let assigned = Hashtbl.create (List.length g.topo_order) in
   let groups = ref [] in
   let remaining = ref g.topo_order in
   while !remaining <> [] do
@@ -188,13 +173,6 @@ let parallel_groups g =
     remaining := rest
   done;
   List.rev !groups
-
-let dep_pkgs_of g node =
-  List.filter_map
-    (fun dep_name ->
-      OpamPackage.Name.Map.find_opt dep_name g.nodes_by_name
-      |> Stdlib.Option.map (fun n -> n.pkg))
-    node.deps
 
 let pp_method_short ~remote_has fmt = function
   | Binary -> Fmt.pf fmt "%a" Style.ok_string "binary"
@@ -226,10 +204,6 @@ let pp_tree ?(remote_has = fun _ -> false) fmt g =
         names)
     groups;
   Fmt.pf fmt "@]"
-
-let layer_hash_for g name =
-  OpamPackage.Name.Map.find_opt name g.nodes_by_name
-  |> Stdlib.Option.map (fun n -> n.layer_hash)
 
 let layer_hashes g =
   List.map (fun name -> (find g name).layer_hash) g.topo_order
@@ -275,17 +249,23 @@ type t = {
 }
 
 (* Derive [overlay_handle] / [overlay_version] from a [packages/] dir
-   that an opam file was sourced from. The reporepo materialiser
-   creates [{data_dir}/repos/overlay-<handle>-<version>/packages];
-   anything else (pin-depends trees, raw URLs) returns [None]. *)
+   that an opam file was sourced from. Two layouts are recognised:
+
+   - [<reporepo>/v1/<handle>/packages] — the current materialised
+     overlay layout. Version isn't in the path, so we return [None] for
+     it. The "reporepo" handle is the meta tree (toolchain definitions
+     etc.), not a package overlay; we drop it.
+   - [<data_dir>/repos/overlay-<handle>-<version>/packages] — the
+     legacy clone layout (still produced for some flows).
+
+   Anything else (pin-depends trees, raw URLs) returns [None]. *)
 let overlay_of_packages_dir pkgs_dir =
   let base = Filename.basename (Filename.dirname pkgs_dir) in
-  let prefix = "overlay-" in
-  if not (String.starts_with ~prefix base) then (None, None)
-  else
+  let parent = Filename.basename (Filename.dirname (Filename.dirname pkgs_dir)) in
+  if String.starts_with ~prefix:"overlay-" base then
     let rest =
-      String.sub base (String.length prefix)
-        (String.length base - String.length prefix)
+      String.sub base (String.length "overlay-")
+        (String.length base - String.length "overlay-")
     in
     match String.rindex_opt rest '-' with
     | None -> (None, None)
@@ -293,6 +273,8 @@ let overlay_of_packages_dir pkgs_dir =
         let h = String.sub rest 0 i in
         let v = String.sub rest (i + 1) (String.length rest - i - 1) in
         (Some h, Some v)
+  else if parent = "v1" && base <> "reporepo" then (Some base, None)
+  else (None, None)
 
 let find_pkg_source_dir ~packages_dirs pkg =
   let name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
@@ -300,6 +282,11 @@ let find_pkg_source_dir ~packages_dirs pkg =
   List.find_opt
     (fun d -> Sys.file_exists (d / name / full / "opam"))
     packages_dirs
+
+let overlay_of_pkg ~packages_dirs pkg =
+  match find_pkg_source_dir ~packages_dirs pkg with
+  | None -> (None, None)
+  | Some d -> overlay_of_packages_dir d
 
 let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
   let prefix = build_prefix in

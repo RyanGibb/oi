@@ -1406,7 +1406,9 @@ let cmd =
              sidecars normally get written. Depexts come straight from
              the opam file via [declared_depexts]; we skip the host
              status query here since the fast path is already optimised
-             for "everything cached, do as little as possible". *)
+             for "everything cached, do as little as possible". Overlay
+             is resolved from [pkg_dirs] so manifests group by handle
+             whether or not Execute.run ran. *)
           let env = Oi.Solver.Ctx.platform_env group_ctx in
           List.iter
             (fun (n : Oi.Plan.node) ->
@@ -1415,6 +1417,16 @@ let cmd =
               let depexts =
                 if declared = [] then Oi.Build_log.empty_depexts
                 else { Oi.Build_log.empty_depexts with declared }
+              in
+              let overlay =
+                match Oi.Plan.overlay_of_pkg ~packages_dirs:pkg_dirs n.pkg with
+                | Some h, v_opt ->
+                    Some
+                      {
+                        Oi.Build_log.handle = h;
+                        version = Stdlib.Option.value v_opt ~default:"";
+                      }
+                | None, _ -> None
               in
               let record : Oi.Build_log.t =
                 {
@@ -1430,7 +1442,7 @@ let cmd =
                   depexts;
                   source = None;
                   log = None;
-                  overlay = None;
+                  overlay;
                   phases = Oi.Build_log.empty_phases;
                 }
               in

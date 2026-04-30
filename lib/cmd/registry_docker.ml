@@ -16,17 +16,18 @@ let ( @@ ) = Dockerfile.( @@ )
 let build_depexts = function
   | `Apk ->
       "build-base m4 perl pkgconf autoconf git curl bash patch tar xz zstd \
-       rsync ca-certificates linux-headers openssl-dev zlib-dev sqlite-dev \
-       gmp-dev libffi-dev libev-dev capnproto capnproto-dev ncurses-dev"
+       rsync sudo ca-certificates linux-headers openssl-dev zlib-dev \
+       sqlite-dev gmp-dev libffi-dev libev-dev capnproto capnproto-dev \
+       ncurses-dev"
   | `Apt ->
       "build-essential m4 perl pkg-config autoconf git curl bash patch tar \
-       xz-utils zstd rsync ca-certificates libssl-dev zlib1g-dev \
+       xz-utils zstd rsync sudo ca-certificates libssl-dev zlib1g-dev \
        libsqlite3-dev libgmp-dev libffi-dev libev-dev capnproto libcapnp-dev \
        libncurses-dev"
   | `Yum ->
       "gcc gcc-c++ make m4 perl pkgconf-pkg-config autoconf git curl bash \
-       patch tar xz zstd rsync ca-certificates findutils which diffutils \
-       openssl-devel zlib-devel sqlite-devel gmp-devel libffi-devel \
+       patch tar xz zstd rsync sudo ca-certificates findutils which \
+       diffutils openssl-devel zlib-devel sqlite-devel gmp-devel libffi-devel \
        libev-devel capnproto capnproto-devel ncurses-devel"
   | _ -> failwith "unsupported package manager"
 
@@ -317,8 +318,15 @@ let service_name d =
    XDG data dir on first use, and [--refresh] keeps it current. The
    single-shot [oi build --all --export /out] iterates every overlay's
    [x-root-packages] and publishes the cache to the bind-mounted
-   registry tree. *)
-let build_export_cmd () = "oi build --refresh --all --export /out"
+   registry tree.
+
+   [--registry=] disables the remote layer fetch so every package is
+   built from source inside this container — otherwise the prior
+   registry's cached binaries would short-circuit most of the work and
+   the produced manifest would be all "cached" outcomes. The point of
+   this flow is to re-validate every layer end-to-end. *)
+let build_export_cmd () =
+  "oi build --refresh --all --registry= --export /out"
 
 let docker_compose_yaml ~distros ~registry_host_path () =
   let buf = Buffer.create 1024 in

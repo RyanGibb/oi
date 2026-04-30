@@ -389,11 +389,11 @@ let apply_substs (p : Plan.package_plan) =
 
 (* -- Build and install ---------------------------------------------------- *)
 
-(* Split into [do_fetch_phase] and [do_build_phase] so [Execute.run] can
+(* Split into [fetch_phase] and [build_phase] so [Execute.run] can
    time them independently and attribute exceptions to the right phase
    (fetch vs build). [build_package] is preserved as the combined helper
    for callers that don't need per-phase timing. *)
-let do_fetch_phase ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
+let fetch_phase ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
   fetch_source ~cache_urls ~fs ~cache_root p;
   (* Ensure build_dir exists before fetching extra-sources: pull_tree
      (in fetch_source) creates the directory, but packages with no main
@@ -402,7 +402,7 @@ let do_fetch_phase ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / p.build_dir);
   fetch_extra_sources ~cache_urls ~fs ~cache_root p
 
-let do_build_phase ~proc_mgr ~fs (p : Plan.package_plan) =
+let build_phase ~proc_mgr ~fs (p : Plan.package_plan) =
   copy_extra_files p;
   apply_patches ~proc_mgr ~fs p;
   apply_substs p;
@@ -819,10 +819,10 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                 (try
                    Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / p.build_dir);
                    let t0 = now () in
-                   do_fetch_phase ~cache_urls ~fs ~cache_root:plan.cache_root p;
+                   fetch_phase ~cache_urls ~fs ~cache_root:plan.cache_root p;
                    t.fetch_dur <- Some (now () -. t0);
                    let t1 = now () in
-                   do_build_phase ~proc_mgr ~fs p;
+                   build_phase ~proc_mgr ~fs p;
                    t.build_dur <- Some (now () -. t1)
                  with exn ->
                    let log_path =
