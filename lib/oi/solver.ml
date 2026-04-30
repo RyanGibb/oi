@@ -720,22 +720,24 @@ module Cache = struct
      edits stopped moving the parent commit. *)
   let compute_git_signature packages_dir =
     let repo = Filename.dirname packages_dir in
-    let head =
-      Option.map String.trim
-        (read_process_output
-           (Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
-              (Filename.quote repo)))
-    in
-    let status =
-      read_process_output
-        (Printf.sprintf "git -C %s status --porcelain -- %s 2>/dev/null"
-           (Filename.quote repo)
-           (Filename.quote packages_dir))
-    in
-    match (head, status) with
-    | Some h, Some s when h <> "" ->
-        Some (h ^ ":" ^ Digest.to_hex (Digest.string s))
-    | _ -> None
+    if not (Sys.file_exists (repo / ".git")) then None
+    else
+      let head =
+        Option.map String.trim
+          (read_process_output
+             (Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
+                (Filename.quote repo)))
+      in
+      let status =
+        read_process_output
+          (Printf.sprintf "git -C %s status --porcelain -- %s 2>/dev/null"
+             (Filename.quote repo)
+             (Filename.quote packages_dir))
+      in
+      match (head, status) with
+      | Some h, Some s when h <> "" ->
+          Some (h ^ ":" ^ Digest.to_hex (Digest.string s))
+      | _ -> None
 
   (* For non-git packages_dirs (e.g. materialized pin sets), fall back
      to the absolute path as the signature. Pin set dirs are already
