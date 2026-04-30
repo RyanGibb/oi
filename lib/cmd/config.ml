@@ -121,6 +121,11 @@ let cmd =
             Fmt.pr "@.Project overlays (x-repos @-handles):@.";
             List.iter (fun h -> Fmt.pr "  %s@." h) p.overlays
           end;
+          (match p.packages_dir with
+           | None -> ()
+           | Some dir ->
+               Fmt.pr "@.Project local opam-repository:@.";
+               Fmt.pr "  %s@." dir);
           (* Dev tools: run the probe registry against cwd and print one
            row per tool. Shown in every project (even one with no
            hits), so it's obvious when merlin / odoc would end up in
@@ -168,9 +173,10 @@ let cmd =
                consistent snapshot." );
           `I
             ( "$(b,Project extras)",
-              "Any $(b,x-repos:) and $(b,pin-depends:) entries declared in the \
-               current directory's $(b,*.opam) files. Only shown when at least \
-               one is present." );
+              "$(b,x-repos:) and $(b,pin-depends:) entries declared in the \
+               current directory's $(b,*.opam) files, plus any project-local \
+               opam-repository (a $(b,packages/) tree with a $(b,repo) \
+               marker). Only shown when at least one is present." );
           `I
             ( "$(b,Dev tools)",
               "Project-probed tools the next $(b,oi build) would install. \

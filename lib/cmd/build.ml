@@ -1718,6 +1718,18 @@ let cmd =
           `I ("$(b,@HANDLE/PKG)", "Package from overlay $(b,HANDLE).");
           `I ("$(b,@HANDLE)", "Every package in overlay $(b,HANDLE).");
           `I ("$(b,--all)", "Every overlay's $(b,x-root-packages).");
+          `S "PROJECT EXTRAS";
+          `P "In project mode, the cwd's metadata feeds the solve:";
+          `I
+            ( "$(b,*.opam)",
+              "$(b,depends:), $(b,pin-depends:), and $(b,x-repos:) merge into \
+               the solve." );
+          `I
+            ( "$(b,packages/) + $(b,repo)",
+              "When the project root contains a $(b,repo) marker, its \
+               $(b,packages/) tree is injected as the highest-priority \
+               opam-repository — patch a transitive dep's opam file without \
+               vendoring its sources." );
           `S Manpage.s_examples;
           `Pre
             "  oi build\n\

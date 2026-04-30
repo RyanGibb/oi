@@ -619,6 +619,20 @@ let cmd =
             "Add $(b,x-repos: [\"@HANDLE\"]) to a project's $(b,*.opam) to \
              apply the overlay automatically. Plain URLs are also accepted as \
              unpinned escape hatches.";
+          `S "PROJECT EXTRAS";
+          `P
+            "Files read from the project (cwd, or the clone of $(b,--with=URL)) \
+             that influence the solve:";
+          `I
+            ( "$(b,*.opam)",
+              "$(b,depends:), $(b,pin-depends:), and $(b,x-repos:) merge into \
+               the solve. Local roots become solver roots." );
+          `I
+            ( "$(b,packages/) + $(b,repo)",
+              "When the project root contains a $(b,repo) marker, its \
+               $(b,packages/) tree is injected as the highest-priority \
+               opam-repository. Use it to ship a patched opam file for a \
+               transitive dep without vendoring its sources." );
           `S "TOOLCHAIN";
           `P "Picked in order:";
           `I ("1.", "$(b,--toolchain=NAME).");
