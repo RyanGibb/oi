@@ -9,13 +9,8 @@ let cmd =
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
     in
-    Oi.Pipeline.init_opam_root ~fs ~data_dir;
-    ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-    let conf =
-      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
-    in
-    let remote = Terms.remote_of_registry registry in
     let dune_cache_root = Oi.Cache.dune_root cache in
+    let cache_root = Oi.Cache.root_s cache in
     (* [TARGET] and every [--with] token accept the
        [@handle/pkg[constraint]] shortcut. The handle is routed into
        [with_repos] so the overlay joins the solve; the stripped
@@ -39,6 +34,93 @@ let cmd =
     let with_deps, with_repos, with_pins =
       Target.extract_handle_pins ~with_repos with_deps
     in
+    (* Fast-path: if we've run these exact args before and the binary
+       still exists, skip all expensive work (opam init, reporepo,
+       toolchain resolution, pin materialization, solving). *)
+    let is_script =
+      Filename.check_suffix target ".ml"
+      || String.starts_with ~prefix:"http://" target
+      || String.starts_with ~prefix:"https://" target
+    in
+    let fast_key =
+      if dry_run || refresh || is_script then None
+      else
+        Some
+          (Digest.to_hex
+             (Digest.string
+                (String.concat "\x00"
+                   ([ os_key; binary_name;
+                      Stdlib.Option.value ~default:"" toolchain_override;
+                      registry ]
+                   @ List.sort String.compare with_deps
+                   @ [ "\x01" ]
+                   @ List.sort String.compare with_repos))))
+    in
+    let fast_cache_path key =
+      cache_root / "run-cache" / String.sub key 0 2 / (key ^ ".marshal")
+    in
+    let store_fast_cache ~bin_path ~prefix ~tc_ctx =
+      match fast_key with
+      | None -> ()
+      | Some key ->
+          (try
+             let path = fast_cache_path key in
+             let dir = Filename.dirname path in
+             Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dir);
+             let entry : string * string * (string * bool) option =
+               ( bin_path, prefix,
+                 Option.map
+                   (fun (tc : Oi.Solver.Ctx.toolchain) ->
+                     (tc.install_prefix, tc.relocatable))
+                   tc_ctx )
+             in
+             let tmp = path ^ ".tmp" in
+             Out_channel.with_open_bin tmp (fun oc ->
+                 Marshal.to_channel oc entry []);
+             Sys.rename tmp path
+           with _ -> ())
+    in
+    (match fast_key with
+    | Some key -> (
+        match
+          try
+            let ic = open_in_bin (fast_cache_path key) in
+            Fun.protect
+              ~finally:(fun () -> close_in_noerr ic)
+              (fun () ->
+                Some
+                  (Marshal.from_channel ic
+                    : string * string * (string * bool) option))
+          with _ -> None
+        with
+        | Some (bin_path, prefix, tc_info) when Sys.file_exists bin_path ->
+            let tc_ctx =
+              match tc_info with
+              | None -> None
+              | Some (install_prefix, relocatable) ->
+                  Some
+                    {
+                      Oi.Solver.Ctx.install_prefix;
+                      hash = "";
+                      relocatable;
+                      packages = OpamPackage.Set.empty;
+                      root_names = OpamPackage.Name.Set.empty;
+                    }
+            in
+            let env =
+              Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix
+                ~dune_cache_root ()
+            in
+            exit (Subprocess.run proc_mgr ~env (bin_path :: args))
+        | _ -> ())
+    | None -> ());
+    (* Normal path: initialize opam, resolve toolchain, solve, build. *)
+    Oi.Pipeline.init_opam_root ~fs ~data_dir;
+    ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+    let conf =
+      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    in
+    let remote = Terms.remote_of_registry registry in
     (* URL-projects in [--with=…]: clone each URL into the pin cache,
        scan its *.opam files, and merge the contribution as pins +
        solver roots + overlays + extra_repos. *)
@@ -172,6 +254,7 @@ let cmd =
       Logs.info (fun m -> m "Looking for binary: %s" bin);
       if Workspace.path_exists fs bin then begin
         Logs.info (fun m -> m "Found binary, executing");
+        store_fast_cache ~bin_path:bin ~prefix ~tc_ctx;
         exit (Subprocess.run proc_mgr ~env:(env_vars ()) (bin :: args))
       end;
       (* Non-relocatable toolchains keep their compiler binaries
@@ -193,6 +276,7 @@ let cmd =
       | Some p ->
           Logs.info (fun m ->
               m "Found %s in toolchain prefix: %s" binary_name p);
+          store_fast_cache ~bin_path:p ~prefix ~tc_ctx;
           exit (Subprocess.run proc_mgr ~env:(env_vars ()) (p :: args))
       | None ->
           (* For [@handle/pkg], list the binaries that pkg's own layer
