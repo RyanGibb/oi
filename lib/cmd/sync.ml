@@ -249,11 +249,16 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
          ~toolchain
   in
   let layer_hashes =
+    let local_packages_dir =
+      match project.packages_dir with
+      | Some _ -> project.packages_dir
+      | None -> url_project.packages_dir
+    in
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
       ~extra_repos:all_extras
       ~pins:(project.pins @ url_project.pins)
       ~refresh ~constraints:extra_constraints ~project_root:cwd ?remote ?jobs
-      ?toolchain names
+      ?toolchain ?local_packages_dir names
   in
   let oi_dir = cwd / "_oi" in
   let prefix = oi_dir / "prefix" in

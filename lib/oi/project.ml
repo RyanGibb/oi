@@ -26,6 +26,7 @@ type t = {
   extra_repos : extra_repo list;
   pins : pin list;
   overlays : string list;
+  packages_dir : string option;
 }
 
 (* -- x-repos parsing ---------------------------------------------------- *)
@@ -205,7 +206,14 @@ let load ~fs dir =
     List.concat_map (fun (_, raw) -> raw.raw_overlays) per_file_raws
     |> merge_overlays
   in
-  { deps; local_packages; extra_repos; pins; overlays }
+  let packages_dir =
+    let repo_file = dir / "repo" in
+    match Eio.Path.kind ~follow:true Eio.Path.(fs / repo_file) with
+    | `Regular_file -> Some (dir / "packages")
+    | _ -> None
+    | exception _ -> None
+  in
+  { deps; local_packages; extra_repos; pins; overlays; packages_dir }
 
 (* -- Script dependency parser (was lib/oi/script.ml) --------------------- *)
 
@@ -381,9 +389,11 @@ module Url = struct
     roots : string list;
     extra_repos : extra_repo list;
     overlays : string list;
+    packages_dir : string option;
   }
 
-  let empty = { pins = []; roots = []; extra_repos = []; overlays = [] }
+  let empty =
+    { pins = []; roots = []; extra_repos = []; overlays = []; packages_dir = None }
 
   type with_arg = Url of string | Dep of Script.dep
 
@@ -520,6 +530,7 @@ module Url = struct
       roots = synth_roots;
       extra_repos = project.extra_repos;
       overlays = project.overlays;
+      packages_dir = project.packages_dir;
     }
 
   let merge a b =
@@ -528,6 +539,8 @@ module Url = struct
       roots = a.roots @ b.roots;
       extra_repos = a.extra_repos @ b.extra_repos;
       overlays = a.overlays @ b.overlays;
+      packages_dir =
+        (match a.packages_dir with Some _ -> a.packages_dir | None -> b.packages_dir);
     }
 
   let materialize ~fs ~sys ~cache ?(refresh = false) urls =

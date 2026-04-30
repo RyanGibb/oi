@@ -141,6 +141,7 @@ val build :
   ?toolchain:Toolchain.info ->
   ?constraints:OpamFormula.version_constraint OpamTypes.name_map ->
   ?project_root:string ->
+  ?local_packages_dir:string ->
   OpamPackage.Name.t list ->
   string list
 (** [build] solves for [names], ensures every needed layer exists (building from

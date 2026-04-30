@@ -134,11 +134,16 @@ let cmd =
     (* Load project extras (if any *.opam in cwd). A missing/unreadable
        directory degrades to "no extras"; malformed metadata still raises
        [Error.E] so the user sees the problem. *)
-    let project_extras, project_pins, project_overlays =
+    let project_extras, project_pins, project_overlays, project_packages_dir =
       match Oi.Project.load ~fs cwd_s with
-      | exception Sys_error _ -> ([], [], [])
-      | exception Eio.Exn.Io _ -> ([], [], [])
-      | p -> (p.extra_repos, p.pins, p.overlays)
+      | exception Sys_error _ -> ([], [], [], None)
+      | exception Eio.Exn.Io _ -> ([], [], [], None)
+      | p -> (p.extra_repos, p.pins, p.overlays, p.packages_dir)
+    in
+    let local_packages_dir =
+      match project_packages_dir with
+      | Some _ -> project_packages_dir
+      | None -> url_project.packages_dir
     in
     let project_extras = project_extras @ url_project.extra_repos in
     let project_pins = project_pins @ url_project.pins in
@@ -239,7 +244,8 @@ let cmd =
       let layer_hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
-          ?remote ?jobs ?toolchain ~constraints:extra_constraints names
+          ?remote ?jobs ?toolchain ~constraints:extra_constraints
+          ?local_packages_dir names
       in
       Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
       let prefix =
@@ -346,7 +352,8 @@ let cmd =
         else
           Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
             ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
-            ?remote ?jobs ?toolchain ~constraints dep_opam_names
+            ?remote ?jobs ?toolchain ~constraints ?local_packages_dir
+            dep_opam_names
       in
       if dry_run && dep_opam_names = [] then
         (* No deps to solve, but still in dry-run mode — just exit *)
@@ -385,7 +392,8 @@ let cmd =
           (let pin_dir =
              Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
            in
-           Stdlib.Option.to_list pin_dir
+           Stdlib.Option.to_list local_packages_dir
+           @ Stdlib.Option.to_list pin_dir
            @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
            @
            match toolchain with

@@ -218,7 +218,7 @@ let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
 let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
     ?remote ?jobs ?toolchain ?(constraints = OpamPackage.Name.Map.empty)
-    ?project_root names =
+    ?project_root ?local_packages_dir names =
   let extra_pkg_dirs =
     Source.Repo.ensure_extra ~fs ~data_dir ~refresh extra_repos
   in
@@ -235,7 +235,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
     | Some (info : Toolchain.info) -> info.packages_dirs
   in
   let packages_dirs =
-    Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
+    Stdlib.Option.to_list local_packages_dir
+    @ Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
   in
   let conf, toolchain_ctx = toolchain_views toolchain conf in
   Log.debug (fun m ->
