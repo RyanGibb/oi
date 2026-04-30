@@ -15,10 +15,13 @@ let ( @@ ) = Dockerfile.( @@ )
    will add more for specific packages. *)
 let build_depexts = function
   | `Apk ->
+      (* coreutils: oxcaml-compiler's Makefile uses [cp -l -R] to set up
+         [_build/runtime_stdlib_install]; busybox cp drops the file
+         contents on directory hardlinks, leaving Makefile.config missing. *)
       "build-base m4 perl pkgconf autoconf git curl bash patch tar xz zstd \
-       rsync sudo ca-certificates linux-headers openssl-dev zlib-dev \
-       sqlite-dev gmp-dev libffi-dev libev-dev capnproto capnproto-dev \
-       ncurses-dev"
+       rsync sudo coreutils ca-certificates linux-headers openssl-dev \
+       zlib-dev sqlite-dev gmp-dev libffi-dev libev-dev capnproto \
+       capnproto-dev ncurses-dev"
   | `Apt ->
       "build-essential m4 perl pkg-config autoconf git curl bash patch tar \
        xz-utils zstd rsync sudo ca-certificates libssl-dev zlib1g-dev \
