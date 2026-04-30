@@ -527,13 +527,20 @@ let cmd =
           project_pins,
           project_overlays,
           project_deps,
-          project_local_packages ) =
-      if targets <> [] then ([], [], [], [], [])
+          project_local_packages,
+          project_packages_dir ) =
+      if targets <> [] then ([], [], [], [], [], None)
       else
         match Oi.Project.load ~fs cwd_s with
-        | exception Sys_error _ -> ([], [], [], [], [])
-        | exception Eio.Exn.Io _ -> ([], [], [], [], [])
-        | p -> (p.extra_repos, p.pins, p.overlays, p.deps, p.local_packages)
+        | exception Sys_error _ -> ([], [], [], [], [], None)
+        | exception Eio.Exn.Io _ -> ([], [], [], [], [], None)
+        | p ->
+            ( p.extra_repos,
+              p.pins,
+              p.overlays,
+              p.deps,
+              p.local_packages,
+              p.packages_dir )
     in
     let project_extras = project_extras @ url_project.extra_repos in
     let project_pins = project_pins @ url_project.pins in
@@ -580,8 +587,14 @@ let cmd =
       | Some dirs -> dirs
       | None -> Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ()
     in
+    let local_packages_dir =
+      match project_packages_dir with
+      | Some _ -> project_packages_dir
+      | None -> url_project.packages_dir
+    in
     let packages_dirs =
-      Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
+      Stdlib.Option.to_list local_packages_dir
+      @ Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
     in
     let extra_constraints = Oi.Project.Script.constraints extra_deps in
     let handle_constraints =

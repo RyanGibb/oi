@@ -35,6 +35,10 @@ type t = {
           order. *)
   overlays : string list;
       (** Reporepo-handle entries from [x-repos:] (the [@HANDLE] form). *)
+  packages_dir : string option;
+      (** When the project directory contains a [repo] file (opam-repository
+          marker), this is [Some "<dir>/packages"]. The caller should inject it
+          as a high-priority [packages_dir] in the solver. *)
 }
 
 val load : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> t
@@ -93,6 +97,9 @@ module Url : sig
         (** URL entries from the URL project's [x-repos:] field. *)
     overlays : string list;
         (** Reporepo handles from the URL project's [x-repos:] field. *)
+    packages_dir : string option;
+        (** When the URL project contains a [repo] file, its [packages/]
+            directory. *)
   }
 
   type with_arg = Url of string | Dep of Script.dep
