@@ -101,7 +101,7 @@ val all_layers : db -> os_key:string -> (string * string * string * int) list
 
 val all_binaries : db -> os_key:string -> (string * string * string) list
 (** [all_binaries db ~os_key] returns all indexed binaries as
-    [(binary_name, package_name, layer_hash)]. *)
+    [(binary_name, package_name, package_version)]. *)
 
 val stats : db -> os_key:string -> int * int * int
 (** [stats db ~os_key] returns [(num_layers, num_binaries, num_files)] for the

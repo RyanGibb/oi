@@ -20,6 +20,10 @@ type build_target =
 
 val parse_build_target : string -> build_target
 
+val bare_handle : string -> string option
+(** [Some h] when [s] is a bare $(b,@h) handle (no $(b,/pkg) suffix and a
+    well-formed handle). [None] otherwise. *)
+
 (** {1 Handle pins}
 
     A [@handle/pkg[constr]] shortcut once the handle has been routed into

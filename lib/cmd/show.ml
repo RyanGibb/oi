@@ -368,6 +368,143 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
         many);
   Fmt.pr "@]@."
 
+(* -- overlay listing ---------------------------------------------------- *)
+
+(* Highest [version] under [pkgs_dir/name/<name.version>/]; [None] when no
+   parseable opam dir exists for [name]. *)
+let latest_version_of ~pkgs_dir ~name =
+  let dir = pkgs_dir / name in
+  if not (Sys.is_directory dir) then None
+  else
+    let parse pkg_s =
+      Stdlib.Option.bind (OpamPackage.of_string_opt pkg_s) (fun p ->
+          if OpamPackage.Name.to_string (OpamPackage.name p) = name then
+            Some (OpamPackage.version p)
+          else None)
+    in
+    let entries = try Sys.readdir dir |> Array.to_list with _ -> [] in
+    List.fold_left
+      (fun acc s ->
+        match (acc, parse s) with
+        | _, None -> acc
+        | None, Some v -> Some v
+        | Some best, Some v when OpamPackage.Version.compare v best > 0 ->
+            Some v
+        | _ -> acc)
+      None entries
+    |> Stdlib.Option.map OpamPackage.Version.to_string
+
+(* Binaries shipped by [hash]: every [bin/X] or [sbin/X] entry the index
+   has on file. Empty when nothing was indexed. *)
+let layer_binaries db ~hash =
+  D10.Index.files db ~hash
+  |> List.filter_map (fun path ->
+      match String.split_on_char '/' path with
+      | ("bin" | "sbin") :: name :: _ -> Some name
+      | _ -> None)
+  |> List.sort_uniq String.compare
+
+type overlay_state =
+  | Cached of string list  (** binaries *)
+  | Build_failed
+  | Declared
+
+let lookup_state ?db ~os_key ~name ~ver () =
+  match db with
+  | None -> Declared
+  | Some db -> (
+      match D10.Index.find_layer db ~name ~version:ver ~os_key with
+      | Some (hash, 0) -> Cached (layer_binaries db ~hash)
+      | Some _ -> Build_failed
+      | None -> Declared)
+
+let render_state =
+  let dim s = Tty.Span.styled Oi.Style.dim s in
+  fun st ->
+    let label =
+      match st with
+      | Cached _ -> Tty.Span.styled Oi.Style.ok "cached"
+      | Build_failed -> Tty.Span.styled Oi.Style.error "build failed"
+      | Declared -> dim "declared"
+    in
+    let bins =
+      match st with
+      | Cached (_ :: _ as bs) -> Tty.Span.text (String.concat ", " bs)
+      | _ -> dim "—"
+    in
+    (label, bins)
+
+(* Walk [<reporepo>/v1/<handle>/packages/<name>/<name.version>/] to
+   enumerate every package the overlay declares, then cross-reference
+   the d10 index for cached layers + binaries. One row per
+   (package, latest-version): cached packages show their binaries;
+   uncached ones show as "declared". *)
+let show_overlay ~cache_root ~os_key ~handle =
+  let reporepo = Terms.reporepo_path () in
+  let pkgs_dir =
+    Oi.Source.Reporepo.overlay_packages_dir ~path:reporepo ~handle
+  in
+  if not (Sys.file_exists pkgs_dir) then begin
+    Fmt.pr "@[<v>Overlay %a is not materialised under %s.@,Run %a first.@]@."
+      Oi.Style.accent_string ("@" ^ handle) reporepo Oi.Style.header_string
+      (Fmt.str "oi repo bump %s" handle);
+    exit 1
+  end;
+  let latest =
+    let names = try Sys.readdir pkgs_dir |> Array.to_list with _ -> [] in
+    List.filter_map
+      (fun name ->
+        Stdlib.Option.map
+          (fun v -> (name, v))
+          (latest_version_of ~pkgs_dir ~name))
+      names
+    |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+  in
+  if latest = [] then begin
+    Fmt.pr "Overlay %a has no packages.@." Oi.Style.accent_string ("@" ^ handle);
+    exit 0
+  end;
+  (* Open the local index if present; absent index → every row is
+     "declared". *)
+  let index_path = cache_root / "layers" / "index.db" in
+  let db =
+    if Sys.file_exists index_path then
+      try Some (D10.Index.open_ ~path:index_path) with _ -> None
+    else None
+  in
+  let rows, cached, declared =
+    List.fold_right
+      (fun (name, ver) (rows, c, d) ->
+        let st = lookup_state ?db ~os_key ~name ~ver () in
+        let state_span, bins_span = render_state st in
+        let row =
+          [
+            Tty.Span.text name;
+            Tty.Span.styled Oi.Style.dim ver;
+            state_span;
+            bins_span;
+          ]
+        in
+        match st with
+        | Cached _ -> (row :: rows, c + 1, d)
+        | Build_failed | Declared -> (row :: rows, c, d + 1))
+      latest ([], 0, 0)
+  in
+  Stdlib.Option.iter D10.Index.close db;
+  Fmt.pr "%a@.@." Oi.Style.header_string
+    (Fmt.str "Overlay @%s on %s" handle os_key);
+  Tty.Table.pp Fmt.stdout
+    (Tty.Table.of_rows ~header_style:Oi.Style.header
+       [
+         Tty.Table.column "PACKAGE";
+         Tty.Table.column "VERSION";
+         Tty.Table.column "STATE";
+         Tty.Table.column ~max_width:48 "BINARIES";
+       ]
+       rows);
+  Fmt.pr "@.%a %d package(s) — %d cached, %d declared@." Oi.Style.header_string
+    "Total:" (List.length latest) cached declared
+
 (* -- cache listing ------------------------------------------------------- *)
 
 (* Render every cached layer in [<cache>/layers/<os_key>/], optionally
@@ -476,18 +613,17 @@ let cmd =
        [<cache>/layers/<os_key>/]. They replace the old [oi registry
        list]. *)
     let bare_handle =
-      match targets with
-      | [ t ]
-        when String.length t > 1 && t.[0] = '@' && not (String.contains t '/')
-        ->
-          Some (String.sub t 1 (String.length t - 1))
-      | _ -> None
+      match targets with [ t ] -> Target.bare_handle t | _ -> None
     in
-    if show_all || bare_handle <> None then begin
-      let cache_root = Oi.Cache.root_s cache in
-      show_cache ~fs ~sys ~cache_root ~os_key ~handle:bare_handle;
-      exit 0
-    end;
+    let cache_root = Oi.Cache.root_s cache in
+    (match (bare_handle, show_all) with
+    | Some handle, false ->
+        show_overlay ~cache_root ~os_key ~handle;
+        exit 0
+    | _, true ->
+        show_cache ~fs ~sys ~cache_root ~os_key ~handle:bare_handle;
+        exit 0
+    | None, false -> ());
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
     let conf_host =
@@ -808,8 +944,9 @@ let cmd =
              fetched and no builds run.";
           `P "With no $(b,TARGET), reads $(b,*.opam) in the cwd.";
           `P
-            "Bare $(b,@HANDLE) or $(b,--all) skip the solve and list cached \
-             layers instead.";
+            "Bare $(b,@HANDLE) lists every package the overlay declares, \
+             marking which are cached and what binaries they ship. $(b,--all) \
+             lists cached layers across the whole cache.";
           `S "MODES";
           `I
             ( "(default)",
@@ -823,9 +960,13 @@ let cmd =
             ( "$(b,--only-depexts)",
               "Depexts only, one per line. Pipe to a package manager." );
           `I
+            ( "Bare $(b,@HANDLE)",
+              "Listing of every package declared by the overlay, with cache \
+               state and known binaries." );
+          `I
             ( "$(b,--all)",
-              "List cached layers. With bare $(b,@HANDLE), filter to one \
-               overlay." );
+              "Cached layers across all overlays. Combine with bare \
+               $(b,@HANDLE) to filter to one overlay's cached layers." );
           `S Manpage.s_examples;
           `Pre
             "  oi show utop\n\

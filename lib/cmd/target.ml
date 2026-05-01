@@ -107,6 +107,9 @@ let parse_build_target s =
         then Overlay_pkg (handle, pkg)
         else Plain_target s
 
+let bare_handle s =
+  match parse_build_target s with Overlay_all h -> Some h | _ -> None
+
 (* -- Handle pins -------------------------------------------------------- *)
 
 type handle_pin = {

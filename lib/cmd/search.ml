@@ -162,13 +162,16 @@ let cmd =
     } =
       Harness.bootstrap env cache_dir
     in
-    (* Accept [@handle/PATTERN] as a shortcut for
-       [--overlay=handle PATTERN]. Combines with any [--overlay] flags
-       the user already passed. *)
+    (* Accept [@handle/PATTERN] as shorthand for [--overlay=handle PATTERN],
+       and bare [@handle] as "everything in this overlay" (pattern = [*]).
+       Combines with any [--overlay] flags the user already passed. *)
     let pattern, overlay_filter =
-      match Target.split_handle_prefix pattern with
-      | None -> (pattern, overlay_filter)
-      | Some (h, rest) -> (rest, h :: overlay_filter)
+      match Target.bare_handle pattern with
+      | Some h -> ("*", h :: overlay_filter)
+      | None -> (
+          match Target.split_handle_prefix pattern with
+          | None -> (pattern, overlay_filter)
+          | Some (h, rest) -> (rest, h :: overlay_filter))
     in
     let clk = (clock :> D10.Config.clk) in
     let index_path =
@@ -391,7 +394,9 @@ let cmd =
             "The name or glob to search for. The $(b,*) character is a \
              wildcard. Matching is against binary names and opam package \
              names. Prefix with $(b,@HANDLE/) to restrict the search to a \
-             single overlay without passing $(b,--overlay) separately."
+             single overlay without passing $(b,--overlay) separately. Bare \
+             $(b,@HANDLE) lists everything in that overlay (equivalent to \
+             $(b,@HANDLE/*))."
           [])
   in
   let all_versions =

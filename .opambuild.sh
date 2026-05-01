@@ -5,5 +5,6 @@ export OPAMROOT=`pwd`/_opamroot
 export OPAMYES=1
 export OPAMCONFIRMLEVEL=unsafe-yes
 opam init -ny --disable-sandboxing
-opam switch create .
+opam repo add avsm git+https://git.recoil.org/anil.recoil.org/opam-overlay --all
+opam switch create --repos=avsm,default .
 opam exec -- dune build --profile=release

@@ -9,9 +9,3 @@
  (public_name oix)
  (package oi)
  (libraries oi_cmd cmdliner))
-
-(executable
- (name d10_main)
- (public_name d10)
- (package d10)
- (libraries d10 osrel eio_posix cmdliner fmt fmt.tty logs logs.fmt))

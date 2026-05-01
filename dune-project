@@ -2,7 +2,7 @@
 
 (name oi)
 
-(version 0.8.0)
+(version 0.8.1)
 
 (generate_opam_files true)
 
@@ -19,7 +19,7 @@
  (synopsis "Content-addressed binary layer cache (day10 format)")
  (depends (ocaml (>= 5.2.0)) (eio (>= 1.0)) (osrel (= :version))
   (opam-format (>= 2.2.0)) (jsont (>= 0.2)) (bytesrw (>= 0.2)) sqlite3
-  cmdliner (eio_main (>= 1.0)) fmt logs))
+  fmt logs))
 
 (package (name oi) (synopsis "A stateless OCaml package builder")
  (depends (ocaml (>= 5.2.0)) dune-build-info (eio_main (>= 1.0)) (d10 (= :version))
