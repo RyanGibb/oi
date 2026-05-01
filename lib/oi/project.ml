@@ -215,6 +215,16 @@ let load ~fs dir =
   in
   { deps; local_packages; extra_repos; pins; overlays; packages_dir }
 
+let empty =
+  {
+    deps = [];
+    local_packages = [];
+    extra_repos = [];
+    pins = [];
+    overlays = [];
+    packages_dir = None;
+  }
+
 (* -- Script dependency parser (was lib/oi/script.ml) --------------------- *)
 
 module Script = struct
@@ -393,7 +403,13 @@ module Url = struct
   }
 
   let empty =
-    { pins = []; roots = []; extra_repos = []; overlays = []; packages_dir = None }
+    {
+      pins = [];
+      roots = [];
+      extra_repos = [];
+      overlays = [];
+      packages_dir = None;
+    }
 
   type with_arg = Url of string | Dep of Script.dep
 
@@ -501,7 +517,8 @@ module Url = struct
           let cwd = Sys.getcwd () in
           let rel =
             if String.starts_with ~prefix:(cwd ^ "/") path then
-              String.sub path (String.length cwd + 1)
+              String.sub path
+                (String.length cwd + 1)
                 (String.length path - String.length cwd - 1)
             else path
           in
@@ -540,7 +557,9 @@ module Url = struct
       extra_repos = a.extra_repos @ b.extra_repos;
       overlays = a.overlays @ b.overlays;
       packages_dir =
-        (match a.packages_dir with Some _ -> a.packages_dir | None -> b.packages_dir);
+        (match a.packages_dir with
+        | Some _ -> a.packages_dir
+        | None -> b.packages_dir);
     }
 
   let materialize ~fs ~sys ~cache ?(refresh = false) urls =

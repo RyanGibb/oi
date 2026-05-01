@@ -105,7 +105,8 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
   in
   let packages_dirs =
     Stdlib.Option.to_list local_packages_dir
-    @ Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
+    @ Stdlib.Option.to_list pin_dir
+    @ extra_pkg_dirs @ base_pkg_dirs
   in
   let cache_root = Oi.Cache.root_s cache in
   let build_prefix = cache_root / "build" / "prefix" in

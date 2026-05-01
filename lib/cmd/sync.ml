@@ -122,16 +122,18 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
    This is the project-aware [tc_handles] formula every command should
    use; [oi sync] does it inline below, [oi exec] / [oi env] call this
    helper directly so they pick the same toolchain. *)
-let resolve_project_toolchain ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ~fs ~sys ~cache ~data_dir ~conf ~install ~override ~cwd ()
-    =
+let resolve_project_toolchain ?(refresh = false) ?(skip_local = false)
+    ?(with_repos = []) ?(with_deps = []) ~fs ~sys ~cache ~data_dir ~conf
+    ~install ~override ~cwd () =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let project_overlays =
-    match Oi.Project.load ~fs cwd with
-    | exception Sys_error _ -> []
-    | exception Eio.Exn.Io _ -> []
-    | p -> p.overlays
+    if skip_local then []
+    else
+      match Oi.Project.load ~fs cwd with
+      | exception Sys_error _ -> []
+      | exception Eio.Exn.Io _ -> []
+      | p -> p.overlays
   in
   let _, url_project =
     Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
@@ -177,10 +179,10 @@ let envrc_should_write = function
   | `Always -> true
   | `Detect -> direnv_on_path ()
 
-let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?(toolchain : string option) ?(envrc_mode = `Detect)
-    ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry ~cwd
-    () =
+let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
+    ?(with_repos = []) ?(with_deps = []) ?jobs ?(toolchain : string option)
+    ?(envrc_mode = `Detect) ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
+    ~data_dir ~registry ~cwd () =
   let toolchain_override = toolchain in
   let say fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
@@ -188,7 +190,9 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(with_repos = [])
   in
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-  let project = Oi.Project.load ~fs cwd in
+  let project =
+    if skip_local then Oi.Project.empty else Oi.Project.load ~fs cwd
+  in
   let extra_cli, url_project =
     Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
   in

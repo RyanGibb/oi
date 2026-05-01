@@ -3,8 +3,8 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let cmd =
-  let run () data_dir cache_dir refresh registry with_repos with_deps jobs
-      toolchain cmd args =
+  let run () data_dir cache_dir refresh skip_local registry with_repos with_deps
+      jobs toolchain cmd args =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
@@ -16,25 +16,28 @@ let cmd =
     in
     (* Any --with-repo / --with / --toolchain flag forces a re-sync
        even if the prefix is fresh, so the extras and toolchain make
-       it into the build. The toolchain we use for env vars is the one
-       sync just resolved (when sync ran) or the same project-aware
-       resolve sync would have done (when we skipped it) — either way,
-       a single resolve, with the full project / URL-project / CLI
-       handle scope. *)
-    let forced = with_repos <> [] || with_deps <> [] || toolchain <> None in
+       it into the build. [--skip-local] also forces a fresh sync so
+       the project's [_oi/prefix/] is bypassed. The toolchain we use
+       for env vars is the one sync just resolved (when sync ran) or
+       the same project-aware resolve sync would have done (when we
+       skipped it). *)
+    let forced =
+      skip_local || with_repos <> [] || with_deps <> [] || toolchain <> None
+    in
     let tc_info =
       if forced || Sync.needs_sync ~cwd ~prefix then begin
         Logs.info (fun m -> m "Syncing %s before exec" cwd);
         let _, tc =
-          Sync.do_sync ~quiet:true ~refresh ~with_repos ~with_deps ?jobs
-            ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
+          Sync.do_sync ~quiet:true ~refresh ~skip_local ~with_repos ~with_deps
+            ?jobs ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
             ~data_dir ~registry ~cwd ()
         in
         tc
       end
       else
-        Sync.resolve_project_toolchain ~refresh ~with_repos ~with_deps ~fs ~sys
-          ~cache ~data_dir ~conf ~install:true ~override:toolchain ~cwd ()
+        Sync.resolve_project_toolchain ~refresh ~skip_local ~with_repos
+          ~with_deps ~fs ~sys ~cache ~data_dir ~conf ~install:true
+          ~override:toolchain ~cwd ()
     in
     let tools = Workspace.tools_dir_for ~cwd in
     let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info tc_info in
@@ -92,7 +95,7 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
-      $ Terms.toolchain $ cmd $ args)
+      $ Terms.skip_local $ Terms.registry $ Terms.with_repos $ Terms.with_deps
+      $ Terms.jobs $ Terms.toolchain $ cmd $ args)
 
 (* -- config -------------------------------------------------------------- *)

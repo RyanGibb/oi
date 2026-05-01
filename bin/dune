@@ -2,23 +2,13 @@
  (name main)
  (public_name oi)
  (package oi)
- (libraries
-  oi
-  oi_cmd
-  d10
-  osrel
-  eio_posix
-  cmdliner
-  dune-build-info
-  xdge
-  fmt
-  fmt.cli
-  fmt.tty
-  logs
-  logs.fmt
-  logs.cli
-  dockerfile
-  dockerfile-opam))
+ (libraries oi_cmd cmdliner dune-build-info))
+
+(executable
+ (name oix)
+ (public_name oix)
+ (package oi)
+ (libraries oi_cmd cmdliner))
 
 (executable
  (name d10_main)

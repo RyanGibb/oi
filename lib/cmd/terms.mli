@@ -19,6 +19,10 @@ val cache_dir : string Cmdliner.Term.t
 val refresh : bool Cmdliner.Term.t
 (** [--refresh] flag: force re-fetch even within the 24h freshness window. *)
 
+val skip_local : bool Cmdliner.Term.t
+(** [--skip-local] flag: do not probe the cwd for project files ($(b,*.opam),
+    pin-depends, x-repos, $(b,packages/) overlay, dev tools). *)
+
 val with_repos : string list Cmdliner.Term.t
 (** [--with-repo URL] (repeatable). *)
 

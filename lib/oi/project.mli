@@ -43,6 +43,10 @@ type t = {
 
 val load : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> t
 
+val empty : t
+(** Empty project metadata: no deps, no pins, no overlays. Used by callers that
+    need to bypass the cwd probe (e.g. when [--skip-local] is set). *)
+
 (** {1 Script dependency parser}
 
     OCaml scripts declare deps via [[\@\@\@opam ...]] on the first line.

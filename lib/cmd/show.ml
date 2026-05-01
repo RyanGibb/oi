@@ -456,8 +456,8 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
   end
 
 let cmd =
-  let run () data_dir cache_dir refresh registry toolchain_override targets
-      with_repos with_deps tree only_depexts os_override show_all =
+  let run () data_dir cache_dir refresh skip_local registry toolchain_override
+      targets with_repos with_deps tree only_depexts os_override show_all =
     Harness.run @@ fun env ->
     let {
       Harness.proc_mgr = _proc_mgr;
@@ -529,7 +529,7 @@ let cmd =
           project_deps,
           project_local_packages,
           project_packages_dir ) =
-      if targets <> [] then ([], [], [], [], [], None)
+      if targets <> [] || skip_local then ([], [], [], [], [], None)
       else
         match Oi.Project.load ~fs cwd_s with
         | exception Sys_error _ -> ([], [], [], [], [], None)
@@ -594,7 +594,8 @@ let cmd =
     in
     let packages_dirs =
       Stdlib.Option.to_list local_packages_dir
-      @ Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
+      @ Stdlib.Option.to_list pin_dir
+      @ extra_pkg_dirs @ base_pkg_dirs
     in
     let extra_constraints = Oi.Project.Script.constraints extra_deps in
     let handle_constraints =
@@ -838,8 +839,9 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.toolchain $ targets $ Terms.with_repos
-      $ Terms.with_deps $ tree $ only_depexts $ os_override $ show_all)
+      $ Terms.skip_local $ Terms.registry $ Terms.toolchain $ targets
+      $ Terms.with_repos $ Terms.with_deps $ tree $ only_depexts $ os_override
+      $ show_all)
 
 (* -- env ----------------------------------------------------------------- *)
 

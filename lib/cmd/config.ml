@@ -12,7 +12,7 @@ let human_bytes b =
   else Fmt.str "%LdB" b
 
 let cmd =
-  let run () cache_dir data_dir =
+  let run () cache_dir data_dir skip_local =
     Harness.run @@ fun env ->
     let { Harness.fs; os_key; cache; _ } = Harness.bootstrap env cache_dir in
     Fmt.pr "@[<v>%a@," Oi.Style.header_string "Platform";
@@ -93,10 +93,12 @@ let cmd =
       Fmt.pr "@]@.";
       let cwd_s, _ = Workspace.resolved_cwd fs in
       let proj =
-        match Oi.Project.load ~fs cwd_s with
-        | exception Sys_error _ -> None
-        | exception Eio.Exn.Io _ -> None
-        | p -> Some p
+        if skip_local then None
+        else
+          match Oi.Project.load ~fs cwd_s with
+          | exception Sys_error _ -> None
+          | exception Eio.Exn.Io _ -> None
+          | p -> Some p
       in
       match proj with
       | None -> ()
@@ -122,10 +124,10 @@ let cmd =
             List.iter (fun h -> Fmt.pr "  %s@." h) p.overlays
           end;
           (match p.packages_dir with
-           | None -> ()
-           | Some dir ->
-               Fmt.pr "@.Project local opam-repository:@.";
-               Fmt.pr "  %s@." dir);
+          | None -> ()
+          | Some dir ->
+              Fmt.pr "@.Project local opam-repository:@.";
+              Fmt.pr "  %s@." dir);
           (* Dev tools: run the probe registry against cwd and print one
            row per tool. Shown in every project (even one with no
            hits), so it's obvious when merlin / odoc would end up in
@@ -187,7 +189,10 @@ let cmd =
                above and install unconditionally." );
         ]
   in
-  Cmd.v info Term.(const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir)
+  Cmd.v info
+    Term.(
+      const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir
+      $ Terms.skip_local)
 
 (* -- clean --------------------------------------------------------------- *)
 

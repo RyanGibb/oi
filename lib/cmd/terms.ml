@@ -46,6 +46,16 @@ let refresh =
            refresh on their own after 24h."
         [ "refresh" ])
 
+let skip_local =
+  Arg.(
+    value & flag
+    & info
+        ~doc:
+          "Don't probe the current directory for project files ($(b,*.opam), \
+           $(b,pin-depends:), $(b,x-repos:), $(b,packages/) overlay, dev \
+           tools). Use to run a command against global state only."
+        [ "skip-local" ])
+
 let with_repos =
   Arg.(
     value & opt_all string []

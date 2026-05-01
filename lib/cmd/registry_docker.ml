@@ -19,9 +19,9 @@ let build_depexts = function
          [_build/runtime_stdlib_install]; busybox cp drops the file
          contents on directory hardlinks, leaving Makefile.config missing. *)
       "build-base m4 perl pkgconf autoconf git curl bash patch tar xz zstd \
-       rsync sudo coreutils ca-certificates linux-headers openssl-dev \
-       zlib-dev sqlite-dev gmp-dev libffi-dev libev-dev capnproto \
-       capnproto-dev ncurses-dev"
+       rsync sudo coreutils ca-certificates linux-headers openssl-dev zlib-dev \
+       sqlite-dev gmp-dev libffi-dev libev-dev capnproto capnproto-dev \
+       ncurses-dev"
   | `Apt ->
       "build-essential m4 perl pkg-config autoconf git curl bash patch tar \
        xz-utils zstd rsync sudo ca-certificates libssl-dev zlib1g-dev \
@@ -202,11 +202,11 @@ let stage_alias (d : Distro.distro) =
 
 (* Each distro stage installs the generic build toolchain and the union
    of overlay depexts, then fetches the latest statically linked
-   [oi-linux-<arch>] from the [oi] GitHub releases page rather than
-   building [oi] from source. This keeps image builds fast and makes
-   the release workflow the single source of truth for the [oi]
-   binary. The stage doesn't run the build/export itself: the compose
-   file supplies a [command:] that invokes
+   [oi-linux-<arch>] and [oix-linux-<arch>] from the [oi] GitHub
+   releases page rather than building from source. This keeps image
+   builds fast and makes the release workflow the single source of
+   truth for both binaries. The stage doesn't run the build/export
+   itself: the compose file supplies a [command:] that invokes
    [oi build --all --export /out]. *)
 let distro_stage ?(overlay_depexts = []) d =
   let resolved = Distro.resolve_alias d in
@@ -216,10 +216,12 @@ let distro_stage ?(overlay_depexts = []) d =
   let human = Distro.human_readable_string_of_distro (resolved :> Distro.t) in
   let fetch_oi =
     Printf.sprintf
-      "curl -fsSL -o /usr/local/bin/oi \
-       https://github.com/%s/releases/latest/download/oi-linux-$(uname -m) && \
-       chmod 0755 /usr/local/bin/oi"
-      release_repo
+      "arch=$(uname -m) && curl -fsSL -o /usr/local/bin/oi \
+       https://github.com/%s/releases/latest/download/oi-linux-$arch && curl \
+       -fsSL -o /usr/local/bin/oix \
+       https://github.com/%s/releases/latest/download/oix-linux-$arch && chmod \
+       0755 /usr/local/bin/oi /usr/local/bin/oix"
+      release_repo release_repo
   in
   let base = build_depexts mgr in
   let extra = extra_depexts mgr in

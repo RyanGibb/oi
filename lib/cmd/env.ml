@@ -3,7 +3,8 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let cmd =
-  let run () data_dir cache_dir refresh with_repos with_deps jobs toolchain =
+  let run () data_dir cache_dir refresh skip_local with_repos with_deps jobs
+      toolchain =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
@@ -11,11 +12,12 @@ let cmd =
     let dune_cache_root = Oi.Cache.dune_root cache in
     (* Detect _oi/ project directory. A pre-existing _oi/prefix is
        reused as-is UNLESS the user passes --with-repo or --with, which
-       demands a fresh solve to honour the additions. *)
+       demands a fresh solve to honour the additions. [--skip-local]
+       forces a one-shot prefix and ignores any existing [_oi/prefix]. *)
     let cwd_s, cwd = Workspace.resolved_cwd fs in
     let oi_prefix = cwd_s / "_oi" / "prefix" in
     let want_extras =
-      with_repos <> [] || with_deps <> [] || toolchain <> None
+      skip_local || with_repos <> [] || with_deps <> [] || toolchain <> None
     in
     let conf =
       Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
@@ -24,8 +26,9 @@ let cmd =
        picks the toolchain the existing prefix was actually built with
        (project [x-repos:] declarations and all). *)
     let tc_info =
-      Sync.resolve_project_toolchain ~refresh ~with_repos ~with_deps ~fs ~sys
-        ~cache ~data_dir ~conf ~install:true ~override:toolchain ~cwd:cwd_s ()
+      Sync.resolve_project_toolchain ~refresh ~skip_local ~with_repos ~with_deps
+        ~fs ~sys ~cache ~data_dir ~conf ~install:true ~override:toolchain
+        ~cwd:cwd_s ()
     in
     let conf, tc_ctx = Oi.Pipeline.toolchain_views tc_info conf in
     let prefix =
@@ -120,4 +123,5 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain)
+      $ Terms.skip_local $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
+      $ Terms.toolchain)

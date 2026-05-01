@@ -10,6 +10,7 @@ val needs_sync : cwd:string -> prefix:string -> bool
 
 val resolve_project_toolchain :
   ?refresh:bool ->
+  ?skip_local:bool ->
   ?with_repos:string list ->
   ?with_deps:string list ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -41,6 +42,7 @@ val envrc_mode_arg : envrc_mode Cmdliner.Term.t
 val do_sync :
   ?quiet:bool ->
   ?refresh:bool ->
+  ?skip_local:bool ->
   ?with_repos:string list ->
   ?with_deps:string list ->
   ?jobs:int ->

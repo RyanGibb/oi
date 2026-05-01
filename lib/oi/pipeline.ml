@@ -236,7 +236,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
   in
   let packages_dirs =
     Stdlib.Option.to_list local_packages_dir
-    @ Stdlib.Option.to_list pin_dir @ extra_pkg_dirs @ base_pkg_dirs
+    @ Stdlib.Option.to_list pin_dir
+    @ extra_pkg_dirs @ base_pkg_dirs
   in
   let conf, toolchain_ctx = toolchain_views toolchain conf in
   Log.debug (fun m ->

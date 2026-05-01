@@ -445,19 +445,18 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
 (* -- oi build dispatcher ------------------------------------------------ *)
 
 let cmd =
-  let run () data_dir cache_dir refresh dry_run all only skip registry
-      with_repos with_deps jobs toolchain_override depext_only export envrc_mode
-      deps_only targets =
+  let run () data_dir cache_dir refresh skip_local dry_run all only skip
+      registry with_repos with_deps jobs toolchain_override depext_only export
+      envrc_mode deps_only targets =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
     in
     (* Project mode: no positional, no --all, *.opam present in cwd.
-       Sync the project's dep closure and run [dune build]. Bypasses
-       the bulk solve+layer-build loop below. *)
+       [--skip-local] forces non-project mode regardless. *)
     let cwd_s, _ = Workspace.resolved_cwd fs in
     let project_mode =
-      targets = [] && (not all)
+      (not skip_local) && targets = [] && (not all)
       &&
         try
           Sys.readdir cwd_s
@@ -1744,22 +1743,22 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ dry_run $ all $ only $ skip $ Terms.registry $ Terms.with_repos
-      $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ depext_only $ export
-      $ Sync.envrc_mode_arg $ deps_only $ targets)
+      $ Terms.skip_local $ dry_run $ all $ only $ skip $ Terms.registry
+      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
+      $ depext_only $ export $ Sync.envrc_mode_arg $ deps_only $ targets)
 
 (* -- oi test ------------------------------------------------------------ *)
 
 let test_cmd =
-  let run () data_dir cache_dir refresh registry with_repos with_deps jobs
-      toolchain_override envrc_mode dry_run targets =
+  let run () data_dir cache_dir refresh skip_local registry with_repos with_deps
+      jobs toolchain_override envrc_mode dry_run targets =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
     in
     let cwd_s, _ = Workspace.resolved_cwd fs in
     let project_mode =
-      targets = []
+      (not skip_local) && targets = []
       &&
         try
           Sys.readdir cwd_s
@@ -1827,5 +1826,5 @@ let test_cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
-      $ Terms.toolchain $ Sync.envrc_mode_arg $ dry_run $ targets)
+      $ Terms.skip_local $ Terms.registry $ Terms.with_repos $ Terms.with_deps
+      $ Terms.jobs $ Terms.toolchain $ Sync.envrc_mode_arg $ dry_run $ targets)

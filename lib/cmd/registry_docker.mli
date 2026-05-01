@@ -19,9 +19,10 @@ val dockerfile_one_distro :
 (** Per-distro build image. Installs the generic build toolchain (compilers,
     headers, [curl]) together with [overlay_depexts] (the union of [depexts:]
     declared by every overlay's [x-root-packages] evaluated for this distro). It
-    then fetches the latest statically linked [oi-linux-<arch>] from the [oi]
-    GitHub releases page and sets [/work] as the working directory. No [CMD] is
-    set: the compose file drives the build+export steps. *)
+    then fetches the latest statically linked [oi-linux-<arch>] and
+    [oix-linux-<arch>] from the [oi] GitHub releases page and sets [/work] as
+    the working directory. No [CMD] is set: the compose file drives the
+    build+export steps. *)
 
 val dockerfile_project :
   ?overlay_depexts:string list ->
