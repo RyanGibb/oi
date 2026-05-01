@@ -690,9 +690,12 @@ module Cache = struct
 
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  (* Bumped to v6 with the working-tree-aware signature below: cache
-     entries written under v5 keys are no longer trustworthy. *)
-  let schema_version = "v6"
+  (* Bumped to v7: v6 keys were silently stale because the
+     [compute_git_signature] precondition assumed [<packages_dir>/../
+     .git] existed, which is false for reporepo overlays nested under
+     [<repo>/v1/<handle>/packages/]. Those entries fell back to a
+     path-only signature that never changed across [oi repo bump]. *)
+  let schema_version = "v7"
   let signature_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
 
   let read_process_output cmd =
@@ -717,27 +720,30 @@ module Cache = struct
      scoped to [packages_dir]. This catches reporepo working-tree edits
      that bumps make to [v1/<handle>/packages/] without committing —
      reusing the previous "tip-only" key cached stale solves once those
-     edits stopped moving the parent commit. *)
+     edits stopped moving the parent commit.
+
+     We don't pre-check for a [.git] in [Filename.dirname packages_dir]:
+     the reporepo layout nests packages under [<repo>/v1/<handle>/packages]
+     so the [.git] is several levels up. [git -C <dir>] walks up to find
+     the repo root for us; the [WEXITED 0] gate in [read_process_output]
+     is what tells us we're inside a git tree at all. *)
   let compute_git_signature packages_dir =
-    let repo = Filename.dirname packages_dir in
-    if not (Sys.file_exists (repo / ".git")) then None
-    else
-      let head =
-        Option.map String.trim
-          (read_process_output
-             (Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
-                (Filename.quote repo)))
-      in
-      let status =
-        read_process_output
-          (Printf.sprintf "git -C %s status --porcelain -- %s 2>/dev/null"
-             (Filename.quote repo)
-             (Filename.quote packages_dir))
-      in
-      match (head, status) with
-      | Some h, Some s when h <> "" ->
-          Some (h ^ ":" ^ Digest.to_hex (Digest.string s))
-      | _ -> None
+    let head =
+      Option.map String.trim
+        (read_process_output
+           (Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
+              (Filename.quote packages_dir)))
+    in
+    let status =
+      read_process_output
+        (Printf.sprintf "git -C %s status --porcelain -- %s 2>/dev/null"
+           (Filename.quote packages_dir)
+           (Filename.quote packages_dir))
+    in
+    match (head, status) with
+    | Some h, Some s when h <> "" ->
+        Some (h ^ ":" ^ Digest.to_hex (Digest.string s))
+    | _ -> None
 
   (* For non-git packages_dirs (e.g. materialized pin sets), fall back
      to the absolute path as the signature. Pin set dirs are already
