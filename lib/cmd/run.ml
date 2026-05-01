@@ -671,9 +671,12 @@ let info_oix =
           "  oix utop\n\
           \  oix patdiff a.txt b.txt\n\
           \  oix ocamlformat --check .\n\
+          \  oix hello.ml\n\
           \  oix --with=ocamlformat.0.29.0 ocamlformat --check .\n\
           \  oix --with=tls --with=cohttp my-client\n\
-          \  oix --toolchain=oxcaml utop";
+          \  oix --toolchain=oxcaml utop\n\
+          \  oix @avsm/owntracks\n\
+          \  oix -n utop";
         `P
           "$(b,oix) resolves $(b,TARGET), builds it and its dependencies \
            into a shared cache, and runs it. Repeat invocations with the \
@@ -703,6 +706,19 @@ let info_oix =
           "$(b,--toolchain=NAME) pins the compiler. Without it, an \
            overlay tagged with $(b,x-oi-toolchain) wins, falling back to \
            a sensible default.";
+        `S "SCRIPT FORMAT";
+        `P
+          "$(b,TARGET) may also be a local $(b,.ml) script or an \
+           $(b,http(s)://) URL pointing at one. Declare deps on the first \
+           line:";
+        `Pre "  [@@@opam fmt cmdliner>=1.2.0 lwt]";
+        `P
+          "Each token is an opam package, with optional version constraint \
+           ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
+           wired in as preprocessors automatically.";
+        `S Manpage.s_see_also;
+        `P "$(b,oi)(1) — project-aware build, test, and run.";
       ]
 
 let term ~skip_local =

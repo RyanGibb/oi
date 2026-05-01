@@ -106,6 +106,8 @@ let info =
              use. Defaults to the built-in upstream. Once the local clone \
              exists, $(b,oi) never pulls from this URL again. The clone is \
              yours to edit, commit, and push." );
+        `S Manpage.s_see_also;
+        `P "$(b,oix)(1) — one-shot runner for opam-packaged binaries.";
       ]
 
 let () =
