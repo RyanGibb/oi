@@ -2,13 +2,13 @@
 
 (name oi)
 
-(version 0.7.5)
+(version 0.8.0)
 
 (generate_opam_files true)
 
 (maintainers "Anil Madhavapeddy <anil@recoil.org>")
 
-(authors "Anil Madhavapeddy" "Mark Elvers")
+(authors "Anil Madhavapeddy" "Mark Elvers" "Ryan Gibb")
 
 (source (github avsm/oi))
 
