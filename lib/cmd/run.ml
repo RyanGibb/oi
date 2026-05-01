@@ -562,9 +562,7 @@ let dry_run =
 let args =
   Arg.(
     value & pos_right 0 string []
-    & info ~docv:"ARG"
-        ~doc:"Arguments passed through to $(b,TARGET)."
-        [])
+    & info ~docv:"ARG" ~doc:"Arguments passed through to $(b,TARGET)." [])
 
 let info_run =
   Cmd.info "run" ~doc:"Run an OCaml script or any opam-packaged binary"
@@ -678,34 +676,31 @@ let info_oix =
           \  oix @avsm/owntracks\n\
           \  oix -n utop";
         `P
-          "$(b,oix) resolves $(b,TARGET), builds it and its dependencies \
-           into a shared cache, and runs it. Repeat invocations with the \
-           same flags are instant.";
+          "$(b,oix) resolves $(b,TARGET), builds it and its dependencies into \
+           a shared cache, and runs it. Repeat invocations with the same flags \
+           are instant.";
         `P "Arguments after $(b,TARGET) are forwarded to it unchanged.";
         `S "EXTRA DEPENDENCIES";
         `P
-          "$(b,--with) adds a package alongside $(b,TARGET). Accepts a \
-           bare name, an opam atom ($(b,fmt>=0.9), $(b,dune.3.20.0)), or \
-           a git URL whose root $(b,*.opam) files become pins. \
-           Repeatable.";
+          "$(b,--with) adds a package alongside $(b,TARGET). Accepts a bare \
+           name, an opam atom ($(b,fmt>=0.9), $(b,dune.3.20.0)), or a git URL \
+           whose root $(b,*.opam) files become pins. Repeatable.";
         `Pre
           "  oix --with=tls --with=cohttp my_client\n\
           \  oix --with=dune.3.20.0 dune --version\n\
           \  oix --with=https://github.com/owner/proj.git my-tool";
         `S "OVERLAYS";
         `P
-          "Overlays are curated bundles of opam packages. Prefix \
-           $(b,@HANDLE/) on $(b,TARGET) or $(b,--with) to take a single \
-           package from a named overlay. $(b,--with-repo=@HANDLE) stacks \
-           the whole overlay onto the solve.";
-        `Pre
-          "  oix @avsm/owntracks\n\
-          \  oix --with-repo=@avsm crockford";
+          "Overlays are curated bundles of opam packages. Prefix $(b,@HANDLE/) \
+           on $(b,TARGET) or $(b,--with) to take a single package from a named \
+           overlay. $(b,--with-repo=@HANDLE) stacks the whole overlay onto the \
+           solve.";
+        `Pre "  oix @avsm/owntracks\n  oix --with-repo=@avsm crockford";
         `S "TOOLCHAIN";
         `P
-          "$(b,--toolchain=NAME) pins the compiler. Without it, an \
-           overlay tagged with $(b,x-oi-toolchain) wins, falling back to \
-           a sensible default.";
+          "$(b,--toolchain=NAME) pins the compiler. Without it, an overlay \
+           tagged with $(b,x-oi-toolchain) wins, falling back to a sensible \
+           default.";
         `S "SCRIPT FORMAT";
         `P
           "$(b,TARGET) may also be a local $(b,.ml) script or an \
@@ -715,8 +710,8 @@ let info_oix =
         `P
           "Each token is an opam package, with optional version constraint \
            ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
-           wired in as preprocessors automatically.";
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
+           in as preprocessors automatically.";
         `S Manpage.s_see_also;
         `P "$(b,oi)(1) — project-aware build, test, and run.";
       ]
