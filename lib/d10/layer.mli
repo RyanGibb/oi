@@ -125,11 +125,20 @@ val fetch_remote_index : Config.t -> remote:remote -> remote_index
     and size. Returns an empty table on failure. *)
 
 val pull_remote :
-  Config.t -> remote:remote -> hash:string -> ?sha256:string -> unit -> bool
+  Config.t ->
+  remote:remote ->
+  hash:string ->
+  ?on_progress:(received:int64 -> total:int64 option -> unit) ->
+  ?sha256:string ->
+  unit ->
+  bool
 (** [pull_remote c ~remote ?sha256 ~hash] downloads layer [hash] from [remote],
     optionally verifying the SHA-256 checksum of the downloaded archive. Returns
     [true] if the layer is now available with [exit_status = 0]. No-op (returns
-    [true]) if the layer already exists locally. *)
+    [true]) if the layer already exists locally.
+
+    [on_progress] forwards through to {!Sysops.Http.fetch} for download
+    progress; see that function's docs. *)
 
 (** {1 Export} *)
 

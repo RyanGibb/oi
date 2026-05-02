@@ -41,7 +41,7 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   let dst = Eio.Path.(fs / output) in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
   let count = D10.Layer.export_all d10 ~dst in
-  Fmt.pr "Exported %d layer(s) to %s@." count output;
+  Oi.Say.step "Exported %d layer(s) to %s" count output;
   if Eio.Path.is_directory Eio.Path.(fs / output / os_key) then begin
     let index_path = output / os_key / "index.db" in
     (try Sys.remove index_path with Sys_error _ -> ());
@@ -70,11 +70,11 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
     let nl, nb, _ = D10.Index.stats db ~os_key in
     D10.Index.close db;
     finalize_sqlite_for_publish index_path;
-    Fmt.pr "  %s: %d layers, %d binaries@." os_key nl nb
+    Oi.Say.field "index" "%s: %d layers, %d binaries" os_key nl nb
   end;
   let n_sources = Oi.Source.Mirror.export ~cache ~dst in
   if n_sources > 0 then
-    Fmt.pr "  sources: %d blob(s) at %s/sources/@." n_sources output;
+    Oi.Say.field "sources" "%d blob(s) at %s/sources/" n_sources output;
   (* Manifest = Provenance ⨝ Audit. Provenance gives us one entry per
      successfully committed layer with its content fields; the audit log
      gives us a [callers[]] history per layer. Failed-build events that
@@ -95,14 +95,14 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
      with
     | Ok s ->
         Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) s;
-        Fmt.pr "  manifest: %d entry(ies) at %s@." manifest.n_packages path
+        Oi.Say.field "manifest" "%d entry(ies) at %s" manifest.n_packages path
     | Error e -> Logs.warn (fun m -> m "manifest encode failed: %s" e));
     (* Ship the per-os audit slice so multi-host registry merges can
        union events. Sorted by event_id (ULID = monotonic) so the file is
        deterministic. *)
     if events <> [] then begin
       Oi.Audit.write_per_os ~fs ~output_dir:output ~os_key events;
-      Fmt.pr "  audit: %d event(s) at %s/audit.jsonl@." (List.length events)
+      Oi.Say.field "audit" "%d event(s) at %s/audit.jsonl" (List.length events)
         (output / os_key)
     end
   end

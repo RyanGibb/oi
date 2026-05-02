@@ -177,7 +177,7 @@ let cmd =
     let index_path =
       Layer_index.ensure_local ~sys ~fs ~clock:clk ~cache ~os_key
     in
-    (match Layer_index.ensure_remote ~sys ~fs ~cache ~os_key ~registry with
+    (match Layer_index.ensure_remote ~sys ~fs ~cache ~os_key ~registry () with
     | Some remote_path ->
         Layer_index.merge_remote_into_local ~index_path ~remote_path
     | None -> ());

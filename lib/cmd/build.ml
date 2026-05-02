@@ -92,7 +92,8 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       let padded = Fmt.str "%-*s" handle_width h in
       Fmt.str "%a" Oi.Style.info_string padded
   in
-  Fmt.pr "@.";
+  Oi.Say.newline ();
+  Oi.Say.header "Build summary";
   List.iter
     (fun (target, handle, r) ->
       if handle_width = 0 then
@@ -121,8 +122,10 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
           Fmt.pr "         %a %s@." Oi.Style.dim_string "↳ solver log:" log_path
       | _ -> ())
     rows;
-  Fmt.pr "@.%d ok, %d failed, %d depext-fail, %d skipped@." n_ok n_failed
-    n_depext n_skipped;
+  Oi.Say.newline ();
+  Fmt.pr "  %a %d  %a %d  %a %d  %a %d@." Oi.Style.ok_string "ok" n_ok
+    Oi.Style.error_string "failed" n_failed Oi.Style.warn_string "depext-fail"
+    n_depext Oi.Style.warn_string "skipped" n_skipped;
   (* Dump per-target build-failure output at debug level so `-v` still
      shows the reason, without dumping a compiler transcript by
      default. *)
@@ -388,10 +391,11 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
   end
   else begin
     let layer_hashes =
+      let on_phase msg = Oi.Say.step "%s" msg in
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~extra_repos:all_extras ~pins:url_project.pins ~refresh
         ~constraints:extra_constraints ?remote ?jobs ?toolchain
-        ?local_packages_dir:url_project.packages_dir names
+        ?local_packages_dir:url_project.packages_dir ~on_phase names
     in
     match
       find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes

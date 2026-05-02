@@ -46,7 +46,7 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
   end;
   index_path
 
-let ensure_remote ~sys ~fs ~cache ~os_key ~registry =
+let ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () =
   if registry = "" then None
   else
     let cache_root = Oi.Cache.root_s cache in
@@ -65,9 +65,36 @@ let ensure_remote ~sys ~fs ~cache ~os_key ~registry =
       let dst = Eio.Path.(fs / tmp_path) in
       Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / os_dir);
       (try Unix.unlink tmp_path with Unix.Unix_error _ -> ());
-      Logs.app (fun m ->
-          m "Fetching registry index from %s (this may take a moment)..." url);
-      if D10.Sysops.Http.fetch sys ~url ~dst then begin
+      (* Visible status goes through [on_phase] so [oi run] can wire it
+         into its preflight bar; otherwise it's a quiet [Logs.info]. The
+         previous [Logs.app] leaked the message to stderr unconditionally,
+         polluting [oi run]'s output. *)
+      (match on_phase with
+      | Some f -> f "Fetching registry index"
+      | None ->
+          Logs.info (fun m ->
+              m "Fetching registry index from %s (this may take a moment)..."
+                url));
+      let fmt_size n =
+        if Int64.compare n 1_048_576L >= 0 then
+          Fmt.str "%.1fMB" (Int64.to_float n /. 1_048_576.)
+        else if Int64.compare n 1024L >= 0 then
+          Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
+        else Fmt.str "%LdB" n
+      in
+      let on_progress =
+        Option.map
+          (fun f ~received ~total ->
+            match total with
+            | Some t when Int64.compare t 0L > 0 ->
+                f
+                  (Fmt.str "Fetching registry index (%s / %s)"
+                     (fmt_size received) (fmt_size t))
+            | _ ->
+                f (Fmt.str "Fetching registry index (%s)" (fmt_size received)))
+          on_phase
+      in
+      if D10.Sysops.Http.fetch ?on_progress sys ~url ~dst then begin
         (try Unix.rename tmp_path local_path
          with Unix.Unix_error _ -> (
            try Unix.unlink tmp_path with Unix.Unix_error _ -> ()));
@@ -100,10 +127,10 @@ let merge_remote_into_local ~index_path ~remote_path =
      try Sys.remove remote_path with Sys_error _ -> ()));
   D10.Index.close db
 
-let binary_to_package ~sys ~fs ~clock ~cache ~os_key ~registry name =
+let binary_to_package ?on_phase ~sys ~fs ~clock ~cache ~os_key ~registry name =
   let clk = (clock :> D10.Config.clk) in
   let index_path = ensure_local ~sys ~fs ~clock:clk ~cache ~os_key in
-  (match ensure_remote ~sys ~fs ~cache ~os_key ~registry with
+  (match ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () with
   | Some remote_path -> merge_remote_into_local ~index_path ~remote_path
   | None -> ());
   if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then None

@@ -37,14 +37,16 @@ let leaf_hash_for ~fs ~cache ~os_key ~want_name hashes =
 let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
     ~cache ~data_dir ~conf ~os_key ~extra_repos ~pins ?toolchain ?remote ~cwd ()
     =
-  let say fmt =
+  let say_step fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
-    else Fmt.kstr (fun s -> Fmt.pr "%s@." s) fmt
+    else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
+  in
+  let say_info fmt =
+    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
   in
   let warn_named name fmt =
-    Fmt.kstr
-      (fun s -> Fmt.epr "%a tool %s: %s@." Oi.Style.warn_string "WARN" name s)
-      fmt
+    Fmt.kstr (fun s -> Oi.Say.warn "tool %s: %s" name s) fmt
   in
   let install_named ~tool_name ~constraints =
     let name = OpamPackage.Name.of_string tool_name in
@@ -59,7 +61,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
           warn_named tool_name "layer for leaf package not found";
           None
       | Some h ->
-          say "Tool %s: %d dep(s) built, leaf layer %s" tool_name
+          say_info "tool %s: %d dep(s) built, leaf layer %s" tool_name
             (List.length hashes - 1)
             (short_hash h);
           Some h
@@ -90,7 +92,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
   let probed_hits = Oi.Project.Tool.(hits (probe ~fs cwd)) in
   match (toolchain_tools, probed_hits) with
   | [], [] ->
-      say "No dev tools to install";
+      say_info "no dev tools to install";
       None
   | _ -> (
       let from_toolchain =
@@ -111,8 +113,8 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
           let unique = List.sort_uniq String.compare leaves in
           D10.Prefix.assemble d10 ~layer_hashes:unique
             ~dst:Eio.Path.(fs / tools_dir);
-          say "Tools assembled at %s (%d tool(s), %d leaf layer(s))" tools_dir
-            (List.length leaves) (List.length unique);
+          say_step "Tools assembled at %s (%d tool(s), %d leaf layer(s))"
+            tools_dir (List.length leaves) (List.length unique);
           Some tools_dir)
 
 (* -- sync ---------------------------------------------------------------- *)
@@ -184,9 +186,18 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     ?(envrc_mode = `Detect) ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
     ~data_dir ~registry ~cwd () =
   let toolchain_override = toolchain in
-  let say fmt =
+  let say_step fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
-    else Fmt.kstr (fun s -> Fmt.pr "%s@." s) fmt
+    else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
+  in
+  let say_field label fmt =
+    if quiet then
+      Fmt.kstr (fun s -> Logs.info (fun m -> m "%s: %s" label s)) fmt
+    else Fmt.kstr (fun s -> Oi.Say.field label "%s" s) fmt
+  in
+  let say_info fmt =
+    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
   in
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
@@ -199,9 +210,10 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   let deps = project.deps in
   if deps = [] && extra_cli = [] && url_project.roots = [] then
     Oi.Error.config_error "No .opam files found in %s." cwd;
-  say "Dependencies from opam files: %s" (String.concat ", " deps);
+  say_step "Sync %s" cwd;
+  if deps <> [] then say_field "deps" "%s" (String.concat ", " deps);
   if url_project.roots <> [] then
-    say "URL-supplied packages: %s" (String.concat ", " url_project.roots);
+    say_field "with-deps" "%s" (String.concat ", " url_project.roots);
   let conf =
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
@@ -223,8 +235,7 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
       ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
   in
   if project_overlays <> [] then
-    say "Project overlays (from x-repos): %s"
-      (String.concat ", " project_overlays);
+    say_field "overlays" "%s" (String.concat ", " project_overlays);
   let with_repos = project_overlays @ with_repos in
   let all_extras =
     Target.merge_extras
@@ -232,7 +243,7 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
       ~project:(project.extra_repos @ url_project.extra_repos)
   in
   if all_extras <> [] then
-    say "Extra repositories: %s"
+    say_field "extra-repos" "%s"
       (String.concat ", "
          (List.map
             (fun (e : Oi.Project.extra_repo) -> Fmt.str "%s (%s)" e.name e.url)
@@ -258,11 +269,14 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
       | Some _ -> project.packages_dir
       | None -> url_project.packages_dir
     in
+    let on_phase msg =
+      if quiet then Logs.info (fun m -> m "%s" msg) else Oi.Say.step "%s" msg
+    in
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
       ~extra_repos:all_extras
       ~pins:(project.pins @ url_project.pins)
       ~refresh ~constraints:extra_constraints ~project_root:cwd ?remote ?jobs
-      ?toolchain ?local_packages_dir names
+      ?toolchain ?local_packages_dir ~on_phase names
   in
   let oi_dir = cwd / "_oi" in
   let prefix = oi_dir / "prefix" in
@@ -285,12 +299,14 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     in
     (try Eio.Path.unlink envrc_path with Eio.Exn.Io _ -> ());
     Eio.Path.save ~create:(`Exclusive 0o644) envrc_path envrc;
-    say "Wrote .envrc (run 'direnv allow' to activate)"
+    say_step "Wrote .envrc";
+    say_info "run 'direnv allow' to activate"
   end
   else
     Logs.info (fun m ->
         m "Skipping .envrc (--envrc=%a)" pp_envrc_mode envrc_mode);
-  say "Prefix assembled at %s (%d packages)" prefix (List.length layer_hashes);
+  say_step "Prefix assembled at %s (%d packages)" prefix
+    (List.length layer_hashes);
   (prefix, toolchain)
 
 (* True if [cwd]/_oi/prefix is missing, or any *.opam in [cwd] has been

@@ -178,8 +178,10 @@ module OS = struct
   let detect_macos ~fs ~proc_mgr =
     let brew_paths =
       [
-        "/opt/homebrew/bin/brew";  (* Apple Silicon default *)
-        "/usr/local/bin/brew";     (* Intel default *)
+        "/opt/homebrew/bin/brew";
+        (* Apple Silicon default *)
+        "/usr/local/bin/brew";
+        (* Intel default *)
       ]
     in
     let port_paths = [ "/opt/local/bin/port" ] in

@@ -121,8 +121,8 @@ let create ?stdout ?stderr ~proc_mgr ~fs ~net ~clock () =
     {
       proc_mgr :> pm;
       fs;
-      net = (net :> net);
-      clock = (clock :> clk);
+      net :> net;
+      clock :> clk;
       stdout;
       stderr;
       tools = { tar = "tar" };
@@ -205,6 +205,37 @@ module Tar = struct
 end
 
 module Http = struct
+  (* Stream [src] into [sink] while invoking [on_progress] with the
+     running byte count. Throttles callbacks to ~20Hz so a fast
+     download doesn't spam the renderer (each [Tty.Progress.set] is
+     a synchronous ANSI write that's expensive on slow terminals).
+     The final tick fires unconditionally so the bar always settles
+     at 100% / total. *)
+  let copy_with_progress ?on_progress ?total src sink =
+    match on_progress with
+    | None -> Eio.Flow.copy src sink
+    | Some on_progress ->
+        let buf = Cstruct.create 65536 in
+        let received = ref 0L in
+        let last_tick = ref 0.0 in
+        let throttle_s = 0.05 in
+        let maybe_tick () =
+          let now = Unix.gettimeofday () in
+          if now -. !last_tick >= throttle_s then begin
+            last_tick := now;
+            on_progress ~received:!received ~total
+          end
+        in
+        (try
+           while true do
+             let n = Eio.Flow.single_read src buf in
+             Eio.Flow.write sink [ Cstruct.sub buf 0 n ];
+             received := Int64.add !received (Int64.of_int n);
+             maybe_tick ()
+           done
+         with End_of_file -> ());
+        on_progress ~received:!received ~total
+
   (* In-process HTTP fetch via the [requests] library. Behaviour:
 
      - silent: no progress output to stdout/stderr
@@ -216,21 +247,27 @@ module Http = struct
      Returns [true] on a 2xx response with the body fully written to
      [dst]; [false] on any error (4xx/5xx, network failure, TLS error,
      timeout). Never raises — callers use the [if not (fetch …) then …]
-     pattern. *)
-  let fetch t ~url ~dst =
+     pattern.
+
+     [on_progress], when supplied, is called periodically with
+     [(received, total)] where [total = Some n] when the response carries
+     a [Content-Length] header and [None] otherwise (chunked transfer).
+     Throttled to ~20Hz inside [copy_with_progress] so terminal redraws
+     don't dominate the wall-clock cost on a fast LAN. *)
+  let fetch ?on_progress t ~url ~dst =
     Eio.Switch.run @@ fun sw ->
     try
-      let resp =
-        Requests.One.get ~sw ~clock:t.clock ~net:t.net url
-      in
+      let resp = Requests.One.get ~sw ~clock:t.clock ~net:t.net url in
       if not (Requests.Response.ok resp) then begin
         Log.debug (fun m ->
             m "http %s: status %d" url (Requests.Response.status_code resp));
         false
       end
       else begin
+        let total = Requests.Response.content_length resp in
+        let body = Requests.Response.body resp in
         Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
-            Eio.Flow.copy (Requests.Response.body resp) out);
+            copy_with_progress ?on_progress ?total body out);
         true
       end
     with exn ->

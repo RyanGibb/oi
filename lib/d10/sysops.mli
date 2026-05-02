@@ -23,10 +23,10 @@ val create :
   unit ->
   t
 (** [create ?stdout ?stderr ~proc_mgr ~fs ~net ~clock ()] detects tool paths
-    (tar variant) by probing the system via [which]. Pass the parent's
-    [stdout] and [stderr] to enable {!Cmd.run_inherit}, which streams
-    subprocess output to the user's terminal. [net] and [clock] are needed
-    by {!Http.fetch} for in-process HTTP downloads. Call once at startup. *)
+    (tar variant) by probing the system via [which]. Pass the parent's [stdout]
+    and [stderr] to enable {!Cmd.run_inherit}, which streams subprocess output
+    to the user's terminal. [net] and [clock] are needed by {!Http.fetch} for
+    in-process HTTP downloads. Call once at startup. *)
 
 (** {1 File queries} *)
 
@@ -57,12 +57,23 @@ module Tar : sig
 end
 
 module Http : sig
-  val fetch : t -> url:string -> dst:_ Eio.Path.t -> bool
+  val fetch :
+    ?on_progress:(received:int64 -> total:int64 option -> unit) ->
+    t ->
+    url:string ->
+    dst:_ Eio.Path.t ->
+    bool
   (** [fetch t ~url ~dst] downloads [url] to [dst] via the in-process HTTP
       client (the [requests] library). Follows redirects, requires a 2xx
-      response, writes nothing on failure. Returns [true] on success,
-      [false] on any error (HTTP 4xx/5xx, network failure, TLS handshake
-      error, timeout). Never raises. *)
+      response, writes nothing on failure. Returns [true] on success, [false] on
+      any error (HTTP 4xx/5xx, network failure, TLS handshake error, timeout).
+      Never raises.
+
+      [on_progress] is invoked periodically (throttled to ~20Hz) with the
+      running byte count. [total] is [Some n] when the server sent a
+      [Content-Length] header, [None] for chunked-transfer responses where the
+      size isn't known up front. The final invocation always fires with the
+      final byte count so a UI bar can settle at 100%. *)
 end
 
 (** {1 Low-level command execution} *)

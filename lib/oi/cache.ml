@@ -88,44 +88,28 @@ type item = {
 let cleanable_items t ~data_dir =
   let p sub = Eio.Path.(t.fs / t.root / sub) in
   let d sub = Eio.Path.(t.fs / data_dir / sub) in
+  let item label path description = { label; path; description } in
   [
-    {
-      label = "sources";
-      path = p "sources";
-      description = "Downloaded source tarballs";
-    };
-    {
-      label = "layers";
-      path = p "layers";
-      description = "Binary layer cache (day10 format)";
-    };
-    { label = "runs"; path = p "runs"; description = "Cached script builds" };
-    {
-      label = "prefixes";
-      path = p "prefixes";
-      description = "Assembled prefix cache (hardlinks)";
-    };
-    { label = "dune"; path = p "dune"; description = "Dune shared build cache" };
-    { label = "repos"; path = d "repos"; description = "Cloned repositories" };
-    {
-      label = "opam-root";
-      path = d "opam-root";
-      description = "Opam scaffolding (regenerated on demand)";
-    };
-    {
-      label = "pins";
-      path = p "pins";
-      description = "Pin-depends sources and synthesized packages trees";
-    };
-    {
-      (* Resolved via [toolchains_root] rather than [p "toolchains"]
-         because the toolchain path is XDG-derived independently of
-         [OI_CACHE_DIR], and we want clean to nuke what's actually on
-         disk regardless of any env mismatch. *)
-      label = "toolchains";
-      path = Eio.Path.(t.fs / toolchains_root ());
-      description = "Built compiler toolchains (oxcaml, etc.)";
-    };
+    item "sources" (p "sources") "Downloaded source tarballs";
+    item "mirror" (p "mirror") "Content-addressed source mirror";
+    item "layers" (p "layers") "Binary layer cache (day10 format)";
+    item "build" (p "build") "Build state: prefix, _build/, logs, audit log";
+    item "prefixes" (p "prefixes") "Assembled prefix cache (hardlinks)";
+    item "pins" (p "pins") "Pin-depends sources and synthesized packages trees";
+    item "solve-cache" (p "solve-cache")
+      "Solver memoisation (regenerated on demand)";
+    item "runs" (p "runs") "Cached script builds";
+    item "run-cache" (p "run-cache") "Fast-exec cache for [oi run]";
+    item "dune" (p "dune") "Dune shared build cache";
+    item "repos" (d "repos") "Cloned repositories";
+    item "opam-root" (d "opam-root") "Opam scaffolding (regenerated on demand)";
+    (* The toolchain path is XDG-derived independently of [OI_CACHE_DIR],
+       so we resolve it via [toolchains_root] rather than [p "toolchains"]
+       — clean should nuke what's actually on disk regardless of any env
+       mismatch. *)
+    item "toolchains"
+      Eio.Path.(t.fs / toolchains_root ())
+      "Built compiler toolchains (oxcaml, etc.)";
   ]
 
 let size ~sys path =

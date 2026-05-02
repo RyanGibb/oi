@@ -41,8 +41,8 @@ let emit_project ~cmd ~suffix ~tag_label ~generator ~cwd_s ~distro ~output =
   in
   let df = Registry_docker.dockerfile_project ~cmd ~generator distro in
   Registry_docker.write_dockerfile path df;
-  Fmt.pr "Wrote %s@.Build with: docker build -t %s -f %s %s@." path tag_label
-    path cwd_s
+  Oi.Say.step "Wrote %s" path;
+  Oi.Say.info "build with: docker build -t %s -f %s %s" tag_label path cwd_s
 
 (* Multi-distro registry build project: one [Dockerfile.<distro>] per
    target distribution, plus [Dockerfile.oi] (static oi builder) and
@@ -54,7 +54,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
   let df_oi = Registry_docker.dockerfile_oi ~src_context in
   let oi_path = output / "Dockerfile.oi" in
   Registry_docker.write_dockerfile oi_path df_oi;
-  Fmt.pr "Computing overlay depexts for %d distros...@."
+  Oi.Say.step "Computing overlay depexts for %d distros"
     (List.length default_distros);
   let per_distro_depexts =
     try
@@ -81,19 +81,23 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
       ~registry_host_path:"./registry" ()
   in
   Registry_docker.write_file compose_path compose_yaml;
-  Fmt.pr "Wrote:@.";
-  Fmt.pr "  %s@." oi_path;
+  Oi.Say.step "Wrote";
+  Oi.Say.info "%s" oi_path;
   List.iter
     (fun (_, path, n) ->
-      if n = 0 then Fmt.pr "  %s@." path
-      else Fmt.pr "  %s  (%d overlay depexts)@." path n)
+      if n = 0 then Oi.Say.info "%s" path
+      else
+        Oi.Say.info "%s  %a" path Oi.Style.dim_string
+          (Fmt.str "(%d overlay depexts)" n))
     per_distro_paths;
-  Fmt.pr "  %s@.@." compose_path;
-  Fmt.pr "Static oi release binary:@.";
-  Fmt.pr "  docker buildx build -f %s --output type=local,dest=./oi-bin .@."
+  Oi.Say.info "%s" compose_path;
+  Oi.Say.newline ();
+  Oi.Say.step "Static oi release binary";
+  Oi.Say.info "docker buildx build -f %s --output type=local,dest=./oi-bin ."
     oi_path;
-  Fmt.pr "Run the build + export:@.";
-  Fmt.pr "  docker compose up --build   # writes ./registry/<os_key>/@."
+  Oi.Say.step "Run the build + export";
+  Oi.Say.info "docker compose up --build   %a" Oi.Style.dim_string
+    "# writes ./registry/<os_key>/"
 
 let cmd =
   let run () data_dir cache_dir refresh test_mode all distro src_context output

@@ -168,8 +168,15 @@ let fetch_parallelism ?jobs () =
           match int_of_string_opt s with Some n when n > 0 -> n | _ -> 4)
       | None -> min (Domain.recommended_domain_count ()) 4)
 
-let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
-    =
+let fmt_mb n =
+  if Int64.compare n 1_048_576L >= 0 then
+    Fmt.str "%.1fMB" (Int64.to_float n /. 1_048_576.)
+  else if Int64.compare n 1024L >= 0 then
+    Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
+  else Fmt.str "%LdB" n
+
+let fetch_remote_layers ?on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
+    build_plan =
   match remote with
   | None -> build_plan
   | Some r ->
@@ -194,10 +201,42 @@ let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
           build_plan
         end
         else begin
+          let n_total = List.length available in
           Logs.info (fun m ->
-              m "Fetching %d layer(s) from registry (%d needed)..."
-                (List.length available)
+              m "Fetching %d layer(s) from registry (%d needed)..." n_total
                 (List.length source_hashes));
+          (* Aggregate parallel fiber progress into one status line.
+             [done_count] increments on each successful pull;
+             [bytes_total] accumulates received bytes across all
+             in-flight fibers. We're under [Eio.Fiber.List.iter] which
+             on the default [Eio_posix] backend uses fibers (cooperative,
+             no preemption between yield points), so a plain ref is
+             safe — no mutex needed. *)
+          let done_count = ref 0 in
+          let bytes_total = ref 0L in
+          let last_emit = ref 0.0 in
+          let throttle_s = 0.05 in
+          let emit () =
+            match on_phase with
+            | None -> ()
+            | Some f ->
+                let now = Unix.gettimeofday () in
+                if now -. !last_emit >= throttle_s then begin
+                  last_emit := now;
+                  f
+                    (Fmt.str "Fetching layers from registry (%d/%d, %s)"
+                       !done_count n_total (fmt_mb !bytes_total))
+                end
+          in
+          (* Per-fiber received counter so we don't double-count when
+             retries / chunked downloads call [on_progress] cumulatively
+             within one fiber. *)
+          let fiber_progress hash_ref ~received ~total:_ =
+            let prev = !hash_ref in
+            hash_ref := received;
+            bytes_total := Int64.add !bytes_total (Int64.sub received prev);
+            emit ()
+          in
           Eio.Fiber.List.iter
             ~max_fibers:(fetch_parallelism ?jobs ())
             (fun hash ->
@@ -206,9 +245,24 @@ let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
                   (fun (e : D10.Layer.index_entry) -> e.sha256)
                   (Hashtbl.find_opt index hash)
               in
-              if D10.Layer.pull_remote d10 ~remote:r ~hash ?sha256 () then
-                Logs.info (fun m -> m "Fetched %s from registry" hash))
+              let received_ref = ref 0L in
+              let on_progress = fiber_progress received_ref in
+              if
+                D10.Layer.pull_remote d10 ~remote:r ~hash ~on_progress ?sha256
+                  ()
+              then begin
+                incr done_count;
+                emit ();
+                Logs.info (fun m -> m "Fetched %s from registry" hash)
+              end)
             available;
+          (* Final line — guaranteed past the throttle window. *)
+          (match on_phase with
+          | None -> ()
+          | Some f ->
+              f
+                (Fmt.str "Fetched %d/%d layers from registry (%s)" !done_count
+                   n_total (fmt_mb !bytes_total)));
           Plan.build ctx ~d10 ~packages_dirs pkgs
         end
       end
@@ -218,7 +272,13 @@ let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
 let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
     ?remote ?jobs ?toolchain ?(constraints = OpamPackage.Name.Map.empty)
-    ?project_root ?local_packages_dir names =
+    ?project_root ?local_packages_dir ?on_phase ?preflight_done names =
+  let _ = preflight_done in
+  let on_phase =
+    match on_phase with
+    | Some f -> f
+    | None -> fun s -> Logs.info (fun m -> m "%s" s)
+  in
   let extra_pkg_dirs =
     Source.Repo.ensure_extra ~fs ~data_dir ~refresh extra_repos
   in
@@ -275,19 +335,33 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
                 m "layer cache entry stale (layers missing), falling through");
             None)
   in
+  let fire_preflight_done () =
+    match preflight_done with Some f -> f () | None -> ()
+  in
   match fast_hashes with
   | Some hashes ->
       Logs.info (fun m ->
           m "layer cache hit %s (%d layers), skipping solve"
             (String.sub (Stdlib.Option.get layer_cache_key) 0 12)
             (List.length hashes));
+      fire_preflight_done ();
       hashes
   | None ->
+      (* Phase narration funneled through [on_phase] so the caller picks
+         the visual: [oi run] feeds into a TTY-only spinner that clears
+         on exit; [oi sync] / [oi build] feeds into [Say.step] for a
+         visible audit trail. *)
+      on_phase
+        (Fmt.str "Building solver context (%d package dirs)"
+           (List.length packages_dirs));
       let build_prefix = cache_root / "build" / "prefix" in
       let ctx =
         Solver.Ctx.create ~prefix:build_prefix ~packages_dirs ~conf
           ?toolchain:toolchain_ctx ()
       in
+      on_phase
+        (Fmt.str "Solving for %d root%s" (List.length names)
+           (if List.length names = 1 then "" else "s"));
       let pkgs =
         match
           Solver.solve ~fs ~cache_root ctx ~packages_dirs ~constraints names
@@ -295,6 +369,9 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         | Ok pkgs -> pkgs
         | Error msg -> Error.no_solution msg
       in
+      on_phase
+        (Fmt.str "Planning %d package%s" (List.length pkgs)
+           (if List.length pkgs = 1 then "" else "s"));
       let build_plan = Plan.build ctx ~d10 ~packages_dirs pkgs in
       if dry_run then begin
         let remote_has =
@@ -308,8 +385,12 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         exit 0
       end;
       let build_plan =
-        fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
-          build_plan
+        match remote with
+        | None -> build_plan
+        | Some _ ->
+            on_phase "Checking registry for prebuilt layers";
+            fetch_remote_layers ~on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx
+              ~pkgs build_plan
       in
       let hashes = Plan.layer_hashes build_plan in
       (* Every layer in the plan must be cached (Binary method) to skip
@@ -327,6 +408,10 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         | None -> ()
         | Some k -> Solver.Cache.store_layers ~fs ~cache_root ~key:k hashes
       in
+      (* Hand off to the caller: the preflight bar (if any) clears here,
+         either because we're about to skip Execute.run (all-cached) or
+         because Execute.run is about to open its own progress bar. *)
+      fire_preflight_done ();
       if all_layers_cached then begin
         Logs.info (fun m -> m "Layers cached, skipping build");
         persist_layer_cache ();
@@ -347,8 +432,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         in
         Log.info (fun m ->
             m
-              "depext check: %d source pkg(s); platform os=%s os-distribution=%s \
-               os-family=%s"
+              "depext check: %d source pkg(s); platform os=%s \
+               os-distribution=%s os-family=%s"
               (List.length source_pkgs) conf.os conf.os_distribution
               conf.os_family);
         if source_pkgs <> [] then begin
@@ -370,13 +455,11 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
              we emit a one-liner so the user isn't blindsided by a
              low-level [./configure] failure with no prior warning. *)
           if OpamSysPkg.Set.is_empty all && conf.os = "macos" then
-            Fmt.epr
-              "%a no system depexts matched for %d source package(s) on \
-               macOS. If the build fails with missing headers (gmp.h, \
-               openssl/ssl.h, …), install them with %a.@."
-              Style.warn_string "note:"
-              (List.length source_pkgs)
-              Style.accent_string "brew install <pkg>";
+            Say.warn
+              "no system depexts matched for %d source package(s) on macOS. If \
+               the build fails with missing headers (gmp.h, openssl/ssl.h, …), \
+               install them with: brew install <pkg>"
+              (List.length source_pkgs);
           if not (OpamSysPkg.Set.is_empty all) then (
             let st = Depexts.status all in
             Log.info (fun m ->
@@ -384,30 +467,19 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
                   (OpamSysPkg.Set.cardinal st.installed)
                   (OpamSysPkg.Set.cardinal st.missing)
                   (OpamSysPkg.Set.cardinal st.not_found));
-            if not (OpamSysPkg.Set.is_empty st.missing) then begin
-              Fmt.epr
-                "%a system packages are not installed. The build may fail at \
-                 compile time. Install them with:@.  %s@."
-                Style.warn_string "warning:"
+            if not (OpamSysPkg.Set.is_empty st.missing) then
+              Say.warn
+                "system packages are not installed. The build may fail at \
+                 compile time. Install them with: %s"
                 (st.missing |> OpamSysPkg.Set.elements
                 |> List.map OpamSysPkg.to_string
-                |> String.concat " ")
-            end;
+                |> String.concat " ");
             if not (OpamSysPkg.Set.is_empty st.not_found) then
-              Fmt.epr
-                "%a system packages are not known to the host package manager: \
-                 %s@."
-                Style.warn_string "warning:"
+              Say.warn
+                "system packages are not known to the host package manager: %s"
                 (st.not_found |> OpamSysPkg.Set.elements
                 |> List.map OpamSysPkg.to_string
-                |> String.concat ", "));
-          (* Force the warnings out to the terminal *before* Plan.resolve
-             takes a few seconds and the Execute.run progress bar takes
-             over the cursor. Format's [@.] does flush, but we belt-and-
-             braces it here because [Ui] uses ANSI cursor moves that have
-             been observed to interleave oddly with buffered stderr in
-             some macOS terminals. *)
-          (try Stdlib.flush stderr with _ -> ())
+                |> String.concat ", "))
         end;
         let exec_plan =
           Plan.resolve ctx ~packages_dirs ~cache_root ~os_key

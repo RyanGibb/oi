@@ -111,6 +111,7 @@ val cache_urls :
     registry, also the registry's [sources/] subtree. *)
 
 val fetch_remote_layers :
+  ?on_phase:(string -> unit) ->
   ?jobs:int ->
   remote:D10.Layer.remote option ->
   d10:D10.Config.t ->
@@ -121,7 +122,11 @@ val fetch_remote_layers :
   Plan.graph
 (** Try fetching uncached [Source] layers from [remote]. Returns a new plan
     graph with downloaded layers promoted to [Binary]. No-op when
-    [remote = None] or every layer is already cached. *)
+    [remote = None] or every layer is already cached.
+
+    [on_phase] receives aggregated status across the parallel fiber pool — both
+    completed-layer counts and cumulative bytes received. Throttled to ~20Hz
+    internally; safe to wire into a [Tty.Progress] sink. *)
 
 val build :
   sys:D10.Sysops.t ->
@@ -142,6 +147,8 @@ val build :
   ?constraints:OpamFormula.version_constraint OpamTypes.name_map ->
   ?project_root:string ->
   ?local_packages_dir:string ->
+  ?on_phase:(string -> unit) ->
+  ?preflight_done:(unit -> unit) ->
   OpamPackage.Name.t list ->
   string list
 (** [build] solves for [names], ensures every needed layer exists (building from
@@ -151,6 +158,17 @@ val build :
     [project_root] is the directory that holds the project's [_oi/] tree; when
     supplied, every pin's URL is sha-pinned via [_oi/oi.lock] before fetch. The
     lock is transient build state, regenerated as needed.
+
+    [on_phase] is invoked once per slow preflight step ("Building solver
+    context", "Solving for N roots", "Planning M packages", "Checking
+    registry"). [oi sync] / [oi build] route this to [Say.step] for visible
+    narration; [oi run] routes it to a TTY spinner that auto-clears. Defaults to
+    a [Logs.info] dispatcher.
+
+    [preflight_done] is called exactly once just before the build phase starts
+    (i.e. before [Execute.run] takes over the cursor) — the cue for callers to
+    clear their own preflight progress bar so it doesn't fight the per-package
+    build bar.
 
     When [dry_run] is [true] the function prints the build plan and calls
     [Stdlib.exit 0] — same behaviour as [oi show]. *)

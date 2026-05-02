@@ -19,7 +19,7 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
   let layers_root = Oi.Cache.root_s cache / "layers" / os_key in
   let index_path = Layer_index.ensure_local ~sys ~fs ~clock ~cache ~os_key in
   if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then begin
-    Fmt.pr "No layer index for %s; nothing to do.@." os_key;
+    Oi.Say.info "no layer index for %s; nothing to do" os_key;
     0
   end
   else begin
@@ -35,7 +35,7 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
           |> List.map (fun (n, v, h, _) -> (n, v, h))
     in
     if direct = [] then begin
-      Fmt.pr "No cached layers found for %s.@." target;
+      Oi.Say.info "no cached layers found for %s" target;
       D10.Index.close db;
       0
     end
@@ -51,24 +51,23 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
       let dependents = close [] direct_hashes in
       let all_hashes = direct_hashes @ dependents in
       let verb = if dry_run then "Would remove" else "Removing" in
-      Fmt.pr "@[<v>%s %d layer(s) for %s:@," verb (List.length direct) target;
-      List.iter (fun (n, v, h) -> Fmt.pr "  %s.%s  %s@," n v (short h)) direct;
+      let dim s = Fmt.str "%a" Oi.Style.dim_string s in
+      Oi.Say.step "%s %d layer(s) for %s" verb (List.length direct) target;
+      List.iter
+        (fun (n, v, h) -> Oi.Say.info "%s.%s  %s" n v (dim (short h)))
+        direct;
       if dependents <> [] then begin
-        Fmt.pr "%s %d dependent layer(s):@," verb (List.length dependents);
-        List.iter (fun h -> Fmt.pr "  %s@," (short h)) dependents
+        Oi.Say.step "%s %d dependent layer(s)" verb (List.length dependents);
+        List.iter (fun h -> Oi.Say.info "%s" (dim (short h))) dependents
       end;
-      Fmt.pr "@]@.";
       if not dry_run then begin
         List.iter
           (fun h ->
-            let dir = layers_root / h in
-            Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / dir))
+            Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / layers_root / h))
           all_hashes;
         D10.Index.delete_layers db ~hashes:all_hashes;
-        Fmt.pr
-          "Removed %d layer(s). Run 'oi build' to rebuild what you still \
-           need.@."
-          (List.length all_hashes)
+        Oi.Say.ok "removed %d layer(s)" (List.length all_hashes);
+        Oi.Say.info "run 'oi build' to rebuild what you still need"
       end;
       D10.Index.close db;
       List.length all_hashes
@@ -79,22 +78,22 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
 
 let cmd =
   let run () cache_dir data_dir all toolchains sources binaries dune_cache repos
-      opam_root dry_run target =
+      opam_root pins dry_run target =
     Harness.run @@ fun env ->
     let { Harness.fs; clock; sys; os_key; cache; _ } =
       Harness.bootstrap env cache_dir
     in
     let bulk_flags =
       all || toolchains || sources || binaries || dune_cache || repos
-      || opam_root
+      || opam_root || pins
     in
     match target with
     | Some t ->
         if bulk_flags then begin
-          Fmt.epr
-            "oi clean: PKG positional cannot be combined with --all / \
-             --toolchains / --sources / --layers / --dune / --repos / \
-             --opam-root.@.";
+          Oi.Say.error
+            "PKG positional cannot be combined with bulk flags (--all, \
+             --toolchains, --sources, --layers, --dune, --repos, --opam-root, \
+             --pins)";
           exit 1
         end
         else
@@ -135,37 +134,49 @@ let cmd =
               rows
           in
           Tty.Table.pp Fmt.stdout table;
-          Fmt.pr "@.Use --all to clean everything, or select specific items.@."
+          Oi.Say.newline ();
+          Oi.Say.info "use --all to clean everything, or select specific items"
         end
         else begin
           let items = Oi.Cache.cleanable_items cache ~data_dir in
-          let find_item label =
-            List.find_opt (fun (i : Oi.Cache.item) -> i.label = label) items
+          let rm_item (item : Oi.Cache.item) =
+            if Eio.Path.is_directory item.path || Eio.Path.is_file item.path
+            then begin
+              let sz = Oi.Cache.size ~sys item.path in
+              if dry_run then
+                Oi.Say.info "would remove %s (%a) %s" item.label
+                  Oi.Cache.pp_size sz
+                  (Eio.Path.native_exn item.path)
+              else begin
+                Eio.Path.rmtree ~missing_ok:true item.path;
+                Oi.Say.ok "removed %s (%a)" item.label Oi.Cache.pp_size sz
+              end
+            end
           in
-          let rm label =
-            match find_item label with
-            | None -> ()
-            | Some item ->
-                if Eio.Path.is_directory item.path || Eio.Path.is_file item.path
-                then begin
-                  let sz = Oi.Cache.size ~sys item.path in
-                  if dry_run then
-                    Fmt.pr "Would remove %s (%a) %s@." label Oi.Cache.pp_size sz
-                      (Eio.Path.native_exn item.path)
-                  else begin
-                    Eio.Path.rmtree ~missing_ok:true item.path;
-                    Fmt.pr "Removed %s (%a)@." label Oi.Cache.pp_size sz
-                  end
-                end
+          (* [--all] sweeps everything in [cleanable_items], so adding
+             a new category there picks it up automatically. Per-flag
+             groups bundle related caches: [--layers] for instance also
+             clears the solve cache, run-cache, build state and
+             prefixes, since all of them index off layer hashes that
+             just got dropped. *)
+          let want_label = function
+            | _ when all -> true
+            | "toolchains" -> toolchains
+            | "sources" | "mirror" -> sources
+            | "layers" | "runs" | "run-cache" | "solve-cache" | "build"
+            | "prefixes" ->
+                binaries
+            | "dune" -> dune_cache
+            | "repos" -> repos
+            | "opam-root" -> opam_root
+            | "pins" -> pins
+            | _ -> false
           in
-          if all || toolchains then rm "toolchains";
-          if all || sources then rm "sources";
-          if all || binaries then rm "layers";
-          if all || binaries then rm "runs";
-          if all || dune_cache then rm "dune";
-          if all || repos then rm "repos";
-          if all || opam_root then rm "opam-root";
-          Fmt.pr "Done.@."
+          List.iter
+            (fun (item : Oi.Cache.item) ->
+              if want_label item.label then rm_item item)
+            items;
+          Oi.Say.step "Done"
         end
   in
   let all =
@@ -201,6 +212,12 @@ let cmd =
             "Opam scaffolding under $(b,\\$OI_DATA_DIR/opam-root/). \
              Regenerated on demand."
           [ "opam-root" ])
+  in
+  let pins =
+    Arg.(
+      value & flag
+      & info ~doc:"Pin-depends sources and synthesized packages trees."
+          [ "pins" ])
   in
   let dry_run =
     Arg.(
@@ -240,5 +257,5 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.cache_dir $ Terms.data_dir $ all
-      $ toolchains $ sources $ binaries $ dune_cache $ repos $ opam_root
+      $ toolchains $ sources $ binaries $ dune_cache $ repos $ opam_root $ pins
       $ dry_run $ target)

@@ -230,6 +230,67 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
        can include them and suggest the right [oi run --with=…]
        invocation. *)
   let unfound_bins = ref [] in
+  (* TTY-only preflight spinner wrapper around [Pipeline.build].
+     Renders a single-line animated braille spinner with a status
+     message that updates at each preflight phase boundary (and at
+     ~20Hz during [fetch_remote_layers]'s byte counter). The line is
+     wiped clean by [preflight_done] before [Execute.run] takes over
+     with its own progress bar.
+
+     We don't use [Tty.Progress] here because preflight phases don't
+     have a meaningful numeric progress fraction — the bar would just
+     show [0/1] forever, which is visual noise. A spinner says "I'm
+     alive, here's what I'm doing" without pretending to know how
+     close to done we are.
+
+     On non-TTY, [enabled=false] makes everything a no-op so
+     [oi run]'s contract of "stdout is for the executed binary, not
+     oi narration" holds. *)
+  let with_preflight_bar f =
+    Eio.Switch.run @@ fun sw ->
+    let enabled = Tty.is_tty () in
+    let stopped = ref false in
+    let msg = ref "Preparing" in
+    let frames = [| "⠋"; "⠙"; "⠹"; "⠸"; "⠼"; "⠴"; "⠦"; "⠧"; "⠇"; "⠏" |] in
+    let frame = ref 0 in
+    (* Erase the current line and redraw spinner+message in place.
+       [\r] returns to column 0; [\027[K] erases to end-of-line. The
+       trailing [%!] flushes the formatter so the line shows up
+       immediately rather than at the OS buffer's discretion. *)
+    let render () =
+      if enabled && not !stopped then
+        Fmt.pr "\r\027[K%a %s%!" Oi.Style.accent_string
+          frames.(!frame mod Array.length frames)
+          !msg
+    in
+    let clear_line () = if enabled then Fmt.pr "\r\027[K%!" in
+    Eio.Fiber.fork_daemon ~sw (fun () ->
+        let rec loop () =
+          Eio.Time.sleep clock 0.1;
+          if !stopped then `Stop_daemon
+          else begin
+            incr frame;
+            render ();
+            loop ()
+          end
+        in
+        loop ());
+    let on_phase m =
+      if not !stopped then begin
+        msg := m;
+        render ()
+      end
+    in
+    let preflight_done () =
+      stopped := true;
+      clear_line ()
+    in
+    Fun.protect
+      ~finally:(fun () ->
+        stopped := true;
+        clear_line ())
+      (fun () -> f ~on_phase ~preflight_done)
+  in
   (* Solve [pkg_names], assemble the consumer prefix, exec
        [bin/<binary_name>] if it exists; falls back to looking under a
        non-relocatable toolchain's fixed prefix before giving up.
@@ -245,10 +306,11 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
            ~toolchain
     in
     let layer_hashes =
+      with_preflight_bar @@ fun ~on_phase ~preflight_done ->
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh ?remote
         ?jobs ?toolchain ~constraints:extra_constraints ?local_packages_dir
-        names
+        ~on_phase ~preflight_done names
     in
     Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
     let prefix =
@@ -350,10 +412,11 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
     let layer_hashes =
       if dep_opam_names = [] then []
       else
+        with_preflight_bar @@ fun ~on_phase ~preflight_done ->
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
-          ?remote ?jobs ?toolchain ~constraints ?local_packages_dir
-          dep_opam_names
+          ?remote ?jobs ?toolchain ~constraints ?local_packages_dir ~on_phase
+          ~preflight_done dep_opam_names
     in
     if dry_run && dep_opam_names = [] then
       (* No deps to solve, but still in dry-run mode — just exit *)
@@ -486,11 +549,20 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
            overlay (when present) through [@handle/pkg] so the
            overlay is added to [with_repos], then re-solve. *)
       let clk = (Eio.Stdenv.clock env :> D10.Config.clk) in
+      (* Open a TTY-only spinner around the index lookup so the multi-
+         second registry fetch isn't a silent freeze on cold caches.
+         The bar auto-clears when the lookup returns. *)
       let from_index =
-        match
-          Layer_index.binary_to_package ~sys ~fs ~clock:clk ~cache ~os_key
-            ~registry binary_name
-        with
+        with_preflight_bar @@ fun ~on_phase ~preflight_done ->
+        let r =
+          Layer_index.binary_to_package ~on_phase ~sys ~fs ~clock:clk ~cache
+            ~os_key ~registry binary_name
+        in
+        preflight_done ();
+        r
+      in
+      let from_index =
+        match from_index with
         | Some (pkg_name, _) when pkg_name <> binary_name ->
             (* Layer index says [bin/<binary_name>] is shipped by
                  [pkg_name] (and optionally an overlay handle).

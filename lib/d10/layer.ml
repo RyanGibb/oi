@@ -214,7 +214,7 @@ let fetch_remote_index (c : Config.t) ~remote =
 
 (* -- Remote pull --------------------------------------------------------- *)
 
-let pull_remote (c : Config.t) ~remote ~hash ?sha256 () =
+let pull_remote (c : Config.t) ~remote ~hash ?on_progress ?sha256 () =
   if succeeded c ~hash then true
   else begin
     let url =
@@ -226,7 +226,7 @@ let pull_remote (c : Config.t) ~remote ~hash ?sha256 () =
     let layer_dir = dir c ~hash in
     let tmp_file = Eio.Path.(os_layer_dir / (hash ^ ".tar.zst.tmp")) in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
-    let ok = Sysops.Http.fetch c.sys ~url ~dst:tmp_file in
+    let ok = Sysops.Http.fetch ?on_progress c.sys ~url ~dst:tmp_file in
     let cleanup_tmp () = try Eio.Path.unlink tmp_file with _ -> () in
     if ok then begin
       (* Verify sha256 if provided *)
