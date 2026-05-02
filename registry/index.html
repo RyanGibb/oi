@@ -427,8 +427,25 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
   letter-spacing: 0.04em;
 }
 .group-header .group-count { color: var(--fg-dim); margin-left: 0.4rem; font-weight: normal; }
-.overlay-tag { color: var(--accent); font-size: 0.72rem; }
-.overlay-tag.none { color: var(--fg-faint); }
+/* Default colouring is overridden per-handle via inline [style] from
+   [handleStyle] — the [color]/[background]/[border-color] declared
+   here are the no-handle fallback (used by the [.none] variant). */
+.overlay-tag {
+  color: var(--accent);
+  font-size: 0.72rem;
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.overlay-tag.none {
+  color: var(--fg-faint);
+  background: transparent;
+  border-color: transparent;
+  padding: 0;
+}
 /* Dropdown for the multi-handle case: when an entry's [callers[]]
    names more than one overlay, the row would otherwise overflow the
    ~120px overlay column. Show the first chip plus a "+N" counter that
@@ -487,9 +504,11 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
   .handle-dd-list { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); }
 }
 .pkg-row:hover { background: var(--bg-sunken); }
-.pkg-row.expanded { background: var(--bg-sunken); }
+/* The handle-marker stripe lives in [box-shadow]; clear it when
+   [.expanded] / [.upstream] take over the same slot via ::before. */
+.pkg-row.expanded { background: var(--bg-sunken); box-shadow: none !important; }
 .pkg-row.expanded::before { content: ""; width: 3px; background: var(--accent); position: absolute; left: 0; top: 0; bottom: 0; }
-.pkg-row.upstream { background: rgba(198, 40, 40, 0.12); }
+.pkg-row.upstream { background: rgba(198, 40, 40, 0.12); box-shadow: none !important; }
 .pkg-row.upstream::before { content: ""; width: 3px; background: var(--fail); position: absolute; left: 0; top: 0; bottom: 0; }
 @media (prefers-color-scheme: dark) {
   .pkg-row.upstream { background: rgba(239, 83, 80, 0.18); }
@@ -909,6 +928,105 @@ function handlesOf(r) {
   return [...set].sort();
 }
 
+// Palette of (hue, saturation, lightness) triples. The hue ladder is
+// hand-laid so consecutive entries sit ~30° apart on the colour wheel
+// — distinct enough that adjacent slots never look like the same
+// colour family. Sat/lit rotate through two tiers so even doubling
+// back through hues produces a recognisably different chip.
+const HANDLE_PALETTE = [
+  [   0, 70, 58 ],  /* red */
+  [ 200, 70, 55 ],  /* sky blue */
+  [  35, 80, 55 ],  /* tangerine */
+  [ 270, 60, 60 ],  /* purple */
+  [ 130, 55, 45 ],  /* forest green */
+  [ 320, 60, 58 ],  /* magenta */
+  [  60, 65, 50 ],  /* mustard */
+  [ 230, 65, 60 ],  /* royal blue */
+  [ 165, 65, 42 ],  /* teal */
+  [ 295, 50, 55 ],  /* orchid */
+  [  18, 75, 55 ],  /* coral */
+  [ 100, 50, 45 ],  /* leaf green */
+  [ 250, 55, 65 ],  /* periwinkle */
+  [ 345, 65, 60 ],  /* rose */
+  [ 180, 60, 45 ],  /* aqua */
+  [  85, 55, 50 ],  /* lime */
+  [ 215, 55, 50 ],  /* azure */
+  [  50, 70, 55 ],  /* amber */
+];
+
+// Per-render handle → palette-slot map. Built lazily by [handleHsl]
+// when the cache is empty: collects every handle present in the
+// active manifest, sorts alphabetically, then walks the palette so
+// the assignment is stable for a given (set-of-handles, palette).
+//
+// The deterministic-by-set approach guarantees ZERO collisions among
+// handles that appear together — switching from a hash-based scheme
+// where two handles could randomly land on the same slot.
+let _handleColorCache = null;
+
+function invalidateHandleColors() { _handleColorCache = null; }
+
+function buildHandleColors() {
+  const set = new Set();
+  for (const m of state.manifests.values()) {
+    for (const r of m.results || []) {
+      for (const c of r.callers || []) {
+        if (c.overlay && c.overlay.handle) set.add(c.overlay.handle);
+      }
+    }
+  }
+  const handles = [...set].sort();
+  const map = new Map();
+  handles.forEach((h, i) => {
+    map.set(h, HANDLE_PALETTE[i % HANDLE_PALETTE.length]);
+  });
+  return map;
+}
+
+// "(none)" stays neutral; everything else picks up its deterministic
+// slot from the per-set assignment table.
+function handleHsl(name) {
+  if (!name || name === "(none)") return null;
+  if (!_handleColorCache) _handleColorCache = buildHandleColors();
+  return _handleColorCache.get(name) || null;
+}
+
+// Inline style for a handle pill: muted pastel background + matched
+// accent text. Uses CSS [color-mix] so the same hue reads correctly in
+// both light and dark themes (mixing against [--bg] auto-adapts).
+// "(none)" is rendered transparent so unaffiliated rows blend in.
+function handleStyle(name) {
+  const hsl = handleHsl(name);
+  if (!hsl) return "";
+  const [h, s, l] = hsl;
+  return `--handle-hue:${h}; ` +
+         `background: color-mix(in srgb, hsl(${h} ${s}% ${l}%) 22%, transparent); ` +
+         `color: color-mix(in oklab, hsl(${h} ${s}% ${Math.max(l - 18, 28)}%) 80%, var(--fg)); ` +
+         `border-color: color-mix(in srgb, hsl(${h} ${s}% ${l}%) 45%, transparent);`;
+}
+
+// Per-row handle marker: a thin coloured stripe along the leading
+// edge. Skipped when the row is [.expanded] or [.upstream] (those
+// classes already paint the same 3px slot via ::before with a more
+// important meaning). We use [box-shadow] rather than [background] so
+// the [:hover] / [.expanded] background rules still win.
+function handleRowStyle(handles) {
+  const primary = (handles || []).find(h => h && h !== "(none)");
+  if (!primary) return "";
+  const [h, s, l] = handleHsl(primary);
+  return `box-shadow: inset 3px 0 0 hsl(${h} ${s}% ${l}% / 0.55);`;
+}
+
+// Group-header tint for [Sort: by overlay] mode.
+function handleHeaderStyle(name) {
+  const hsl = handleHsl(name);
+  if (!hsl) return "";
+  const [h, s, l] = hsl;
+  return `background: color-mix(in srgb, hsl(${h} ${s}% ${l}%) 18%, var(--bg-sunken)); ` +
+         `color: color-mix(in oklab, hsl(${h} ${s}% ${Math.max(l - 20, 28)}%) 80%, var(--fg)); ` +
+         `border-left: 4px solid hsl(${h} ${s}% ${l}% / 0.7);`;
+}
+
 // "alpine~3.23~x86_64" → "alpine 3.23". Used for tooltips and
 // dropdowns where the full distro name+version is wanted.
 function shortDistro(osKey) {
@@ -1164,18 +1282,34 @@ function renderHeader() {
       `</summary>`;
     const pop = document.createElement("div");
     pop.className = "os-popover";
+    // Snapshot the manifest order once so the "deselect = jump to the
+    // next one" behaviour is stable regardless of insertion order.
+    const osKeys = [...state.manifests.keys()];
     for (const [key, mm] of state.manifests) {
       const f = mm.summary.build_failed + mm.summary.install_failed
               + mm.summary.fetch_failed + mm.summary.solve_failed;
       const p = parseOsKey(key);
       const btn = document.createElement("button");
-      if (key === state.active) btn.className = "current";
+      const isCurrent = key === state.active;
+      if (isCurrent) btn.className = "current";
+      btn.title = isCurrent
+        ? "click again to switch to the next OS"
+        : `switch to ${p.full}`;
       btn.innerHTML =
         `${escapeHtml(p.full)} <span style="color:var(--fg-faint)">(${mm.n_packages})</span>` +
         (f > 0 ? `<span class="fail-count">${f} failed</span>` : "");
       btn.onclick = (e) => {
         e.preventDefault();
-        state.active = key;
+        let next = key;
+        if (isCurrent && osKeys.length > 1) {
+          // Toggle: cycle to the next manifest in the list, wrapping
+          // around. Gives the popover a real "deselect" affordance —
+          // there's always *some* OS active because the page has
+          // nothing to render otherwise.
+          const idx = osKeys.indexOf(key);
+          next = osKeys[(idx + 1) % osKeys.length];
+        }
+        state.active = next;
         state.expanded = null;
         state.highlightUpstream = null;
         writeHash(state.active, null, overlaysFromState());
@@ -1379,7 +1513,7 @@ function renderCallers(callers) {
   if (!callers || callers.length === 0) return "";
   const rows = callers.map(c => {
     const lbl = c.overlay
-      ? `<span class="overlay-tag">@${escapeHtml(c.overlay.handle)}${c.overlay.version ? " " + escapeHtml(c.overlay.version) : ""}</span>`
+      ? `<span class="overlay-tag" style="${handleStyle(c.overlay.handle)}">@${escapeHtml(c.overlay.handle)}${c.overlay.version ? " " + escapeHtml(c.overlay.version) : ""}</span>`
       : `<span class="overlay-tag none">(no overlay)</span>`;
     const tc = c.toolchain ? ` · ${escapeHtml(c.toolchain)}` : "";
     return `<tr>
@@ -1442,7 +1576,7 @@ function eventOverlayLabel(ev) {
   const c = ev.context || {};
   const o = c.overlay;
   return o
-    ? `<span class="overlay-tag">@${escapeHtml(o.handle)}${o.version ? " " + escapeHtml(o.version) : ""}</span>`
+    ? `<span class="overlay-tag" style="${handleStyle(o.handle)}">@${escapeHtml(o.handle)}${o.version ? " " + escapeHtml(o.version) : ""}</span>`
     : `<span class="overlay-tag none">(no overlay)</span>`;
 }
 
@@ -1665,7 +1799,8 @@ function renderPackages(m, osKey) {
   return `<div class="pkg-list">${headerRow}${rows.map(r => {
     if (r.__header) {
       const lbl = r.__header === "(none)" ? "(no overlay)" : "@" + r.__header;
-      return `<div class="group-header">${escapeHtml(lbl)}<span class="group-count">${r.count} pkg(s)</span></div>`;
+      const style = handleHeaderStyle(r.__header);
+      return `<div class="group-header"${style ? ` style="${style}"` : ""}>${escapeHtml(lbl)}<span class="group-count">${r.count} pkg(s)</span></div>`;
     }
     const grp = OUTCOME_GROUPS[r.headline_outcome] || "ok";
     const expanded = state.expanded === r.layer_hash ? " expanded" : "";
@@ -1678,7 +1813,7 @@ function renderPackages(m, osKey) {
     const renderHandleChip = (h) =>
       h === "(none)"
         ? `<span class="overlay-tag none">∅</span>`
-        : `<span class="overlay-tag">@${escapeHtml(h)}</span>`;
+        : `<span class="overlay-tag" style="${handleStyle(h)}">@${escapeHtml(h)}</span>`;
     let chips;
     if (handles.length === 0) {
       chips = `<span class="overlay-tag none">—</span>`;
@@ -1693,7 +1828,8 @@ function renderPackages(m, osKey) {
         <div class="handle-dd-list">${list}</div>
       </details>`;
     }
-    const rowHtml = `<div class="pkg-row${expanded}${upstream}" data-hash="${escapeHtml(r.layer_hash)}">
+    const rowStyle = handleRowStyle(handles);
+    const rowHtml = `<div class="pkg-row${expanded}${upstream}" data-hash="${escapeHtml(r.layer_hash)}"${rowStyle ? ` style="${rowStyle}"` : ""}>
       <span class="outcome-badge outcome-${grp}">${r.headline_outcome.replace(/_/g, " ")}</span>
       <span><span class="pkg-name">${escapeHtml(r.pkg.name)}</span> <span class="pkg-version">${escapeHtml(r.pkg.version)}</span></span>
       ${renderDistroChips(r.pkg)}
@@ -1722,15 +1858,44 @@ function expand(layerHash) {
   }
 }
 
+// Capture which input/textarea has focus and its current selection so a
+// re-render that blows the DOM away can put the caret back where the
+// user left it. Without this, every keystroke in the filter box (which
+// triggers a full re-render) drops focus after the first character.
+function captureFocus() {
+  const el = document.activeElement;
+  if (!el || !el.id) return null;
+  const tag = el.tagName;
+  if (tag !== "INPUT" && tag !== "TEXTAREA") return null;
+  return {
+    id: el.id,
+    start: el.selectionStart,
+    end: el.selectionEnd,
+  };
+}
+
+function restoreFocus(snap) {
+  if (!snap) return;
+  const el = document.getElementById(snap.id);
+  if (!el) return;
+  el.focus();
+  if (snap.start != null && el.setSelectionRange) {
+    try { el.setSelectionRange(snap.start, snap.end); } catch (_) { /* unsupported */ }
+  }
+}
+
 function render() {
+  const focusSnap = captureFocus();
   renderHeader();
   const m = state.manifests.get(state.active);
   if (!m) {
     document.getElementById("content").innerHTML = `<div class="empty">No manifest found.</div>`;
+    restoreFocus(focusSnap);
     return;
   }
   document.getElementById("content").innerHTML =
     renderStatusBar(m) + renderFilters(m) + renderPackages(m, state.active);
+  restoreFocus(focusSnap);
 
   document.getElementById("filter").oninput = (e) => { state.filter = e.target.value; render(); };
   document.getElementById("sort").onchange = (e) => { state.sortMode = e.target.value; render(); };
@@ -1951,6 +2116,7 @@ function applyHash() {
       state.audits.set(k, a);
     }
   }
+  invalidateHandleColors();
   if (state.manifests.size === 0) {
     document.getElementById("content").innerHTML =
       `<div class="empty">No manifests found at any of:<br><br>` +

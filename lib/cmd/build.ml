@@ -1534,13 +1534,25 @@ let cmd =
                 Buffer.contents buf
               in
               Oi.Cache.Logs.write ~fs ~cache_root log_path body;
+              let missing_names =
+                OpamSysPkg.Set.elements missing |> List.map OpamSysPkg.to_string
+              in
+              let n = List.length missing_names in
+              (* Cap the inline list at 8 names so a 30-package depext
+                 set doesn't blow out the warning line; the full list is
+                 always in [log_path] for follow-up. *)
+              let max_inline = 8 in
+              let shown, suffix =
+                if n <= max_inline then (missing_names, "")
+                else
+                  ( List.filteri (fun i _ -> i < max_inline) missing_names,
+                    Fmt.str ", … +%d more" (n - max_inline) )
+              in
               Log.warn (fun m ->
                   m
-                    "%s: opam reports %d missing system package(s); proceeding \
-                     with the build anyway. See %s"
-                    group_targets
-                    (OpamSysPkg.Set.cardinal missing)
-                    log_path)
+                    "%s: opam reports %d missing system package(s) [%s%s]; \
+                     proceeding with the build anyway. See %s"
+                    group_targets n (String.concat ", " shown) suffix log_path)
           | None -> ());
           (* After the build, any package in this group's plan whose
              layer hash is in [failed_layers] with a non-empty path
