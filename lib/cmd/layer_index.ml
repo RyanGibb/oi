@@ -67,7 +67,7 @@ let ensure_remote ~sys ~fs ~cache ~os_key ~registry =
       (try Unix.unlink tmp_path with Unix.Unix_error _ -> ());
       Logs.app (fun m ->
           m "Fetching registry index from %s (this may take a moment)..." url);
-      if D10.Sysops.Curl.fetch sys ~url ~dst then begin
+      if D10.Sysops.Http.fetch sys ~url ~dst then begin
         (try Unix.rename tmp_path local_path
          with Unix.Unix_error _ -> (
            try Unix.unlink tmp_path with Unix.Unix_error _ -> ()));

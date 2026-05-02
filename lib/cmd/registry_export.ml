@@ -30,7 +30,7 @@ let fetch_remote_to ~sys ~fs ~registry ~rel ~dst =
   else begin
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
       Eio.Path.(fs / Filename.dirname dst);
-    D10.Sysops.Curl.fetch sys
+    D10.Sysops.Http.fetch sys
       ~url:(Layer_index.url_join registry rel)
       ~dst:Eio.Path.(fs / dst)
   end

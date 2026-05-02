@@ -625,10 +625,15 @@ async function fetchManifest(osKey) {
   } catch { return null; }
 }
 
-// audit.jsonl — one JSON object per line, indexed by layer_hash so the
+// audit.jsonl — one JSON object per line, indexed by layer hash so the
 // detail panel can render per-event provenance (failure command, fetch
-// kind, log tail, …) on demand. Failures and successes share the index
-// since one layer_hash may carry both flavours of event across callers.
+// kind, log tail, …) on demand. Each event carries a tagged target:
+// {kind:"layer", hash} for terminal package events, or
+// {kind:"solve_key", hash} for solve failures (which have no real layer).
+// We only index the [layer] flavour here — solve failures are surfaced
+// through the manifest's failure-only entries rather than the per-layer
+// drill-down. Failures and successes share the index since one layer
+// hash may carry both flavours of event across callers.
 async function fetchAudit(osKey) {
   try {
     const r = await fetch(`${osKey}/audit.jsonl`, { cache: "no-cache" });
@@ -639,9 +644,10 @@ async function fetchAudit(osKey) {
       if (!line) continue;
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
-      if (!ev.layer_hash) continue;
-      let arr = byLayer.get(ev.layer_hash);
-      if (!arr) { arr = []; byLayer.set(ev.layer_hash, arr); }
+      const tgt = ev.target;
+      if (!tgt || tgt.kind !== "layer" || !tgt.hash) continue;
+      let arr = byLayer.get(tgt.hash);
+      if (!arr) { arr = []; byLayer.set(tgt.hash, arr); }
       arr.push(ev);
     }
     // Sort each layer's events by ts so renders read top-to-bottom.
@@ -1023,7 +1029,7 @@ function renderProvenance(r) {
   return `<h3>Provenance</h3>
     <dl>
       <dt>opam sha256</dt><dd>${escapeHtml(o.sha256 || "")}</dd>
-      <dt>origin</dt><dd>${escapeHtml(origin.kind || "?")}${origin.handle ? ` @${escapeHtml(origin.handle)}` : ""} <span style="color:var(--fg-dim)">${escapeHtml(origin.path_in_repo || "")}</span></dd>
+      <dt>origin</dt><dd>${escapeHtml(origin.kind || "?")}${origin.overlay && origin.overlay.handle ? ` @${escapeHtml(origin.overlay.handle)}${origin.overlay.version ? `<span style="color:var(--fg-dim)">/${escapeHtml(origin.overlay.version)}</span>` : ""}` : ""} <span style="color:var(--fg-dim)">${escapeHtml(origin.path_in_repo || "")}</span></dd>
       ${src ? `<dt>source url</dt><dd><a href="${escapeHtml(src.url)}" target="_blank" rel="noopener">${escapeHtml(src.url)}</a> ${src.kind ? `<span style="color:var(--fg-dim)">(${escapeHtml(src.kind)})</span>` : ""}</dd>` : ""}
       ${src && (src.checksums || []).length > 0 ? `<dt>source checksum</dt><dd>${escapeHtml(src.checksums[0])}</dd>` : ""}
       ${env ? `<dt>ocaml</dt><dd>${escapeHtml(env.ocaml_version || "")}</dd>` : ""}

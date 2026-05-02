@@ -321,7 +321,7 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
     if is_url target then begin
       let local = Filename.temp_file "oi-script-" ".ml" in
       Logs.info (fun m -> m "Fetching %s to %s" target local);
-      if not (D10.Sysops.Curl.fetch sys ~url:target ~dst:Eio.Path.(fs / local))
+      if not (D10.Sysops.Http.fetch sys ~url:target ~dst:Eio.Path.(fs / local))
       then Oi.Error.not_found target "failed to fetch %s" target;
       local
     end

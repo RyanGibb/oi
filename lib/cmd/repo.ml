@@ -231,7 +231,8 @@ module Ls = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
@@ -369,7 +370,8 @@ module Show = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
@@ -453,7 +455,8 @@ module Add = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
@@ -628,7 +631,8 @@ module Bump = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
@@ -780,7 +784,8 @@ module Set_roots = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
@@ -861,7 +866,8 @@ module Remove = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
@@ -913,7 +919,8 @@ module Push = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;
@@ -1112,7 +1119,8 @@ module Lint = struct
       let fs = Eio.Stdenv.fs env in
       let sys =
         D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs ()
+          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url;

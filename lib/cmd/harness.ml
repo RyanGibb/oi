@@ -52,9 +52,12 @@ let bootstrap (env : Eio_unix.Stdenv.base) cache_dir =
   let proc_mgr = Eio.Stdenv.process_mgr env in
   let fs = Eio.Stdenv.fs env in
   let clock = Eio.Stdenv.clock env in
+  let net = Eio.Stdenv.net env in
   let stdout = Eio.Stdenv.stdout env in
   let stderr = Eio.Stdenv.stderr env in
-  let sys = D10.Sysops.create ~stdout ~stderr ~proc_mgr ~fs () in
+  let sys =
+    D10.Sysops.create ~stdout ~stderr ~proc_mgr ~fs ~net ~clock ()
+  in
   let platform = Osrel.detect ~proc_mgr ~fs in
   let os_key = D10.Os_key.(to_string (of_platform platform)) in
   let cache = Oi.Cache.create ~root:cache_dir fs in

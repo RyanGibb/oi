@@ -204,7 +204,7 @@ let fetch_remote_index (c : Config.t) ~remote =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
   let tmp = Eio.Path.(os_layer_dir / "OINDEX.txt.tmp") in
   let idx = Hashtbl.create 64 in
-  if Sysops.Curl.fetch c.sys ~url ~dst:tmp then begin
+  if Sysops.Http.fetch c.sys ~url ~dst:tmp then begin
     let contents = Eio.Path.load tmp in
     let parsed = parse_index contents in
     Hashtbl.iter (Hashtbl.replace idx) parsed;
@@ -226,7 +226,7 @@ let pull_remote (c : Config.t) ~remote ~hash ?sha256 () =
     let layer_dir = dir c ~hash in
     let tmp_file = Eio.Path.(os_layer_dir / (hash ^ ".tar.zst.tmp")) in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
-    let ok = Sysops.Curl.fetch c.sys ~url ~dst:tmp_file in
+    let ok = Sysops.Http.fetch c.sys ~url ~dst:tmp_file in
     let cleanup_tmp () = try Eio.Path.unlink tmp_file with _ -> () in
     if ok then begin
       (* Verify sha256 if provided *)

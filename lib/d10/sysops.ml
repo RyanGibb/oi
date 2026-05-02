@@ -8,10 +8,14 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 
 type tools = { tar : string }
 type pm = [ `Generic ] Eio.Process.mgr_ty Eio.Resource.t
+type net = [ `Generic ] Eio.Net.ty Eio.Resource.t
+type clk = float Eio.Time.clock_ty Eio.Resource.t
 
 type t = {
   proc_mgr : pm;
   fs : Eio.Fs.dir_ty Eio.Path.t; [@warning "-69"]
+  net : net;
+  clock : clk;
   stdout : Eio.Flow.sink_ty Eio.Resource.t option;
   stderr : Eio.Flow.sink_ty Eio.Resource.t option;
   tools : tools;
@@ -99,8 +103,14 @@ let disable_interactive_git () =
   Unix.putenv "SSH_ASKPASS" "/bin/true";
   Unix.putenv "SSH_ASKPASS_REQUIRE" "never"
 
-let create ?stdout ?stderr ~proc_mgr ~fs () =
+(* The TLS stack inside [Requests.One] needs a process-wide RNG default,
+   otherwise the first HTTPS request errors out with "Crypto_rng: no
+   default generator". Idempotent: subsequent calls are no-ops. *)
+let install_crypto_rng () = Crypto_rng_unix.use_default ()
+
+let create ?stdout ?stderr ~proc_mgr ~fs ~net ~clock () =
   disable_interactive_git ();
+  install_crypto_rng ();
   let stdout =
     Option.map (fun s -> (s :> Eio.Flow.sink_ty Eio.Resource.t)) stdout
   in
@@ -108,7 +118,15 @@ let create ?stdout ?stderr ~proc_mgr ~fs () =
     Option.map (fun s -> (s :> Eio.Flow.sink_ty Eio.Resource.t)) stderr
   in
   let t_partial =
-    { proc_mgr :> pm; fs; stdout; stderr; tools = { tar = "tar" } }
+    {
+      proc_mgr :> pm;
+      fs;
+      net = (net :> net);
+      clock = (clock :> clk);
+      stdout;
+      stderr;
+      tools = { tar = "tar" };
+    }
   in
   let tools = resolve_tools t_partial in
   { t_partial with tools }
@@ -186,12 +204,38 @@ module Tar = struct
       [ t.tools.tar; "--zstd"; "-cf"; native dst; "-C"; native src; "." ]
 end
 
-module Curl = struct
+module Http = struct
+  (* In-process HTTP fetch via the [requests] library. Behaviour:
+
+     - silent: no progress output to stdout/stderr
+     - follows redirects (the [Requests.One.get] default)
+     - fails on HTTP error status: we check {!Requests.Response.ok}
+       ourselves and treat 4xx/5xx as failure, since [One.get] returns
+       a [Response.t] regardless of status.
+
+     Returns [true] on a 2xx response with the body fully written to
+     [dst]; [false] on any error (4xx/5xx, network failure, TLS error,
+     timeout). Never raises — callers use the [if not (fetch …) then …]
+     pattern. *)
   let fetch t ~url ~dst =
+    Eio.Switch.run @@ fun sw ->
     try
-      run_quiet t [ "curl"; "-fsSL"; "-o"; native dst; url ];
-      true
-    with Failure _ -> false
+      let resp =
+        Requests.One.get ~sw ~clock:t.clock ~net:t.net url
+      in
+      if not (Requests.Response.ok resp) then begin
+        Log.debug (fun m ->
+            m "http %s: status %d" url (Requests.Response.status_code resp));
+        false
+      end
+      else begin
+        Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
+            Eio.Flow.copy (Requests.Response.body resp) out);
+        true
+      end
+    with exn ->
+      Log.debug (fun m -> m "http %s: %s" url (Printexc.to_string exn));
+      false
 end
 
 (* -- Git operations ------------------------------------------------------ *)

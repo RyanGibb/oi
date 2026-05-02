@@ -18,12 +18,15 @@ val create :
   ?stderr:_ Eio.Flow.sink ->
   proc_mgr:_ Eio.Process.mgr ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
+  net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
   unit ->
   t
-(** [create ?stdout ?stderr ~proc_mgr ~fs ()] detects tool paths (tar variant)
-    by probing the system via [which]. Pass the parent's [stdout] and [stderr]
-    to enable {!Cmd.run_inherit}, which streams subprocess output to the user's
-    terminal. Call once at startup. *)
+(** [create ?stdout ?stderr ~proc_mgr ~fs ~net ~clock ()] detects tool paths
+    (tar variant) by probing the system via [which]. Pass the parent's
+    [stdout] and [stderr] to enable {!Cmd.run_inherit}, which streams
+    subprocess output to the user's terminal. [net] and [clock] are needed
+    by {!Http.fetch} for in-process HTTP downloads. Call once at startup. *)
 
 (** {1 File queries} *)
 
@@ -53,10 +56,13 @@ module Tar : sig
       from the contents of directory [src]. *)
 end
 
-module Curl : sig
+module Http : sig
   val fetch : t -> url:string -> dst:_ Eio.Path.t -> bool
-  (** [fetch t ~url ~dst] downloads [url] to [dst]. Returns [true] on success,
-      [false] on any error (404, network failure, missing curl). *)
+  (** [fetch t ~url ~dst] downloads [url] to [dst] via the in-process HTTP
+      client (the [requests] library). Follows redirects, requires a 2xx
+      response, writes nothing on failure. Returns [true] on success,
+      [false] on any error (HTTP 4xx/5xx, network failure, TLS handshake
+      error, timeout). Never raises. *)
 end
 
 (** {1 Low-level command execution} *)

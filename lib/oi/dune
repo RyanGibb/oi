@@ -12,7 +12,7 @@
   opam-0install
   nox-tty
   nox-tty-eio
-  xdge
+  nox-xdge
   fmt
   logs
   jsont

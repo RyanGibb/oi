@@ -1,4 +1,5 @@
 (library
  (name d10)
  (public_name d10)
- (libraries osrel eio opam-format jsont jsont.bytesrw sqlite3 fmt logs))
+ (libraries osrel eio opam-format jsont jsont.bytesrw sqlite3 fmt logs
+   requests nox-crypto-rng.unix))

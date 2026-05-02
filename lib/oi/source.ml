@@ -989,7 +989,7 @@ module Reporepo = struct
           Fun.protect
             ~finally:(fun () -> try Sys.remove tmp with Sys_error _ -> ())
             (fun () ->
-              if D10.Sysops.Curl.fetch sys ~url:url_str ~dst:Eio.Path.(fs / tmp)
+              if D10.Sysops.Http.fetch sys ~url:url_str ~dst:Eio.Path.(fs / tmp)
               then `Add_checksum (OpamHash.compute ~kind:`SHA256 tmp)
               else `Failed (Fmt.str "could not fetch tarball at %s" url_str))
         end
