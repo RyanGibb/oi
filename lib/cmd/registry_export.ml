@@ -105,4 +105,16 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
       Oi.Say.field "audit" "%d event(s) at %s/audit.jsonl" (List.length events)
         (output / os_key)
     end
-  end
+  end;
+  (* Emit per-overlay-handle markdown reports aggregated across every distro
+     currently staged under [output]. Re-run from each export so a freshly
+     synced sibling distro picks up the latest view. *)
+  let handles_written =
+    Oi.Handle_report.write_all ~fs ~output_dir:output
+      ~generated_at:(Unix.gettimeofday ())
+  in
+  match handles_written with
+  | [] -> ()
+  | hs ->
+      Oi.Say.field "handles" "%d failure report(s) at %s/handles/"
+        (List.length hs) output

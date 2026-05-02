@@ -52,11 +52,15 @@ a { color: var(--info); }
 
 /* ---- header ---- */
 header {
-  display: flex; align-items: center; gap: 1rem;
+  display: flex; align-items: center; gap: 0.6rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
   position: sticky; top: 0; z-index: 10;
+}
+header .left {
+  display: flex; align-items: baseline; gap: 0.6rem;
+  min-width: 0;
 }
 header .brand {
   font-family: ui-monospace, SF Mono, Monaco, monospace;
@@ -65,26 +69,112 @@ header .brand {
   color: var(--fg);
 }
 header .brand .sub { color: var(--fg-dim); font-weight: normal; font-size: 0.75rem; margin-left: 0.4rem; }
-header .spacer { flex: 1; }
-header .exported-info {
+header .updated {
   font-family: ui-monospace, monospace;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   color: var(--fg-faint);
   white-space: nowrap;
 }
-header .exported-info .schema { margin-left: 0.5rem; opacity: 0.7; }
-header .os-select {
+/* Selection chips pushed to the right edge — [margin-left:auto] is
+   the standard flex idiom that beats a [<spacer>] element. The chips
+   themselves stay flex-wrap so that on narrow windows they wrap to a
+   second header row rather than overlapping the title. */
+header .selections {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  margin-left: auto;
+  min-width: 0;
+}
+/* Selection chips up here mirror what's in the URL hash. Each carries
+   an × button that drops just that selection — the header stays a
+   live readout of "what filters narrow the view right now".
+   The OS chip is special: instead of an × it opens a tiny popover
+   to switch distros (since per-row chips also navigate but the user
+   needs a way to flip distro before any row is in view). */
+header .sel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
   font-family: ui-monospace, monospace;
-  font-size: 0.78rem;
-  padding: 0.3rem 0.6rem;
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
   background: var(--bg);
   color: var(--fg);
-  cursor: pointer;
-  min-width: 200px;
+  white-space: nowrap;
+  line-height: 1.4;
 }
-header .os-select:hover { border-color: var(--fg-dim); }
+header .sel-chip .sel-key {
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.6rem;
+}
+header .sel-chip .sel-x {
+  cursor: pointer;
+  color: var(--fg-dim);
+  padding: 0 0.15rem;
+  border-radius: 2px;
+  user-select: none;
+}
+header .sel-chip .sel-x:hover { color: var(--fg); background: var(--bg-sunken); }
+header .sel-chip.os {
+  background: var(--bg-elev);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+header .sel-chip.os summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+header .sel-chip.os summary::-webkit-details-marker { display: none; }
+header .sel-chip.os[open] {
+  position: relative;
+}
+header .sel-chip.os .os-popover {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  min-width: 220px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  z-index: 20;
+}
+header .sel-chip.os .os-popover button {
+  appearance: none;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.72rem;
+  padding: 0.3rem 0.5rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+}
+header .sel-chip.os .os-popover button.current {
+  background: var(--bg-sunken);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+header .sel-chip.os .os-popover button:hover { background: var(--bg-sunken); }
+header .sel-chip.os .os-popover .fail-count {
+  color: var(--fail);
+  font-size: 0.6rem;
+  margin-left: 0.4rem;
+}
 header .fail-pill {
   display: inline-block;
   padding: 0.05rem 0.4rem;
@@ -295,13 +385,13 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
 .pkg-row {
   display: grid;
   grid-template-columns:
-    110px              /* status badge */
-    minmax(180px, 320px) /* package name+version, capped */
-    minmax(100px, 1fr)   /* per-distro chip strip — flexes */
-    100px              /* overlay tags */
-    96px               /* short layer hash */
-    70px               /* method */
-    64px;              /* duration */
+    110px               /* status badge */
+    minmax(180px, 1fr)  /* package name+version, flexes */
+    minmax(180px, 240px)/* per-distro chip strip — bounded */
+    minmax(80px, 120px) /* overlay tags */
+    96px                /* short layer hash */
+    70px                /* method */
+    64px;               /* duration */
   gap: 0.6rem;
   padding: 0.3rem 0.85rem;
   align-items: center;
@@ -339,6 +429,63 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
 .group-header .group-count { color: var(--fg-dim); margin-left: 0.4rem; font-weight: normal; }
 .overlay-tag { color: var(--accent); font-size: 0.72rem; }
 .overlay-tag.none { color: var(--fg-faint); }
+/* Dropdown for the multi-handle case: when an entry's [callers[]]
+   names more than one overlay, the row would otherwise overflow the
+   ~120px overlay column. Show the first chip plus a "+N" counter that
+   doubles as a [details] toggle; the full handle list is absolutely
+   positioned below so opening the dropdown doesn't push neighboring
+   rows down. */
+.handle-dd {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.handle-dd > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  user-select: none;
+}
+.handle-dd > summary::-webkit-details-marker { display: none; }
+.handle-dd > summary::marker { content: ""; }
+.handle-dd > summary .more {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--fg-dim);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.02rem 0.32rem;
+  font-family: ui-monospace, monospace;
+}
+.handle-dd[open] > summary .more {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.handle-dd-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  min-width: 8rem;
+}
+@media (prefers-color-scheme: dark) {
+  .handle-dd-list { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); }
+}
 .pkg-row:hover { background: var(--bg-sunken); }
 .pkg-row.expanded { background: var(--bg-sunken); }
 .pkg-row.expanded::before { content: ""; width: 3px; background: var(--accent); position: absolute; left: 0; top: 0; bottom: 0; }
@@ -373,7 +520,10 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
 }
 .distro-chip {
   display: inline-block;
-  padding: 0.05rem 0.35rem;
+  /* Min-width keeps the 2-char "A3" chip the same width as the 3-char
+     "U25" chip so columns stay vertically aligned across rows. */
+  min-width: 1.6rem;
+  padding: 0.05rem 0.3rem;
   border-radius: 3px;
   font-size: 0.6rem;
   font-weight: 600;
@@ -383,6 +533,7 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
   cursor: pointer;
   font-family: ui-monospace, monospace;
   border: 1px solid transparent;
+  box-sizing: border-box;
 }
 .distro-chip:hover { border-color: rgba(255, 255, 255, 0.5); }
 .distro-chip.outcome-missing {
@@ -545,6 +696,17 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
   margin-bottom: 0.2rem;
 }
 .pkg-detail .event-head .event-ts { margin-left: auto; }
+.pkg-detail .event-count {
+  display: inline-block;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--fg-dim);
+  font-size: 0.62rem;
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+}
 .pkg-detail .event-trigger {
   font-family: ui-monospace, monospace;
   font-size: 0.7rem;
@@ -623,10 +785,11 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
 </head>
 <body>
 <header>
-  <span class="brand">oi <span class="sub">registry</span></span>
-  <span class="spacer"></span>
-  <span class="exported-info" id="exported-info"></span>
-  <select class="os-select" id="os-select" title="Select OS"></select>
+  <span class="left">
+    <span class="brand">oi <span class="sub">registry</span></span>
+    <span class="updated" id="updated" title=""></span>
+  </span>
+  <span class="selections" id="selections"></span>
 </header>
 <main>
   <div id="content">
@@ -746,11 +909,31 @@ function handlesOf(r) {
   return [...set].sort();
 }
 
-// "alpine~3.23~x86_64" → "alpine 3.23". Used for the small distro
-// chips in the row strip so the chip is short but unambiguous.
+// "alpine~3.23~x86_64" → "alpine 3.23". Used for tooltips and
+// dropdowns where the full distro name+version is wanted.
 function shortDistro(osKey) {
   const p = parseOsKey(osKey);
   return p.short || p.name;
+}
+
+// Compact 2–3 char chip label: first letter of the distro name
+// uppercase, followed by the version's major segment. Designed to
+// stay within ~3 chars so a 5-distro chip strip fits in a narrow
+// column without spilling.
+//   alpine~3.23~*  → "A3"
+//   debian~13~*    → "D13"
+//   ubuntu~24.04~* → "U24"
+//   ubuntu~25.10~* → "U25"
+//   fedora~43~*    → "F43"
+//   macos~26~*     → "M26"
+// Disambiguates the common case (different ubuntu versions); the
+// hover tooltip still shows the full os_key so any near-collision
+// (e.g. two alpine 3.x rolls) is recoverable.
+function chipLabel(osKey) {
+  const p = parseOsKey(osKey);
+  const letter = (p.name || "?").charAt(0).toUpperCase();
+  const major = (p.version || "").split(".")[0];
+  return major ? letter + major : letter;
 }
 
 // Cross-distro outcome for a given (pkg.name, pkg.version). Returns
@@ -779,12 +962,15 @@ function renderDistroChips(pkg) {
   if (cells.length === 0) return "";
   return `<span class="distro-chips">${cells.map(c => {
     const grp = c.outcome === "missing" ? "missing" : (OUTCOME_GROUPS[c.outcome] || "ok");
-    const label = shortDistro(c.os_key);
+    const label = chipLabel(c.os_key);
     const isActive = c.os_key === state.active;
     const cls = "distro-chip outcome-" + grp + (isActive ? " active" : "");
+    // Tooltip carries the full os_key + outcome since the chip itself
+    // shows only a 2–3 char acronym.
+    const full = shortDistro(c.os_key);
     const tip = c.outcome === "missing"
-      ? `${c.os_key}: not built (click disabled)`
-      : `${c.os_key}: ${c.outcome.replace(/_/g, " ")} — click to drill in`;
+      ? `${full} — not built`
+      : `${full} — ${c.outcome.replace(/_/g, " ")} (click to drill in)`;
     // Carry the os_key + layer_hash on the chip so the click handler
     // can switch [state.active] and expand the same package's row in
     // the target distro's manifest. Missing chips have no layer_hash
@@ -859,51 +1045,194 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 }
 
-// URL hash format: #<os_key>/<layer_hash>. Tilde, slash and hex are all
-// fragment-safe so no encoding needed for our values.
+// URL hash format: #<os_key>[/<layer_hash>][?overlay=<a>,<b>&...].
+// Tilde, slash, hex and comma are all fragment-safe; only the "(none)"
+// sentinel for "no overlay" needs URL-encoding because of the parens.
+//
+// Examples:
+//   #ubuntu~25.10~x86_64
+//   #ubuntu~25.10~x86_64/abc123def456
+//   #ubuntu~25.10~x86_64?overlay=avsm,samoht
+//   #ubuntu~25.10~x86_64/abc123?overlay=avsm
 function readHash() {
-  const h = window.location.hash.replace(/^#/, "");
-  if (!h) return { osKey: null, layer: null };
-  const slash = h.indexOf("/");
-  if (slash < 0) return { osKey: h, layer: null };
-  return { osKey: h.slice(0, slash), layer: h.slice(slash + 1) };
+  const raw = window.location.hash.replace(/^#/, "");
+  if (!raw) return { osKey: null, layer: null, overlays: null };
+  const q = raw.indexOf("?");
+  const path = q < 0 ? raw : raw.slice(0, q);
+  const query = q < 0 ? "" : raw.slice(q + 1);
+  const slash = path.indexOf("/");
+  const osKey = slash < 0 ? path : path.slice(0, slash);
+  const layer = slash < 0 ? null : path.slice(slash + 1);
+  let overlays = null;
+  if (query) {
+    const params = new URLSearchParams(query);
+    const ov = params.get("overlay");
+    if (ov !== null) {
+      overlays = ov === "" ? [] : ov.split(",").map(decodeURIComponent);
+    }
+  }
+  return { osKey, layer, overlays };
 }
 
-function writeHash(osKey, layer) {
-  const want = layer ? `#${osKey}/${layer}` : `#${osKey}`;
+// Serialise the current state-relevant bits into the hash. Pass null
+// for [layer] to clear the layer-expansion deep-link; pass null for
+// [overlays] to omit the overlay query (i.e. "no filter set"). Pass
+// an empty array for [overlays] to encode "all overlays explicitly
+// excluded" — that survives a reload as a remembered preference,
+// even if the visible result is "no rows".
+function writeHash(osKey, layer, overlays) {
+  let want = `#${osKey}`;
+  if (layer) want += `/${layer}`;
+  if (overlays && overlays.length > 0) {
+    const enc = overlays.map(encodeURIComponent).join(",");
+    want += `?overlay=${enc}`;
+  }
   if (window.location.hash !== want) {
     history.replaceState(null, "", want);
   }
 }
 
+// Convenience: capture the current overlay filter as the array form
+// [writeHash] expects, or null if the user hasn't set any filter yet
+// (so the default URL stays clean).
+function overlaysFromState() {
+  return state.overlayFilter.size === 0
+    ? null
+    : [...state.overlayFilter];
+}
+
+// Relative-time formatter for the header's "updated" readout. Falls
+// back to the absolute date once the gap exceeds a week — at that
+// point "12d ago" becomes less useful than the actual day.
+function fmtRelative(unixSec) {
+  if (!unixSec) return "";
+  const now = Date.now() / 1000;
+  const ago = Math.max(0, now - unixSec);
+  if (ago < 60) return "just now";
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
+  if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
+  if (ago < 7 * 86400) return `${Math.floor(ago / 86400)}d ago`;
+  return new Date(unixSec * 1000).toISOString().slice(0, 10);
+}
+
 function renderHeader() {
   const m = state.manifests.get(state.active);
-  const sel = document.getElementById("os-select");
-  sel.innerHTML = "";
-  for (const [key, mm] of state.manifests) {
-    const failures = mm.summary.build_failed + mm.summary.install_failed
-                   + mm.summary.fetch_failed + mm.summary.solve_failed;
-    const p = parseOsKey(key);
-    const opt = document.createElement("option");
-    opt.value = key;
-    opt.textContent = `${p.full} (${mm.n_packages})${failures > 0 ? ` — ${failures} failed` : ""}`;
-    if (key === state.active) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  sel.onchange = (e) => {
-    state.active = e.target.value;
-    state.expanded = null;
-    state.highlightUpstream = null;
-    writeHash(state.active, null);
-    render();
+  const root = document.getElementById("selections");
+  root.innerHTML = "";
+
+  // [chip] helper: build a sel-chip with key/value + optional ×.
+  // [onDismiss] (when non-null) is invoked synchronously, then the
+  // URL-+-render cycle runs.
+  const chip = (cls, body, onDismiss) => {
+    const el = document.createElement("span");
+    el.className = "sel-chip" + (cls ? " " + cls : "");
+    el.innerHTML = body;
+    if (onDismiss) {
+      const x = document.createElement("span");
+      x.className = "sel-x";
+      x.title = "dismiss";
+      x.textContent = "×";
+      x.onclick = (e) => {
+        e.stopPropagation();
+        onDismiss();
+        writeHash(state.active, state.expanded, overlaysFromState());
+        render();
+      };
+      el.appendChild(x);
+    }
+    root.appendChild(el);
+    return el;
   };
-  const info = document.getElementById("exported-info");
+
+  // OS chip — always present, no ×, but acts as a popover to switch
+  // distros. Uses <details> so the open/close state is browser-native
+  // and the click-outside-to-close behaviour we get for free.
+  if (state.manifests.size > 0) {
+    const osChip = document.createElement("details");
+    osChip.className = "sel-chip os";
+    const failures = m
+      ? (m.summary.build_failed + m.summary.install_failed
+         + m.summary.fetch_failed + m.summary.solve_failed)
+      : 0;
+    const cur = parseOsKey(state.active);
+    osChip.innerHTML =
+      `<summary>` +
+        `<span class="sel-key">os</span>` +
+        `<span>${escapeHtml(cur.short)}</span>` +
+        (failures > 0 ? `<span class="fail-pill">${failures}</span>` : "") +
+        `<span style="opacity:0.7">▾</span>` +
+      `</summary>`;
+    const pop = document.createElement("div");
+    pop.className = "os-popover";
+    for (const [key, mm] of state.manifests) {
+      const f = mm.summary.build_failed + mm.summary.install_failed
+              + mm.summary.fetch_failed + mm.summary.solve_failed;
+      const p = parseOsKey(key);
+      const btn = document.createElement("button");
+      if (key === state.active) btn.className = "current";
+      btn.innerHTML =
+        `${escapeHtml(p.full)} <span style="color:var(--fg-faint)">(${mm.n_packages})</span>` +
+        (f > 0 ? `<span class="fail-count">${f} failed</span>` : "");
+      btn.onclick = (e) => {
+        e.preventDefault();
+        state.active = key;
+        state.expanded = null;
+        state.highlightUpstream = null;
+        writeHash(state.active, null, overlaysFromState());
+        render();
+      };
+      pop.appendChild(btn);
+    }
+    osChip.appendChild(pop);
+    root.appendChild(osChip);
+  }
+
+  // Expanded layer chip — present iff a row is open.
+  if (state.expanded) {
+    chip("",
+      `<span class="sel-key">layer</span><span>${escapeHtml(state.expanded.slice(0, 12))}</span>`,
+      () => { state.expanded = null; state.highlightUpstream = null; });
+  }
+
+  // Overlay filter — one chip per included handle so individual ones
+  // can be dismissed without nuking the rest.
+  for (const handle of state.overlayFilter) {
+    const label = handle === "(none)" ? "(no overlay)" : "@" + handle;
+    chip("",
+      `<span class="sel-key">overlay</span><span>${escapeHtml(label)}</span>`,
+      () => { state.overlayFilter.delete(handle); });
+  }
+
+  // Status-group filter — only show chips when the user has narrowed
+  // away from "all four groups". A chip per *enabled* group then
+  // reads naturally as "showing: ok, fail" with × removing each.
+  const allStatuses = STATUS_GROUPS.map(g => g.key);
+  const statusOff = state.statusFilter.size !== allStatuses.length;
+  if (statusOff) {
+    for (const k of allStatuses) {
+      if (!state.statusFilter.has(k)) continue;
+      chip("",
+        `<span class="sel-key">status</span><span>${escapeHtml(k)}</span>`,
+        () => { state.statusFilter.delete(k); });
+    }
+  }
+
+  // Search-text filter.
+  if (state.filter) {
+    chip("",
+      `<span class="sel-key">search</span><span>${escapeHtml(state.filter)}</span>`,
+      () => { state.filter = ""; });
+  }
+
+  // Compact "updated Xm ago" readout. Tooltip carries the absolute
+  // timestamp + schema for the rare case someone wants the detail.
+  const upd = document.getElementById("updated");
   if (m) {
-    info.innerHTML =
-      `<span title="last export">exported ${escapeHtml(fmtTimeShort(m.exported_at))} UTC</span>` +
-      `<span class="schema">schema v${escapeHtml(String(m.schema))}</span>`;
+    upd.textContent = `updated ${fmtRelative(m.exported_at)}`;
+    upd.title = `${fmtTimeShort(m.exported_at)} UTC · schema v${m.schema}`;
   } else {
-    info.textContent = "";
+    upd.textContent = "";
+    upd.title = "";
   }
 }
 
@@ -1117,18 +1446,94 @@ function eventOverlayLabel(ev) {
     : `<span class="overlay-tag none">(no overlay)</span>`;
 }
 
+// Equivalence key for grouping identical events. Two events collapse
+// into one row iff they share their outcome (kind + payload) AND
+// their caller context (overlay, toolchain, trigger, project, host).
+// Volatile fields — [event_id], [invocation_id], [ts], [duration_s],
+// [log] — are deliberately excluded so a CI run that hits the same
+// build failure 50 times collapses cleanly.
+function eventKey(ev) {
+  const o = ev.outcome || {};
+  const c = ev.context || {};
+  const ov = c.overlay || {};
+  const u = o.upstream || {};
+  const payload = JSON.stringify({
+    kind: o.kind,
+    command: o.command || "",
+    exit_code: o.exit_code ?? null,
+    url: o.url || "",
+    fetch_kind: o.fetch_kind || null,
+    upstream: o.kind === "dep_failed"
+      ? { n: u.name || "", v: u.version || "", h: u.hash || "" }
+      : null,
+    reason: o.reason || "",
+    missing: (o.missing || []).join(","),
+    not_found: (o.not_found || []).join(","),
+  });
+  return [
+    payload,
+    ov.handle || "",
+    ov.version || "",
+    c.toolchain || "",
+    c.trigger || "",
+    c.host || "",
+    c.project || "",
+  ].join("");
+}
+
+// Group identical events. Returns one record per unique key with the
+// underlying events sorted oldest→newest (matching [fetchAudit]'s
+// per-layer ordering). Group order is most-recent-last-seen first
+// — failures the user just hit float to the top.
+function groupEvents(events) {
+  const map = new Map();
+  for (const ev of events) {
+    const k = eventKey(ev);
+    let g = map.get(k);
+    if (!g) {
+      g = { key: k, events: [] };
+      map.set(k, g);
+    }
+    g.events.push(ev);
+  }
+  const groups = [...map.values()].map(g => ({
+    ...g,
+    first: g.events[0],
+    last: g.events[g.events.length - 1],
+  }));
+  groups.sort((a, b) => (b.last.ts || 0) - (a.last.ts || 0));
+  return groups;
+}
+
 // Per-event detail surfaced under the aggregated callers table. The
-// manifest's [callers] is a histogram; the audit log preserves the full
-// event stream so we can render the actual failure command, fetch URL,
-// log tail, etc. for each invocation.
+// manifest's [callers] is a histogram across (overlay, toolchain,
+// trigger) tuples; the audit log preserves individual invocations.
+// We collapse runs that are pairwise identical so a build that
+// fails repeatedly shows once with a count, not N times in a row.
 function renderEvents(events) {
   if (!events || events.length === 0) return "";
-  const rows = events.map(ev => {
+  const groups = groupEvents(events);
+  const rows = groups.map(g => {
+    // Use the most recent event as the representative — its log tail
+    // is the most likely to still be on disk, and its detail reflects
+    // the latest failure mode in the rare case the payload's
+    // equivalence-key fields drift mid-grouping (shouldn't happen
+    // because they're the key, but belt-and-braces).
+    const ev = g.last;
     const grp = OUTCOME_GROUPS[ev.outcome.kind] || "ok";
-    const ts = fmtTimeShort(ev.ts);
     const ctx = ev.context || {};
     const tc = ctx.toolchain ? `<span class="dim"> · ${escapeHtml(ctx.toolchain)}</span>` : "";
     const host = ctx.host ? `<span class="dim"> · ${escapeHtml(ctx.host)}</span>` : "";
+    // Time display: a single tick if the group has one event OR all
+    // events share an instant; otherwise [first → last] so the user
+    // sees how long the same outcome has been recurring.
+    const sameInstant = g.first.ts === g.last.ts;
+    const tsLabel = g.events.length === 1 || sameInstant
+      ? fmtTimeShort(g.last.ts)
+      : `${fmtTimeShort(g.first.ts)} → ${fmtTimeShort(g.last.ts)}`;
+    const countChip = g.events.length > 1
+      ? `<span class="event-count" title="${g.events.length} identical occurrences">×${g.events.length}</span>`
+      : "";
     const detail = renderOutcomeDetail(ev.outcome);
     const log = ev.log && ev.log.tail
       ? `<details class="ev-log"><summary>log tail (${ev.log.text_path ? escapeHtml(ev.log.text_path) : "inline"})</summary><pre class="log-tail">${escapeHtml(ev.log.tail)}</pre></details>`
@@ -1136,15 +1541,19 @@ function renderEvents(events) {
     return `<div class="event-row">
       <div class="event-head">
         <span class="outcome-badge outcome-${grp}">${ev.outcome.kind.replace(/_/g, " ")}</span>
+        ${countChip}
         ${eventOverlayLabel(ev)}${tc}${host}
-        <span class="dim event-ts">${escapeHtml(ts)}</span>
+        <span class="dim event-ts">${escapeHtml(tsLabel)}</span>
       </div>
       <div class="event-trigger"><code>${escapeHtml(ctx.trigger || "")}</code></div>
       ${detail}
       ${log}
     </div>`;
   }).join("");
-  return `<h3>Events (${events.length})</h3>
+  const heading = groups.length === events.length
+    ? `Events (${events.length})`
+    : `Events (${events.length} total, ${groups.length} unique)`;
+  return `<h3>${heading}</h3>
     <div class="event-list">${rows}</div>`;
 }
 
@@ -1262,15 +1671,28 @@ function renderPackages(m, osKey) {
     const expanded = state.expanded === r.layer_hash ? " expanded" : "";
     const upstream = state.highlightUpstream === r.layer_hash ? " upstream" : "";
     const handles = handlesOf(r);
-    // Up to 3 chips; if more, append a "+N" indicator.
-    const chips =
-      handles.length === 0
-        ? `<span class="overlay-tag none">—</span>`
-        : handles.slice(0, 3).map(h =>
-            h === "(none)"
-              ? `<span class="overlay-tag none">∅</span>`
-              : `<span class="overlay-tag">@${escapeHtml(h)}</span>`
-          ).join(" ") + (handles.length > 3 ? ` <span class="overlay-tag none">+${handles.length - 3}</span>` : "");
+    // Single handle → flat chip. 2+ handles → a [details] dropdown
+    // anchored on the first chip plus a "+N" counter. Avoids overflowing
+    // the bounded overlay column on entries that fan out across many
+    // overlays.
+    const renderHandleChip = (h) =>
+      h === "(none)"
+        ? `<span class="overlay-tag none">∅</span>`
+        : `<span class="overlay-tag">@${escapeHtml(h)}</span>`;
+    let chips;
+    if (handles.length === 0) {
+      chips = `<span class="overlay-tag none">—</span>`;
+    } else if (handles.length === 1) {
+      chips = renderHandleChip(handles[0]);
+    } else {
+      const head = renderHandleChip(handles[0]);
+      const more = handles.length - 1;
+      const list = handles.map(renderHandleChip).join("");
+      chips = `<details class="handle-dd">
+        <summary>${head}<span class="more">+${more}</span></summary>
+        <div class="handle-dd-list">${list}</div>
+      </details>`;
+    }
     const rowHtml = `<div class="pkg-row${expanded}${upstream}" data-hash="${escapeHtml(r.layer_hash)}">
       <span class="outcome-badge outcome-${grp}">${r.headline_outcome.replace(/_/g, " ")}</span>
       <span><span class="pkg-name">${escapeHtml(r.pkg.name)}</span> <span class="pkg-version">${escapeHtml(r.pkg.version)}</span></span>
@@ -1336,30 +1758,33 @@ function render() {
   // overlay multi-select handlers
   const overlay = document.getElementById("overlay-multi");
   if (overlay) {
+    // Both checkbox toggles and the [Clear] / [All] action buttons
+    // mutate [state.overlayFilter] then re-render. Centralise the
+    // post-mutation work — URL persistence + re-render-while-keeping-
+    // -the-dropdown-open — so the URL stays in sync with whatever the
+    // user just clicked.
+    const persistAndRender = () => {
+      writeHash(state.active, state.expanded, overlaysFromState());
+      const wasOpen = overlay.open;
+      render();
+      if (wasOpen) {
+        const next = document.getElementById("overlay-multi");
+        if (next) next.open = true;
+      }
+    };
     for (const cb of overlay.querySelectorAll('input[type="checkbox"]')) {
       cb.onchange = () => {
         const h = cb.dataset.handle;
         if (cb.checked) state.overlayFilter.add(h);
         else state.overlayFilter.delete(h);
-        // Re-render but keep dropdown open.
-        const wasOpen = overlay.open;
-        render();
-        if (wasOpen) {
-          const next = document.getElementById("overlay-multi");
-          if (next) next.open = true;
-        }
+        persistAndRender();
       };
     }
     for (const btn of overlay.querySelectorAll("[data-overlay-action]")) {
       btn.onclick = (e) => {
         e.preventDefault();
         if (btn.dataset.overlayAction === "clear") state.overlayFilter.clear();
-        const wasOpen = overlay.open;
-        render();
-        if (wasOpen) {
-          const next = document.getElementById("overlay-multi");
-          if (next) next.open = true;
-        }
+        persistAndRender();
       };
     }
   }
@@ -1371,6 +1796,13 @@ function render() {
     row.onclick = (e) => {
       // Clicks on links inside an expanded panel must not collapse the row.
       if (e.target.closest("a[data-jump]")) return;
+      // The multi-handle dropdown lives inside the row but its toggling
+      // is handled by the native [details] element; intercept here so
+      // opening/closing it doesn't also expand the row.
+      if (e.target.closest(".handle-dd")) {
+        e.stopPropagation();
+        return;
+      }
       // Clicking a distro chip jumps to that distro's view of the same
       // package. The active os_key changes, the OS dropdown updates,
       // and the row stays expanded so the user can read the failure
@@ -1385,7 +1817,7 @@ function render() {
         if (!state.manifests.has(targetOs)) return;
         state.active = targetOs;
         expand(targetHash);
-        writeHash(targetOs, targetHash);
+        writeHash(targetOs, targetHash, overlaysFromState());
         render();
         const t = document.querySelector(`.pkg-row[data-hash="${targetHash}"]`);
         if (t) t.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -1395,10 +1827,10 @@ function render() {
       if (state.expanded === hash) {
         state.expanded = null;
         state.highlightUpstream = null;
-        writeHash(state.active, null);
+        writeHash(state.active, null, overlaysFromState());
       } else {
         expand(hash);
-        writeHash(state.active, hash);
+        writeHash(state.active, hash, overlaysFromState());
       }
       render();
       const newRow = document.querySelector(`.pkg-row[data-hash="${hash}"]`);
@@ -1414,18 +1846,26 @@ function render() {
       const hash = a.dataset.jump;
       if (!m.results.find(x => x.layer_hash === hash)) return;
       expand(hash);
-      writeHash(state.active, hash);
+      writeHash(state.active, hash, overlaysFromState());
       render();
       const target = document.querySelector(`.pkg-row[data-hash="${hash}"]`);
       if (target) target.scrollIntoView({ block: "nearest", behavior: "smooth" });
     };
   }
 
-  // "Copy link" button: write the deep-link to the clipboard.
+  // "Copy link" button: write the deep-link to the clipboard. The
+  // [data-share] attribute carries the [<os_key>/<layer>] path; we
+  // append the current overlay filter at click time so the copied
+  // URL reproduces what the recipient actually sees in the table.
   for (const btn of document.querySelectorAll(".pkg-detail .share")) {
     btn.onclick = async (e) => {
       e.stopPropagation();
-      const frag = btn.dataset.share;
+      let frag = btn.dataset.share;
+      const ov = overlaysFromState();
+      if (ov && ov.length > 0) {
+        const enc = ov.map(encodeURIComponent).join(",");
+        frag += `?overlay=${enc}`;
+      }
       const url = `${window.location.origin}${window.location.pathname}#${frag}`;
       try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
       btn.classList.add("copied");
@@ -1448,12 +1888,20 @@ function render() {
 }
 
 function applyHash() {
-  const { osKey, layer } = readHash();
+  const { osKey, layer, overlays } = readHash();
   if (osKey && state.manifests.has(osKey)) {
     state.active = osKey;
     if (layer) expand(layer); else { state.expanded = null; state.highlightUpstream = null; }
   } else if (!state.active) {
     state.active = state.manifests.keys().next().value;
+  }
+  // Overlay filter follows the URL. [overlays = null] means the
+  // hash didn't carry an overlay query at all, so we leave the
+  // current filter alone (preserves explicit user toggles across
+  // hashchange events that only mutated [osKey] / [layer]).
+  // [overlays = []] is "URL says explicitly empty"; respect that too.
+  if (overlays !== null) {
+    state.overlayFilter = new Set(overlays);
   }
 }
 
