@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oi registry</title>
+<style>
+:root {
+  --bg: #fafafa;
+  --bg-elev: #fff;
+  --bg-sunken: #f0f0f0;
+  --fg: #1a1a1a;
+  --fg-dim: #666;
+  --fg-faint: #999;
+  --border: #e0e0e0;
+  --border-strong: #c8c8c8;
+  --ok: #1e7e34;
+  --cached: #6c757d;
+  --warn: #b88700;
+  --fail: #c62828;
+  --info: #0066cc;
+  --accent: #5a3eb3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161616;
+    --bg-elev: #1f1f1f;
+    --bg-sunken: #121212;
+    --fg: #e0e0e0;
+    --fg-dim: #999;
+    --fg-faint: #666;
+    --border: #2c2c2c;
+    --border-strong: #3a3a3a;
+    --ok: #4caf50;
+    --cached: #777;
+    --warn: #e0a020;
+    --fail: #ef5350;
+    --info: #5ab6ff;
+    --accent: #b899ff;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+}
+a { color: var(--info); }
+
+/* ---- header ---- */
+header {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  position: sticky; top: 0; z-index: 10;
+}
+header .brand {
+  font-family: ui-monospace, SF Mono, Monaco, monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+header .brand .sub { color: var(--fg-dim); font-weight: normal; font-size: 0.75rem; margin-left: 0.4rem; }
+header .spacer { flex: 1; }
+header .exported-info {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+header .exported-info .schema { margin-left: 0.5rem; opacity: 0.7; }
+header .os-select {
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  min-width: 200px;
+}
+header .os-select:hover { border-color: var(--fg-dim); }
+header .fail-pill {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  background: var(--fail);
+  color: white;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
+/* ---- main ---- */
+main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
+
+/* ---- status bar (stacked) ---- */
+.status-bar-wrap {
+  margin-bottom: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.status-bar {
+  display: flex;
+  height: 14px;
+  width: 100%;
+  background: var(--bg-sunken);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.status-bar .seg {
+  display: flex; align-items: center; justify-content: center;
+  font-family: ui-monospace, monospace;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: white;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: filter 0.1s;
+  border-right: 1px solid rgba(0,0,0,0.15);
+}
+.status-bar .seg:last-child { border-right: none; }
+.status-bar .seg:hover { filter: brightness(1.15); }
+.status-bar .seg.muted { opacity: 0.35; }
+.status-bar .seg.ok      { background: var(--ok); }
+.status-bar .seg.cached  { background: var(--cached); }
+.status-bar .seg.fail    { background: var(--fail); }
+.status-bar .seg.warn    { background: var(--warn); }
+
+.status-legend {
+  margin-top: 0.4rem;
+  display: flex; flex-wrap: wrap; gap: 0.6rem 1rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: var(--fg-dim);
+}
+.status-legend .item { display: inline-flex; align-items: center; gap: 0.3rem; }
+.status-legend .swatch {
+  display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+}
+.status-legend .swatch.ok     { background: var(--ok); }
+.status-legend .swatch.cached { background: var(--cached); }
+.status-legend .swatch.fail   { background: var(--fail); }
+.status-legend .swatch.warn   { background: var(--warn); }
+.status-legend .count { color: var(--fg); font-weight: 600; }
+
+/* ---- filter bar ---- */
+.filters {
+  margin-bottom: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto auto;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+}
+.filters input[type="search"] {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.8rem;
+  width: 100%;
+}
+.filters select {
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.78rem;
+  font-family: ui-monospace, monospace;
+}
+.filters .label {
+  font-size: 0.68rem;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.3rem;
+}
+.filters .total {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--fg-dim);
+  text-align: right;
+}
+
+/* status pills (toggleable) */
+.status-pills { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.status-pill {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  background: var(--bg-sunken);
+  color: var(--fg-dim);
+}
+.status-pill .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; opacity: 0.4;
+}
+.status-pill.active.ok      { background: var(--ok);     color: white; border-color: var(--ok); }
+.status-pill.active.cached  { background: var(--cached); color: white; border-color: var(--cached); }
+.status-pill.active.fail    { background: var(--fail);   color: white; border-color: var(--fail); }
+.status-pill.active.warn    { background: var(--warn);   color: white; border-color: var(--warn); }
+.status-pill.active .dot    { background: white; opacity: 1; }
+
+/* multi-select dropdown for overlay handles */
+.multiselect { position: relative; }
+.multiselect summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.78rem;
+  font-family: ui-monospace, monospace;
+  min-width: 140px;
+  display: inline-flex; align-items: center; gap: 0.3rem;
+}
+.multiselect summary::-webkit-details-marker { display: none; }
+.multiselect summary::after {
+  content: "▾"; margin-left: auto; color: var(--fg-dim); font-size: 0.7rem;
+}
+.multiselect[open] summary { border-color: var(--accent); }
+.multiselect .dropdown {
+  position: absolute; top: 100%; left: 0;
+  margin-top: 4px;
+  z-index: 20;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 0.35rem;
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+}
+.multiselect .dropdown .row {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-family: ui-monospace, monospace;
+}
+.multiselect .dropdown .row:hover { background: var(--bg-sunken); }
+.multiselect .dropdown .row input { margin: 0; cursor: pointer; }
+.multiselect .dropdown .row .count { color: var(--fg-dim); margin-left: auto; font-size: 0.7rem; }
+.multiselect .dropdown .actions {
+  display: flex; gap: 0.4rem;
+  padding: 0.25rem 0.3rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.2rem;
+}
+.multiselect .dropdown .actions button {
+  background: none; border: none; color: var(--info);
+  font-size: 0.7rem; cursor: pointer; padding: 0.15rem 0.3rem;
+  font-family: ui-monospace, monospace;
+}
+.multiselect .dropdown .actions button:hover { text-decoration: underline; }
+
+/* ---- package list ---- */
+.pkg-list {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pkg-list-header {
+  display: grid;
+  grid-template-columns: 110px 1fr 110px 110px 80px 70px;
+  gap: 0.6rem;
+  padding: 0.35rem 0.85rem;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+  font-family: ui-monospace, monospace;
+  font-size: 0.65rem;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.pkg-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 110px 110px 80px 70px;
+  gap: 0.6rem;
+  padding: 0.3rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  align-items: center;
+  font-family: ui-monospace, SF Mono, Monaco, monospace;
+  font-size: 0.78rem;
+  position: relative;
+}
+.pkg-row:last-child { border-bottom: none; }
+.group-header {
+  padding: 0.35rem 0.85rem 0.25rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.group-header .group-count { color: var(--fg-dim); margin-left: 0.4rem; font-weight: normal; }
+.overlay-tag { color: var(--accent); font-size: 0.72rem; }
+.overlay-tag.none { color: var(--fg-faint); }
+.pkg-row:hover { background: var(--bg-sunken); }
+.pkg-row.expanded { background: var(--bg-sunken); }
+.pkg-row.expanded::before { content: ""; width: 3px; background: var(--accent); position: absolute; left: 0; top: 0; bottom: 0; }
+.pkg-row.upstream { background: rgba(198, 40, 40, 0.12); }
+.pkg-row.upstream::before { content: ""; width: 3px; background: var(--fail); position: absolute; left: 0; top: 0; bottom: 0; }
+@media (prefers-color-scheme: dark) {
+  .pkg-row.upstream { background: rgba(239, 83, 80, 0.18); }
+}
+.outcome-badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  text-align: center;
+  white-space: nowrap;
+}
+.outcome-ok { background: var(--ok); color: white; }
+.outcome-cached { background: var(--cached); color: white; }
+.outcome-warn { background: var(--warn); color: white; }
+.outcome-fail { background: var(--fail); color: white; }
+.pkg-name { font-weight: 600; }
+.pkg-version { color: var(--fg-dim); }
+.pkg-meta { color: var(--fg-dim); font-size: 0.72rem; text-align: right; }
+
+/* ---- detail panel ---- */
+.pkg-detail {
+  padding: 0.8rem 1rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-size: 0.82rem;
+}
+.pkg-detail .detail-head {
+  display: flex; align-items: baseline; gap: 0.5rem;
+  margin-bottom: 0.4rem; flex-wrap: wrap;
+}
+.pkg-detail .detail-head .title {
+  font-family: ui-monospace, monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+  word-break: break-all;
+}
+.pkg-detail .detail-head .ver { color: var(--fg-dim); font-weight: normal; }
+.pkg-detail .detail-head .share {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 0.2rem 0.5rem;
+  border-radius: 5px;
+  font-size: 0.7rem;
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+}
+.pkg-detail .detail-head .share:hover { color: var(--fg); border-color: var(--fg-dim); }
+.pkg-detail .detail-head .share.copied { color: var(--ok); border-color: var(--ok); }
+.pkg-detail dl {
+  display: grid; grid-template-columns: 100px 1fr;
+  gap: 0.2rem 0.8rem; margin: 0.5rem 0 0;
+}
+.pkg-detail dt {
+  color: var(--fg-dim); font-size: 0.68rem;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding-top: 2px;
+}
+.pkg-detail dd {
+  margin: 0; font-family: ui-monospace, monospace;
+  font-size: 0.76rem; word-break: break-all;
+}
+.pkg-detail dd a { color: var(--info); text-decoration: none; }
+.pkg-detail dd a:hover { text-decoration: underline; }
+.pkg-detail h3 {
+  margin: 0.85rem 0 0.3rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.15rem;
+}
+.pkg-detail .deps { margin: 0; padding-left: 1rem; }
+.pkg-detail .deps li {
+  font-family: ui-monospace, monospace;
+  font-size: 0.74rem;
+  padding: 0.05rem 0;
+  word-break: break-all;
+}
+.pkg-detail .deps li .dep-hash { color: var(--fg-dim); }
+.pkg-detail .deps li a { color: var(--fg); text-decoration: none; }
+.pkg-detail .deps li a:hover { color: var(--info); text-decoration: underline; }
+.pkg-detail .log-tail {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0.55rem;
+  border-radius: 5px;
+  max-height: 380px;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  white-space: pre;
+  color: var(--fg);
+  margin: 0;
+}
+.pkg-detail .chip {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  margin: 0 0.18rem 0.2rem 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+}
+.pkg-detail .chip.missing { background: var(--fail); color: white; border-color: var(--fail); }
+.pkg-detail .chip.installed { background: var(--ok); color: white; border-color: var(--ok); }
+.pkg-detail .chip.not_found { background: var(--warn); color: white; border-color: var(--warn); }
+.pkg-detail .download {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--accent);
+  color: white;
+  border-radius: 5px;
+  text-decoration: none;
+  font-size: 0.74rem;
+}
+.pkg-detail .download:hover { opacity: 0.9; text-decoration: none; }
+.pkg-detail table.callers {
+  margin: 0;
+  border-collapse: collapse;
+  font-family: ui-monospace, monospace;
+  font-size: 0.73rem;
+  width: 100%;
+}
+.pkg-detail table.callers th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+  padding: 0.2rem 0.4rem;
+}
+.pkg-detail table.callers td {
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.pkg-detail table.callers tr:last-child td { border-bottom: none; }
+.pkg-detail table.callers code {
+  font-size: 0.7rem;
+  word-break: break-all;
+}
+.pkg-detail .event-list {
+  display: flex; flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+}
+.pkg-detail .event-row {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.55rem;
+  background: var(--bg-sunken);
+  font-size: 0.74rem;
+}
+.pkg-detail .event-head {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  margin-bottom: 0.2rem;
+}
+.pkg-detail .event-head .event-ts { margin-left: auto; }
+.pkg-detail .event-trigger {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: var(--fg-dim);
+  margin-bottom: 0.2rem;
+  word-break: break-all;
+}
+.pkg-detail .event-trigger code { color: var(--fg); }
+.pkg-detail .ev-detail {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  margin: 0.15rem 0;
+}
+.pkg-detail .ev-detail .lbl {
+  color: var(--fg-dim);
+  display: inline-block;
+  min-width: 4.5rem;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+}
+.pkg-detail .ev-detail code { word-break: break-all; }
+.pkg-detail .ev-detail .dim { color: var(--fg-dim); }
+.pkg-detail .ev-log {
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+}
+.pkg-detail .ev-log summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
+  word-break: break-all;
+}
+.pkg-detail .ev-log summary:hover { color: var(--fg); }
+.pkg-detail .ev-log[open] summary { color: var(--fg); }
+.pkg-detail .dim { color: var(--fg-dim); }
+
+.empty { text-align: center; color: var(--fg-dim); padding: 2.5rem; }
+.spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 0.5rem; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 760px) {
+  .filters { grid-template-columns: 1fr; }
+  .pkg-list-header, .pkg-row {
+    grid-template-columns: 90px 1fr 80px 70px;
+  }
+  .pkg-list-header .col-method, .pkg-list-header .col-overlay,
+  .pkg-row > :nth-child(3), .pkg-row > :nth-child(5) { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">oi <span class="sub">registry</span></span>
+  <span class="spacer"></span>
+  <span class="exported-info" id="exported-info"></span>
+  <select class="os-select" id="os-select" title="Select OS"></select>
+</header>
+<main>
+  <div id="content"><div class="empty"><span class="spinner"></span>Loading manifests…</div></div>
+</main>
+
+<script>
+"use strict";
+
+// Probe these os_keys at <root>/<os_key>/logs/manifest.json. Ones that
+// 404 are silently skipped. Matches the default_distros list emitted by
+// `oi docker --all`.
+const PROBE_OS_KEYS = [
+  "alpine~3.23~x86_64",
+  "debian~13~x86_64",
+  "ubuntu~24.04~x86_64",
+  "ubuntu~25.10~x86_64",
+  "fedora~43~x86_64",
+];
+
+// headline_outcome -> visual group. Mirrors the producer-side
+// outcome priority in lib/oi/manifest.ml. "restored" groups with
+// "cached" since both mean "no work done, layer was already in
+// the cache."
+const OUTCOME_GROUPS = {
+  ok: "ok",
+  cached: "cached",
+  restored: "cached",
+  build_failed: "fail",
+  install_failed: "fail",
+  fetch_failed: "fail",
+  solve_failed: "fail",
+  dep_failed: "warn",
+  depext_missing: "warn",
+  skipped: "warn",
+};
+
+const OUTCOME_KINDS = Object.keys(OUTCOME_GROUPS);
+
+const STATUS_GROUPS = [
+  { key: "ok",     label: "ok" },
+  { key: "cached", label: "cached" },
+  { key: "warn",   label: "warn" },
+  { key: "fail",   label: "fail" },
+];
+
+const state = {
+  manifests: new Map(),    // os_key -> manifest object
+  audits: new Map(),       // os_key -> Map<layer_hash, event[]>
+  active: null,            // currently selected os_key
+  filter: "",
+  overlayFilter: new Set(),// empty = all overlays
+  statusFilter: new Set(STATUS_GROUPS.map(g => g.key)), // all enabled
+  sortMode: "outcome",
+  expanded: null,          // currently expanded layer_hash
+  highlightUpstream: null, // layer_hash to also highlight (for dep_failed)
+};
+
+async function fetchManifest(osKey) {
+  try {
+    const r = await fetch(`${osKey}/logs/manifest.json`, { cache: "no-cache" });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+// audit.jsonl — one JSON object per line, indexed by layer_hash so the
+// detail panel can render per-event provenance (failure command, fetch
+// kind, log tail, …) on demand. Failures and successes share the index
+// since one layer_hash may carry both flavours of event across callers.
+async function fetchAudit(osKey) {
+  try {
+    const r = await fetch(`${osKey}/audit.jsonl`, { cache: "no-cache" });
+    if (!r.ok) return new Map();
+    const text = await r.text();
+    const byLayer = new Map();
+    for (const line of text.split("\n")) {
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      if (!ev.layer_hash) continue;
+      let arr = byLayer.get(ev.layer_hash);
+      if (!arr) { arr = []; byLayer.set(ev.layer_hash, arr); }
+      arr.push(ev);
+    }
+    // Sort each layer's events by ts so renders read top-to-bottom.
+    for (const arr of byLayer.values()) {
+      arr.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    }
+    return byLayer;
+  } catch { return new Map(); }
+}
+
+// Distinct overlay handles claimed by an entry's callers, in stable
+// alphabetical order. "(none)" appears for a caller with no overlay
+// (project-mode or plain `oi build PKG` invocations).
+function handlesOf(r) {
+  const set = new Set();
+  for (const c of r.callers || []) {
+    set.add(c.overlay ? c.overlay.handle : "(none)");
+  }
+  return [...set].sort();
+}
+
+// "alpine~3.23~x86_64" -> { name, version, arch, short, full }
+function parseOsKey(key) {
+  const parts = key.split("~");
+  const raw = parts[0] || key;
+  const version = parts[1] || "";
+  const arch = parts[2] || "";
+  const name = raw.charAt(0).toUpperCase() + raw.slice(1);
+  const short = version ? `${name} ${version}` : name;
+  const full = arch ? `${short} · ${arch}` : short;
+  return { name, version, arch, short, full };
+}
+
+// Topological order: deps first, then dependents. Stable: ties resolve
+// by input order so two unrelated leaves keep their original order.
+function topoSort(results) {
+  const byHash = new Map(results.map(r => [r.layer_hash, r]));
+  const visited = new Set();
+  const out = [];
+  function visit(r) {
+    if (visited.has(r.layer_hash)) return;
+    visited.add(r.layer_hash);
+    for (const d of r.deps || []) {
+      const dep = byHash.get(d.hash);
+      if (dep) visit(dep);
+    }
+    out.push(r);
+  }
+  results.forEach(visit);
+  return out;
+}
+
+function sortByOutcome(results) {
+  const order = { fail: 0, warn: 1, ok: 2, cached: 3 };
+  return [...results].sort((a, b) => {
+    const oa = order[OUTCOME_GROUPS[a.headline_outcome]] ?? 99;
+    const ob = order[OUTCOME_GROUPS[b.headline_outcome]] ?? 99;
+    if (oa !== ob) return oa - ob;
+    return a.pkg.name.localeCompare(b.pkg.name);
+  });
+}
+
+function fmtDuration(s) {
+  if (s == null || s < 0.0005) return "—";
+  if (s < 1) return `${(s * 1000).toFixed(0)}ms`;
+  if (s < 60) return `${s.toFixed(2)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m${(s - m * 60).toFixed(0)}s`;
+}
+
+function fmtTime(t) {
+  return new Date(t * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+
+function fmtTimeShort(t) {
+  return new Date(t * 1000).toISOString().replace("T", " ").slice(0, 16);
+}
+
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+// URL hash format: #<os_key>/<layer_hash>. Tilde, slash and hex are all
+// fragment-safe so no encoding needed for our values.
+function readHash() {
+  const h = window.location.hash.replace(/^#/, "");
+  if (!h) return { osKey: null, layer: null };
+  const slash = h.indexOf("/");
+  if (slash < 0) return { osKey: h, layer: null };
+  return { osKey: h.slice(0, slash), layer: h.slice(slash + 1) };
+}
+
+function writeHash(osKey, layer) {
+  const want = layer ? `#${osKey}/${layer}` : `#${osKey}`;
+  if (window.location.hash !== want) {
+    history.replaceState(null, "", want);
+  }
+}
+
+function renderHeader() {
+  const m = state.manifests.get(state.active);
+  const sel = document.getElementById("os-select");
+  sel.innerHTML = "";
+  for (const [key, mm] of state.manifests) {
+    const failures = mm.summary.build_failed + mm.summary.install_failed
+                   + mm.summary.fetch_failed + mm.summary.solve_failed;
+    const p = parseOsKey(key);
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = `${p.full} (${mm.n_packages})${failures > 0 ? ` — ${failures} failed` : ""}`;
+    if (key === state.active) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.onchange = (e) => {
+    state.active = e.target.value;
+    state.expanded = null;
+    state.highlightUpstream = null;
+    writeHash(state.active, null);
+    render();
+  };
+  const info = document.getElementById("exported-info");
+  if (m) {
+    info.innerHTML =
+      `<span title="last export">exported ${escapeHtml(fmtTimeShort(m.exported_at))} UTC</span>` +
+      `<span class="schema">schema v${escapeHtml(String(m.schema))}</span>`;
+  } else {
+    info.textContent = "";
+  }
+}
+
+// CSS stacked status bar replacing the per-card summary. Segments scale
+// proportionally to outcome counts and toggle the matching status filter
+// when clicked.
+function renderStatusBar(m) {
+  const groupCounts = { ok: 0, cached: 0, warn: 0, fail: 0 };
+  const kindCounts = {};
+  for (const kind of OUTCOME_KINDS) {
+    const c = m.summary[kind] || 0;
+    if (c <= 0) continue;
+    const grp = OUTCOME_GROUPS[kind];
+    groupCounts[grp] = (groupCounts[grp] || 0) + c;
+    kindCounts[kind] = c;
+  }
+  const total = Object.values(groupCounts).reduce((a, b) => a + b, 0) || 1;
+  const order = ["ok", "cached", "warn", "fail"];
+  const segs = order.filter(g => groupCounts[g] > 0).map(g => {
+    const muted = !state.statusFilter.has(g) ? " muted" : "";
+    const pct = (groupCounts[g] / total) * 100;
+    return `<div class="seg ${g}${muted}" data-status="${g}"
+              style="flex:${groupCounts[g]}"
+              title="${g}: ${groupCounts[g]} (${pct.toFixed(1)}%) — click to toggle">
+              ${pct >= 4 ? groupCounts[g] : ""}
+            </div>`;
+  }).join("");
+  // legend lists every concrete outcome kind with a non-zero count, so
+  // depext_missing/skipped/etc remain visible even when bar is grouped.
+  const legendItems = OUTCOME_KINDS.filter(k => kindCounts[k]).map(k => {
+    const grp = OUTCOME_GROUPS[k];
+    return `<span class="item">
+              <span class="swatch ${grp}"></span>
+              ${escapeHtml(k.replace(/_/g, " "))}
+              <span class="count">${kindCounts[k]}</span>
+            </span>`;
+  }).join("");
+  return `<div class="status-bar-wrap">
+    <div class="status-bar" id="status-bar">${segs}</div>
+    <div class="status-legend">
+      <span class="item"><span class="count">${m.n_packages}</span> total</span>
+      ${legendItems}
+    </div>
+  </div>`;
+}
+
+function renderFilters(m) {
+  // Overlay handles with counts, derived from each entry's callers[]
+  // (an entry may show up under multiple handles, so each is counted
+  // once per matching entry).
+  const handleCounts = new Map();
+  for (const r of m.results) {
+    for (const h of handlesOf(r)) {
+      handleCounts.set(h, (handleCounts.get(h) || 0) + 1);
+    }
+  }
+  const handles = [...handleCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const overlayLabel = state.overlayFilter.size === 0
+    ? "all overlays"
+    : (state.overlayFilter.size === 1
+        ? [...state.overlayFilter][0] === "(none)" ? "(no overlay)" : "@" + [...state.overlayFilter][0]
+        : `${state.overlayFilter.size} overlays`);
+
+  const handleRows = handles.map(([h, c]) => {
+    const checked = state.overlayFilter.has(h) ? "checked" : "";
+    const lbl = h === "(none)" ? "(no overlay)" : "@" + h;
+    return `<label class="row">
+      <input type="checkbox" data-handle="${escapeHtml(h)}" ${checked}>
+      <span>${escapeHtml(lbl)}</span>
+      <span class="count">${c}</span>
+    </label>`;
+  }).join("");
+
+  const statusPills = STATUS_GROUPS.map(g => {
+    const active = state.statusFilter.has(g.key) ? " active" : "";
+    return `<span class="status-pill ${g.key}${active}" data-status="${g.key}">
+      <span class="dot"></span>${g.label}
+    </span>`;
+  }).join("");
+
+  return `<div class="filters">
+    <input type="search" id="filter" placeholder="Filter by name, version, outcome…" value="${escapeHtml(state.filter)}">
+    <span><span class="label">status</span><span class="status-pills" id="status-pills">${statusPills}</span></span>
+    <details class="multiselect" id="overlay-multi">
+      <summary><span class="label">overlay</span>${escapeHtml(overlayLabel)}</summary>
+      <div class="dropdown" onclick="event.stopPropagation()">
+        <div class="actions">
+          <button data-overlay-action="clear">show all</button>
+        </div>
+        ${handleRows}
+      </div>
+    </details>
+    <span><span class="label">sort</span>
+      <select id="sort">
+        <option value="outcome" ${state.sortMode === "outcome" ? "selected" : ""}>failures first</option>
+        <option value="overlay" ${state.sortMode === "overlay" ? "selected" : ""}>group by overlay</option>
+        <option value="topo" ${state.sortMode === "topo" ? "selected" : ""}>dependency order</option>
+        <option value="duration" ${state.sortMode === "duration" ? "selected" : ""}>slowest first</option>
+        <option value="name" ${state.sortMode === "name" ? "selected" : ""}>name (A→Z)</option>
+      </select>
+    </span>
+    <span class="total" id="visible-count"></span>
+  </div>`;
+}
+
+// In overlay-grouped mode, return rows interleaved with header rows.
+// Other modes return a flat list.
+function applySort(results) {
+  switch (state.sortMode) {
+    case "topo":     return topoSort(results);
+    case "outcome":  return sortByOutcome(results);
+    case "duration": return [...results].sort((a, b) => (b.duration_s || 0) - (a.duration_s || 0));
+    case "name":     return [...results].sort((a, b) => a.pkg.name.localeCompare(b.pkg.name));
+    case "overlay": {
+      // An entry with N caller handles fans out into N rows under each
+      // handle's group. Read pragmatically: "this layer is claimed by
+      // these handles" rather than "exactly one row per layer".
+      const groups = new Map();
+      for (const r of results) {
+        for (const k of handlesOf(r)) {
+          if (!groups.has(k)) groups.set(k, []);
+          groups.get(k).push(r);
+        }
+      }
+      const out = [];
+      for (const [handle, rows] of [...groups.entries()].sort()) {
+        rows.sort((a, b) => a.pkg.name.localeCompare(b.pkg.name));
+        out.push({ __header: handle, count: rows.length });
+        for (const r of rows) out.push(r);
+      }
+      return out;
+    }
+    default: return results;
+  }
+}
+
+// Compact "ok:1 cached:2 fail:0" string for a caller's outcomes histogram.
+function fmtOutcomes(outcomes) {
+  if (!outcomes || outcomes.length === 0) return "—";
+  return outcomes.map(o => `${o.kind}:${o.count}`).join(" ");
+}
+
+function renderCallers(callers) {
+  if (!callers || callers.length === 0) return "";
+  const rows = callers.map(c => {
+    const lbl = c.overlay
+      ? `<span class="overlay-tag">@${escapeHtml(c.overlay.handle)}${c.overlay.version ? " " + escapeHtml(c.overlay.version) : ""}</span>`
+      : `<span class="overlay-tag none">(no overlay)</span>`;
+    const tc = c.toolchain ? ` · ${escapeHtml(c.toolchain)}` : "";
+    return `<tr>
+      <td>${lbl}${tc}</td>
+      <td><code>${escapeHtml(c.trigger || "")}</code></td>
+      <td style="text-align:right">${c.count}</td>
+      <td>${escapeHtml(fmtOutcomes(c.outcomes))}</td>
+      <td style="text-align:right">${escapeHtml(fmtTimeShort(c.last_seen))}</td>
+    </tr>`;
+  }).join("");
+  return `<h3>Callers (${callers.length})</h3>
+    <table class="callers">
+      <thead><tr>
+        <th>overlay / toolchain</th><th>trigger</th>
+        <th style="text-align:right">events</th><th>outcomes</th>
+        <th style="text-align:right">last seen</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// Pretty-print the kind-specific outcome detail attached to an audit
+// event. Mirrors the OCaml outcome variant in lib/oi/audit.ml — anything
+// new there should grow a case here.
+function renderOutcomeDetail(o) {
+  if (!o) return "";
+  switch (o.kind) {
+    case "build_failed":
+    case "install_failed":
+      return `<div class="ev-detail"><span class="lbl">cmd</span> <code>${escapeHtml(o.command || "")}</code>${
+        o.exit_code != null ? ` <span class="dim">(exit ${o.exit_code})</span>` : ""
+      }</div>`;
+    case "fetch_failed": {
+      const fk = o.fetch_kind || {};
+      let kindStr = fk.type || "";
+      if (fk.code) kindStr += ` ${fk.code}`;
+      if (fk.message) kindStr += ` — ${fk.message}`;
+      return `<div class="ev-detail">
+        <div><span class="lbl">url</span> <a href="${escapeHtml(o.url)}" target="_blank" rel="noopener">${escapeHtml(o.url)}</a></div>
+        <div><span class="lbl">kind</span> ${escapeHtml(kindStr)}</div>
+      </div>`;
+    }
+    case "dep_failed": {
+      const u = o.upstream || {};
+      return `<div class="ev-detail"><span class="lbl">upstream</span> <a href="#" data-jump="${escapeHtml(u.hash || "")}">${escapeHtml(u.name || "")}.${escapeHtml(u.version || "")}</a> <span class="dim">${escapeHtml((u.hash || "").slice(0, 12))}</span></div>`;
+    }
+    case "solve_failed":
+    case "skipped":
+      return `<div class="ev-detail"><span class="lbl">reason</span> ${escapeHtml(o.reason || "")}</div>`;
+    case "depext_missing":
+      return `<div class="ev-detail">
+        <div><span class="lbl">missing</span> ${(o.missing || []).map(escapeHtml).join(", ")}</div>
+        <div><span class="lbl">not found</span> ${(o.not_found || []).map(escapeHtml).join(", ")}</div>
+      </div>`;
+    default: return "";
+  }
+}
+
+function eventOverlayLabel(ev) {
+  const c = ev.context || {};
+  const o = c.overlay;
+  return o
+    ? `<span class="overlay-tag">@${escapeHtml(o.handle)}${o.version ? " " + escapeHtml(o.version) : ""}</span>`
+    : `<span class="overlay-tag none">(no overlay)</span>`;
+}
+
+// Per-event detail surfaced under the aggregated callers table. The
+// manifest's [callers] is a histogram; the audit log preserves the full
+// event stream so we can render the actual failure command, fetch URL,
+// log tail, etc. for each invocation.
+function renderEvents(events) {
+  if (!events || events.length === 0) return "";
+  const rows = events.map(ev => {
+    const grp = OUTCOME_GROUPS[ev.outcome.kind] || "ok";
+    const ts = fmtTimeShort(ev.ts);
+    const ctx = ev.context || {};
+    const tc = ctx.toolchain ? `<span class="dim"> · ${escapeHtml(ctx.toolchain)}</span>` : "";
+    const host = ctx.host ? `<span class="dim"> · ${escapeHtml(ctx.host)}</span>` : "";
+    const detail = renderOutcomeDetail(ev.outcome);
+    const log = ev.log && ev.log.tail
+      ? `<details class="ev-log"><summary>log tail (${ev.log.text_path ? escapeHtml(ev.log.text_path) : "inline"})</summary><pre class="log-tail">${escapeHtml(ev.log.tail)}</pre></details>`
+      : "";
+    return `<div class="event-row">
+      <div class="event-head">
+        <span class="outcome-badge outcome-${grp}">${ev.outcome.kind.replace(/_/g, " ")}</span>
+        ${eventOverlayLabel(ev)}${tc}${host}
+        <span class="dim event-ts">${escapeHtml(ts)}</span>
+      </div>
+      <div class="event-trigger"><code>${escapeHtml(ctx.trigger || "")}</code></div>
+      ${detail}
+      ${log}
+    </div>`;
+  }).join("");
+  return `<h3>Events (${events.length})</h3>
+    <div class="event-list">${rows}</div>`;
+}
+
+function renderProvenance(r) {
+  if (!r.opam) return "";
+  const o = r.opam;
+  const origin = o.origin || {};
+  const src = r.source || null;
+  const env = r.build_env || null;
+  return `<h3>Provenance</h3>
+    <dl>
+      <dt>opam sha256</dt><dd>${escapeHtml(o.sha256 || "")}</dd>
+      <dt>origin</dt><dd>${escapeHtml(origin.kind || "?")}${origin.handle ? ` @${escapeHtml(origin.handle)}` : ""} <span style="color:var(--fg-dim)">${escapeHtml(origin.path_in_repo || "")}</span></dd>
+      ${src ? `<dt>source url</dt><dd><a href="${escapeHtml(src.url)}" target="_blank" rel="noopener">${escapeHtml(src.url)}</a> ${src.kind ? `<span style="color:var(--fg-dim)">(${escapeHtml(src.kind)})</span>` : ""}</dd>` : ""}
+      ${src && (src.checksums || []).length > 0 ? `<dt>source checksum</dt><dd>${escapeHtml(src.checksums[0])}</dd>` : ""}
+      ${env ? `<dt>ocaml</dt><dd>${escapeHtml(env.ocaml_version || "")}</dd>` : ""}
+    </dl>`;
+}
+
+function renderDetail(r, osKey) {
+  const grp = OUTCOME_GROUPS[r.headline_outcome] || "ok";
+  const phases = r.phases || {};
+  const hasPhases = phases.fetch || phases.build || phases.install || phases.restore;
+  const depexts = r.depexts_declared || [];
+  const layerUrl = `${osKey}/${r.layer_hash}.tar.zst`;
+  const downloadable = r.headline_outcome === "ok" || r.headline_outcome === "cached" || r.headline_outcome === "restored";
+  // Pull raw events for this layer from the audit index. Falls back to a
+  // synthetic single-event list if audit.jsonl wasn't shipped, so the
+  // entry's own [r.log] tail still renders.
+  const auditMap = state.audits.get(osKey);
+  const events = auditMap ? auditMap.get(r.layer_hash) : null;
+  return `<div class="pkg-detail">
+    <div class="detail-head">
+      <span class="title">${escapeHtml(r.pkg.name)} <span class="ver">${escapeHtml(r.pkg.version)}</span></span>
+      <span class="outcome-badge outcome-${grp}">${r.headline_outcome.replace(/_/g, " ")}</span>
+      <button class="share" data-share="${escapeHtml(osKey)}/${escapeHtml(r.layer_hash)}">Copy link</button>
+    </div>
+    <dl>
+      <dt>layer</dt><dd>${escapeHtml(r.layer_hash)}</dd>
+      <dt>method</dt><dd>${escapeHtml(r.method)}</dd>
+      ${r.duration_s != null ? `<dt>duration</dt><dd>${fmtDuration(r.duration_s)}</dd>` : ""}
+      ${r.built_at != null ? `<dt>built at</dt><dd>${fmtTime(r.built_at)}</dd>` : ""}
+    </dl>
+    ${downloadable ? `<a class="download" href="${escapeHtml(layerUrl)}" download>Download layer (.tar.zst)</a>` : ""}
+    ${renderProvenance(r)}
+    ${hasPhases ? `<h3>Phases</h3>
+      <dl>
+        ${phases.fetch ? `<dt>fetch</dt><dd>${fmtDuration(phases.fetch)}</dd>` : ""}
+        ${phases.build ? `<dt>build</dt><dd>${fmtDuration(phases.build)}</dd>` : ""}
+        ${phases.install ? `<dt>install</dt><dd>${fmtDuration(phases.install)}</dd>` : ""}
+        ${phases.restore ? `<dt>restore</dt><dd>${fmtDuration(phases.restore)}</dd>` : ""}
+      </dl>` : ""}
+    ${depexts.length > 0 ? `<h3>System packages (declared)</h3>
+      <div>${depexts.map(p => `<span class="chip">${escapeHtml(p)}</span>`).join("")}</div>` : ""}
+    ${(r.deps || []).length > 0 ? `<h3>Dependencies (${r.deps.length})</h3>
+      <ul class="deps">${r.deps.map(dp =>
+        `<li><a href="#" data-jump="${escapeHtml(dp.hash)}">${escapeHtml(dp.name)}.${escapeHtml(dp.version)}</a> <span class="dep-hash">${escapeHtml(dp.hash.slice(0,12))}</span></li>`
+      ).join("")}</ul>` : ""}
+    ${renderCallers(r.callers)}
+    ${renderEvents(events)}
+    ${!events && r.log && r.log.tail ? `<h3>Log tail (last ~150 lines)</h3>
+      <pre class="log-tail">${escapeHtml(r.log.tail)}</pre>` : ""}
+    ${!events && r.log && r.log.text_path ? `<div style="font-size:0.7rem;color:var(--fg-dim);margin-top:0.4rem">log path: <code>${escapeHtml(r.log.text_path)}</code></div>` : ""}
+  </div>`;
+}
+
+function renderPackages(m, osKey) {
+  let rows = applySort(m.results);
+  // Status filter (always active — empty set means show nothing).
+  rows = rows.filter(r => r.__header || state.statusFilter.has(OUTCOME_GROUPS[r.headline_outcome] || "ok"));
+  // Overlay filter (empty set = no filtering): match if ANY caller's
+  // handle is selected (set membership over handlesOf(r)).
+  if (state.overlayFilter.size > 0) {
+    rows = rows.filter(r => {
+      if (r.__header) return state.overlayFilter.has(r.__header);
+      return handlesOf(r).some(h => state.overlayFilter.has(h));
+    });
+  }
+  // Then text filter.
+  if (state.filter) {
+    const f = state.filter.toLowerCase();
+    rows = rows.filter(r => r.__header || (
+      r.pkg.name.toLowerCase().includes(f) ||
+      r.pkg.version.toLowerCase().includes(f) ||
+      r.headline_outcome.includes(f)));
+  }
+  // Drop trailing/empty group headers.
+  const cleaned = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].__header) {
+      const next = rows[i + 1];
+      if (!next || next.__header) continue;
+    }
+    cleaned.push(rows[i]);
+  }
+  rows = cleaned;
+  if (rows.length === 0) {
+    return `<div class="pkg-list"><div class="empty">No packages match.</div></div>`;
+  }
+  const headerRow = `<div class="pkg-list-header">
+    <span>status</span>
+    <span>package</span>
+    <span class="col-overlay">overlay</span>
+    <span style="text-align:right">layer</span>
+    <span class="col-method" style="text-align:right">method</span>
+    <span style="text-align:right">duration</span>
+  </div>`;
+  return `<div class="pkg-list">${headerRow}${rows.map(r => {
+    if (r.__header) {
+      const lbl = r.__header === "(none)" ? "(no overlay)" : "@" + r.__header;
+      return `<div class="group-header">${escapeHtml(lbl)}<span class="group-count">${r.count} pkg(s)</span></div>`;
+    }
+    const grp = OUTCOME_GROUPS[r.headline_outcome] || "ok";
+    const expanded = state.expanded === r.layer_hash ? " expanded" : "";
+    const upstream = state.highlightUpstream === r.layer_hash ? " upstream" : "";
+    const handles = handlesOf(r);
+    // Up to 3 chips; if more, append a "+N" indicator.
+    const chips =
+      handles.length === 0
+        ? `<span class="overlay-tag none">—</span>`
+        : handles.slice(0, 3).map(h =>
+            h === "(none)"
+              ? `<span class="overlay-tag none">∅</span>`
+              : `<span class="overlay-tag">@${escapeHtml(h)}</span>`
+          ).join(" ") + (handles.length > 3 ? ` <span class="overlay-tag none">+${handles.length - 3}</span>` : "");
+    const rowHtml = `<div class="pkg-row${expanded}${upstream}" data-hash="${escapeHtml(r.layer_hash)}">
+      <span class="outcome-badge outcome-${grp}">${r.headline_outcome.replace(/_/g, " ")}</span>
+      <span><span class="pkg-name">${escapeHtml(r.pkg.name)}</span> <span class="pkg-version">${escapeHtml(r.pkg.version)}</span></span>
+      ${chips}
+      <span class="pkg-meta">${escapeHtml(r.layer_hash.slice(0,12))}</span>
+      <span class="pkg-meta">${escapeHtml(r.method)}</span>
+      <span class="pkg-meta">${r.duration_s != null ? fmtDuration(r.duration_s) : "—"}</span>
+    </div>`;
+    return rowHtml + (state.expanded === r.layer_hash ? renderDetail(r, osKey) : "");
+  }).join("")}</div>`;
+}
+
+function expand(layerHash) {
+  const m = state.manifests.get(state.active);
+  if (!m) return;
+  const r = m.results.find(x => x.layer_hash === layerHash);
+  if (!r) {
+    state.expanded = null;
+    state.highlightUpstream = null;
+  } else {
+    state.expanded = layerHash;
+    // dep_failed entries no longer carry the upstream hash on the entry —
+    // it lived inside the old per-outcome detail block. Skip the highlight
+    // until we surface failure events on the manifest entry.
+    state.highlightUpstream = null;
+  }
+}
+
+function render() {
+  renderHeader();
+  const m = state.manifests.get(state.active);
+  if (!m) {
+    document.getElementById("content").innerHTML = `<div class="empty">No manifest found.</div>`;
+    return;
+  }
+  document.getElementById("content").innerHTML =
+    renderStatusBar(m) + renderFilters(m) + renderPackages(m, state.active);
+
+  document.getElementById("filter").oninput = (e) => { state.filter = e.target.value; render(); };
+  document.getElementById("sort").onchange = (e) => { state.sortMode = e.target.value; render(); };
+
+  // status pills toggle
+  for (const pill of document.querySelectorAll("#status-pills .status-pill")) {
+    pill.onclick = () => {
+      const k = pill.dataset.status;
+      if (state.statusFilter.has(k)) state.statusFilter.delete(k);
+      else state.statusFilter.add(k);
+      render();
+    };
+  }
+
+  // status bar segment click toggles status filter for that group
+  for (const seg of document.querySelectorAll("#status-bar .seg")) {
+    seg.onclick = () => {
+      const k = seg.dataset.status;
+      if (state.statusFilter.has(k)) state.statusFilter.delete(k);
+      else state.statusFilter.add(k);
+      render();
+    };
+  }
+
+  // overlay multi-select handlers
+  const overlay = document.getElementById("overlay-multi");
+  if (overlay) {
+    for (const cb of overlay.querySelectorAll('input[type="checkbox"]')) {
+      cb.onchange = () => {
+        const h = cb.dataset.handle;
+        if (cb.checked) state.overlayFilter.add(h);
+        else state.overlayFilter.delete(h);
+        // Re-render but keep dropdown open.
+        const wasOpen = overlay.open;
+        render();
+        if (wasOpen) {
+          const next = document.getElementById("overlay-multi");
+          if (next) next.open = true;
+        }
+      };
+    }
+    for (const btn of overlay.querySelectorAll("[data-overlay-action]")) {
+      btn.onclick = (e) => {
+        e.preventDefault();
+        if (btn.dataset.overlayAction === "clear") state.overlayFilter.clear();
+        const wasOpen = overlay.open;
+        render();
+        if (wasOpen) {
+          const next = document.getElementById("overlay-multi");
+          if (next) next.open = true;
+        }
+      };
+    }
+  }
+
+  const visible = document.querySelectorAll(".pkg-row").length;
+  document.getElementById("visible-count").textContent = `${visible} of ${m.results.length}`;
+
+  for (const row of document.querySelectorAll(".pkg-row")) {
+    row.onclick = (e) => {
+      // Clicks on links inside an expanded panel must not collapse the row.
+      if (e.target.closest("a[data-jump]")) return;
+      const hash = row.dataset.hash;
+      if (state.expanded === hash) {
+        state.expanded = null;
+        state.highlightUpstream = null;
+        writeHash(state.active, null);
+      } else {
+        expand(hash);
+        writeHash(state.active, hash);
+      }
+      render();
+      const newRow = document.querySelector(`.pkg-row[data-hash="${hash}"]`);
+      if (newRow) newRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+  }
+
+  // Dep-jump links inside the expanded panel: switch expansion to the
+  // target layer and update the URL.
+  for (const a of document.querySelectorAll("a[data-jump]")) {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const hash = a.dataset.jump;
+      if (!m.results.find(x => x.layer_hash === hash)) return;
+      expand(hash);
+      writeHash(state.active, hash);
+      render();
+      const target = document.querySelector(`.pkg-row[data-hash="${hash}"]`);
+      if (target) target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+  }
+
+  // "Copy link" button: write the deep-link to the clipboard.
+  for (const btn of document.querySelectorAll(".pkg-detail .share")) {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const frag = btn.dataset.share;
+      const url = `${window.location.origin}${window.location.pathname}#${frag}`;
+      try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
+      btn.classList.add("copied");
+      btn.textContent = "Copied";
+      setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.textContent = "Copy link";
+      }, 1200);
+    };
+  }
+
+  // Scroll the upstream into view on first render after a dep_failed expand.
+  if (state.expanded) {
+    const el = document.querySelector(`.pkg-row[data-hash="${state.expanded}"]`);
+    if (el && !el.dataset.scrolled) {
+      el.scrollIntoView({ block: "nearest" });
+      el.dataset.scrolled = "1";
+    }
+  }
+}
+
+function applyHash() {
+  const { osKey, layer } = readHash();
+  if (osKey && state.manifests.has(osKey)) {
+    state.active = osKey;
+    if (layer) expand(layer); else { state.expanded = null; state.highlightUpstream = null; }
+  } else if (!state.active) {
+    state.active = state.manifests.keys().next().value;
+  }
+}
+
+(async function init() {
+  // Fetch manifest + audit slice for every probed os_key in parallel. Audit
+  // is best-effort: a registry that ships only manifest.json still works,
+  // it just loses the per-event drill-down in the detail panel.
+  const results = await Promise.all(
+    PROBE_OS_KEYS.map(async k => {
+      const [m, a] = await Promise.all([fetchManifest(k), fetchAudit(k)]);
+      return [k, m, a];
+    }));
+  for (const [k, m, a] of results) {
+    if (m) {
+      state.manifests.set(k, m);
+      state.audits.set(k, a);
+    }
+  }
+  if (state.manifests.size === 0) {
+    document.getElementById("content").innerHTML =
+      `<div class="empty">No manifests found at any of:<br><br>` +
+      PROBE_OS_KEYS.map(k => `<code>${escapeHtml(k)}/logs/manifest.json</code>`).join("<br>") +
+      `</div>`;
+    return;
+  }
+  applyHash();
+  render();
+  window.addEventListener("hashchange", () => { applyHash(); render(); });
+})();
+</script>
+</body>
+</html>

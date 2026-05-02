@@ -115,13 +115,25 @@ let list_cmd =
 (* Render the [Provenance.t] sidecar (when present) below the [layer.json]
    block. Provenance fields cover the inputs that produced the layer's
    content hash — opam origin, source URL+kind, declared depexts, ocaml
-   version. Caller context (overlay handle, trigger, etc.) is in the audit
-   log, not here, so this is intentionally content-only. *)
+   version. Caller context (overlay handle, trigger, etc.) lives in
+   {!print_callers} below, sourced from the audit log. *)
 let pp_origin_kind = function
   | Oi.Provenance.Reporepo -> "reporepo"
   | Pin -> "pin"
   | Url_project -> "url-project"
   | Local -> "local"
+
+let pp_method = function
+  | Oi.Provenance.Source -> "source"
+  | Binary -> "binary"
+
+let pp_duration s =
+  if s < 1.0 then Fmt.str "%.0fms" (s *. 1000.)
+  else if s < 60.0 then Fmt.str "%.2fs" s
+  else
+    let m = int_of_float (s /. 60.0) in
+    let r = s -. float_of_int (m * 60) in
+    Fmt.str "%dm%.0fs" m r
 
 let print_provenance (p : Oi.Provenance.t) =
   let o = p.opam.origin in
@@ -130,6 +142,8 @@ let print_provenance (p : Oi.Provenance.t) =
     | Some h -> Fmt.str "%s @%s" (pp_origin_kind o.kind) h
     | None -> pp_origin_kind o.kind
   in
+  Fmt.pr "  method:   %s@," (pp_method p.method_);
+  Fmt.pr "  built:    %s (%s)@," (pp_time p.built_at) (pp_duration p.duration_s);
   Fmt.pr "  opam sha: %s@," p.opam.sha256;
   Fmt.pr "  origin:   %s@," origin_label;
   if o.path_in_repo <> "" then Fmt.pr "  path:     %s@," o.path_in_repo;
@@ -148,9 +162,7 @@ let print_provenance (p : Oi.Provenance.t) =
   let phase_strs =
     List.filter_map
       (fun (name, v) ->
-        match v with
-        | Some s -> Some (Fmt.str "%s=%.2fs" name s)
-        | None -> None)
+        Stdlib.Option.map (fun s -> Fmt.str "%s=%s" name (pp_duration s)) v)
       [
         ("fetch", phases.fetch);
         ("build", phases.build);
@@ -160,6 +172,83 @@ let print_provenance (p : Oi.Provenance.t) =
   in
   if phase_strs <> [] then
     Fmt.pr "  phases:   %s@," (String.concat ", " phase_strs)
+
+let outcome_name (o : Oi.Audit.outcome) =
+  match o with
+  | Ok -> "ok"
+  | Cached -> "cached"
+  | Restored -> "restored"
+  | Build_failed _ -> "build_failed"
+  | Install_failed _ -> "install_failed"
+  | Dep_failed _ -> "dep_failed"
+  | Fetch_failed _ -> "fetch_failed"
+  | Depext_missing _ -> "depext_missing"
+  | Solve_failed _ -> "solve_failed"
+  | Skipped _ -> "skipped"
+
+let bump_outcome name = function
+  | [] -> [ (name, 1) ]
+  | os ->
+      let rec walk = function
+        | [] -> [ (name, 1) ]
+        | (n, c) :: rest when n = name -> (n, c + 1) :: rest
+        | head :: rest -> head :: walk rest
+      in
+      walk os
+
+(* Group [events] by overlay handle and render one row per distinct handle
+   listing its outcome histogram and the most recent timestamp:
+
+       @avsm     ok×1 cached×2  (last 2026-05-02 09:14 UTC)
+       @samoht   restored×1     (last 2026-05-02 09:30 UTC)
+
+   Events are pre-filtered to a single layer_hash by the caller. *)
+let print_callers events =
+  if events = [] then ()
+  else begin
+    let by_handle : (string, (string * int) list ref * float ref) Hashtbl.t =
+      Hashtbl.create 4
+    in
+    List.iter
+      (fun (e : Oi.Audit.event) ->
+        let key =
+          match e.context.overlay with
+          | Some o -> "@" ^ o.handle
+          | None -> "(no overlay)"
+        in
+        let outcomes_ref, ts_ref =
+          match Hashtbl.find_opt by_handle key with
+          | Some v -> v
+          | None ->
+              let v = (ref [], ref e.ts) in
+              Hashtbl.replace by_handle key v;
+              v
+        in
+        outcomes_ref := bump_outcome (outcome_name e.outcome) !outcomes_ref;
+        ts_ref := Float.max !ts_ref e.ts)
+      events;
+    let rows =
+      Hashtbl.fold
+        (fun k (os_ref, ts_ref) acc -> (k, !os_ref, !ts_ref) :: acc)
+        by_handle []
+      |> List.sort (fun (a, _, _) (b, _, _) -> compare a b)
+    in
+    Fmt.pr "  callers:@,";
+    List.iter
+      (fun (handle, outcomes, last_ts) ->
+        let outcomes =
+          List.sort
+            (fun (n1, c1) (n2, c2) ->
+              if c1 <> c2 then compare c2 c1 else compare n1 n2)
+            outcomes
+        in
+        let outcome_str =
+          List.map (fun (n, c) -> Fmt.str "%s×%d" n c) outcomes
+          |> String.concat " "
+        in
+        Fmt.pr "    %-16s %s  (last %s)@," handle outcome_str (pp_time last_ts))
+      rows
+  end
 
 let show_cmd =
   let run () cache_dir package =
@@ -172,6 +261,27 @@ let show_cmd =
       exit 0
     end;
     let cache_root = Eio.Path.native_exn d10.root in
+    (* Pull the entire per-os audit slice once and bucket it by layer_hash;
+       cheaper than re-scanning the jsonl per matched layer. *)
+    let events_by_hash : (string, Oi.Audit.event list) Hashtbl.t =
+      let tbl = Hashtbl.create 256 in
+      let all = Oi.Audit.read_all ~fs:h.fs ~cache_root ~os_key:d10.os_key in
+      List.iter
+        (fun (e : Oi.Audit.event) ->
+          let prev =
+            match Hashtbl.find_opt tbl e.layer_hash with
+            | Some xs -> xs
+            | None -> []
+          in
+          Hashtbl.replace tbl e.layer_hash (e :: prev))
+        all;
+      tbl
+    in
+    let events_for hash =
+      match Hashtbl.find_opt events_by_hash hash with
+      | Some xs -> xs
+      | None -> []
+    in
     let entries = Sys.readdir layers_dir |> Array.to_list in
     let matched = ref 0 in
     List.iter
@@ -205,6 +315,7 @@ let show_cmd =
                else String.concat ", " (List.map short_hash m.hashes));
             Fmt.pr "  files:    %d@," files;
             (match prov with None -> () | Some p -> print_provenance p);
+            print_callers (events_for hash);
             Fmt.pr "@,@]@."
         | _ -> ())
       entries;
