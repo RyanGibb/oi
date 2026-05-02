@@ -463,48 +463,14 @@ let with_default_reporter ~clock ~total_packages ~n_stages f =
   in
   f reporter
 
-(* -- Per-package trace for build_log JSON sidecars ----------------------- *)
-
-module SSet = Set.Make (String)
-
-type host_depext_status = {
-  installed_set : SSet.t;
-  missing_set : SSet.t;
-  not_found_set : SSet.t;
-}
-
-(* Query the host once for the union of every plan-declared depext.
-   Falls back to "everything missing" if the package manager is
-   unreachable so the JSON still records a usable status without
-   guessing. *)
-let host_depext_status_of_plan plan : host_depext_status =
-  let declared =
-    List.fold_left
-      (fun acc (g : Plan.group) ->
-        List.fold_left
-          (fun acc (p : Plan.package_plan) ->
-            List.fold_left
-              (fun acc d -> OpamSysPkg.Set.add (OpamSysPkg.of_string d) acc)
-              acc p.depexts)
-          acc g.packages)
-      OpamSysPkg.Set.empty plan.Plan.groups
-  in
-  let { Depexts.installed; missing; not_found } = Depexts.status declared in
-  let to_set s =
-    OpamSysPkg.Set.fold
-      (fun p acc -> SSet.add (OpamSysPkg.to_string p) acc)
-      s SSet.empty
-  in
-  {
-    installed_set = to_set installed;
-    missing_set = to_set missing;
-    not_found_set = to_set not_found;
-  }
+(* -- Per-package trace for Audit + Provenance writes -------------------- *)
 
 (* One [trace] per package attempt. The do_work loop creates it on
-   [Started] and turns it into a [Build_log.t] sidecar at every terminal
-   event, so success / cached / failure all leave a JSON record next to
-   any text log. *)
+   [Started] and emits an [Audit] event at every terminal event (success /
+   cached / failure all leave a JSON line in the audit log). On a fresh
+   [Ok] it also writes a [Provenance.json] beside the just-committed layer.
+   The two writes are split because a layer's content provenance is
+   immutable — only the audit log records the per-caller view. *)
 type trace = {
   pkg : Plan.package_plan;
   started_at : float;
@@ -526,32 +492,53 @@ let new_trace ~now p =
     text_log = None;
   }
 
-let dep_to_log (d : Plan.dep_layer) : Build_log.dep =
-  let id = Build_log.parse_pkg d.pkg in
+(* Split a "name.version" string into its parts. [Audit] and [Provenance]
+   have structurally identical [pkg_id] records; we return [Audit]'s and
+   convert at the call site since the conversion is trivial. *)
+let parse_pkg s : Audit.pkg_id =
+  match OpamPackage.of_string_opt s with
+  | Some p ->
+      {
+        name = OpamPackage.Name.to_string (OpamPackage.name p);
+        version = OpamPackage.Version.to_string (OpamPackage.version p);
+      }
+  | None -> { name = s; version = "" }
+
+let dep_to_audit (d : Plan.dep_layer) : Audit.dep =
+  let id = parse_pkg d.pkg in
   { name = id.name; version = id.version; hash = d.hash }
 
-let plan_to_overlay (p : Plan.package_plan) : Build_log.overlay option =
-  match (p.overlay_handle, p.overlay_version) with
-  | Some h, Some v -> Some { handle = h; version = v }
-  | _ -> None
+let dep_to_provenance (d : Plan.dep_layer) : Provenance.dep =
+  let id = parse_pkg d.pkg in
+  { name = id.name; version = id.version; hash = d.hash }
 
-let plan_to_source (p : Plan.package_plan) : Build_log.source_info option =
-  Stdlib.Option.map
-    (fun (s : Plan.source_info) : Build_log.source_info ->
-      { url = s.url; checksums = s.checksums })
+let plan_to_overlay_ctx (p : Plan.package_plan) : Audit.overlay_ctx option =
+  match p.overlay_handle with
+  | None -> None
+  | Some handle ->
+      let version =
+        match p.overlay_version with Some v -> v | None -> ""
+      in
+      Some { handle; version }
+
+let plan_to_provenance_source (p : Plan.package_plan) :
+    Provenance.source_info option =
+  Option.map
+    (fun (s : Plan.source_info) : Provenance.source_info ->
+      { url = s.url; kind = Provenance.classify_url s.url;
+        checksums = s.checksums })
     p.source
 
-let method_to_log = function
-  | Plan.Source -> Build_log.Source
-  | Plan.Binary -> Build_log.Binary
+let method_to_provenance = function
+  | Plan.Source -> Provenance.Source
+  | Plan.Binary -> Provenance.Binary
 
-(* Classify an outer-loop exception into a Build_log.outcome. The
-   [phase] argument disambiguates Build vs Install for non-Fetch
-   errors (Fetch_failed is already typed). *)
-let outcome_of_exn ~phase exn : Build_log.outcome =
+(* Classify an outer-loop exception into an Audit.outcome. The [phase]
+   argument disambiguates Build vs Install for non-Fetch errors. *)
+let outcome_of_exn ~phase exn : Audit.outcome =
   match exn with
   | Error.E (Fetch_failed { url; msg }) ->
-      Fetch_failed { url; kind = Build_log.classify_fetch_msg msg }
+      Fetch_failed { url; kind = Audit.classify_fetch_msg msg }
   | Error.E (Build_failed { cmd; _ }) -> (
       match phase with
       | `Install -> Install_failed { command = cmd; exit_code = None }
@@ -562,77 +549,93 @@ let outcome_of_exn ~phase exn : Build_log.outcome =
         Install_failed { command = msg; exit_code = None }
       else Build_failed { command = msg; exit_code = None }
 
-(* Per-package depexts. [installed]/[missing]/[not_found] are filled
-   from a host-status snapshot computed once per [Execute.run] (host
-   queries spawn a subprocess; per-package would be wasteful). The
-   snapshot is keyed by pkg name; per-package buckets are derived by
-   intersecting [declared] with the snapshot's three sets. *)
-let per_pkg_depexts ~host_status (p : Plan.package_plan) : Build_log.depexts =
-  let declared = p.depexts in
-  if declared = [] then Build_log.empty_depexts
-  else
-    let set_of_strings = List.fold_left (fun s x -> SSet.add x s) SSet.empty in
-    let declared_set = set_of_strings declared in
-    let inter set = SSet.inter declared_set set |> SSet.elements in
-    {
-      declared;
-      installed = inter host_status.installed_set;
-      missing = inter host_status.missing_set;
-      not_found = inter host_status.not_found_set;
-    }
+(* Build the Audit + (optional) Provenance for a terminal package event. The
+   [audit_base] carries trigger / project / toolchain / host; per-pkg overlay
+   is folded in here. Provenance writes only fire on [Ok], because that's the
+   only outcome that committed a layer dir to disk. *)
+let phases_of_trace (t : trace) : Provenance.phases =
+  {
+    fetch = t.fetch_dur;
+    build = t.build_dur;
+    install = t.install_dur;
+    restore = t.restore_dur;
+  }
 
-let write_trace ~fs ~cache_root ~os_key ~host_status ~outcome (t : trace) =
+let opam_info_of_plan (p : Plan.package_plan) ~name ~version :
+    Provenance.opam_info =
+  match (p.opam_path, p.pkgs_dir) with
+  | Some path, Some pkgs_dir ->
+      let full = if version = "" then name else Fmt.str "%s.%s" name version in
+      {
+        sha256 = Provenance.hash_opam_file ~path;
+        origin = Provenance.origin_of_pkgs_dir ~pkgs_dir ~name ~full;
+      }
+  | _ ->
+      {
+        sha256 = "";
+        origin = { kind = Local; handle = None; path_in_repo = "" };
+      }
+
+let emit_event ~fs ~cache_root ~os_key ~ocaml_version ~audit_base ~outcome
+    (t : trace) =
   let p = t.pkg in
-  let id = Build_log.parse_pkg p.pkg in
+  let id = parse_pkg p.pkg in
+  let name = id.name and version = id.version in
   let now = Unix.gettimeofday () in
+  let duration_s = now -. t.started_at in
   let log =
-    match t.text_log with
-    | None -> None
-    | Some path ->
+    Option.map
+      (fun log_path ->
         let tail =
-          match outcome with
-          | Build_log.Ok_built | Cached -> None
-          | _ -> Build_log.tail_of_file ~path
+          match (outcome : Audit.outcome) with
+          | Ok | Cached | Restored -> None
+          | _ -> Audit.tail_of_file ~path:log_path
         in
-        Some Build_log.{ text_path = path; tail }
+        { Audit.text_path = log_path; tail })
+      t.text_log
   in
-  let record : Build_log.t =
+  let context =
+    { audit_base with Audit.overlay = plan_to_overlay_ctx p }
+  in
+  let event : Audit.event =
     {
       schema = 1;
-      pkg = id;
-      layer_hash = p.layer_hash;
+      event_id = Audit.ulid ();
+      invocation_id = Audit.invocation_id ();
+      ts = now;
       os_key;
-      method_ = method_to_log p.method_;
-      started_at = t.started_at;
-      duration_s = now -. t.started_at;
+      layer_hash = p.layer_hash;
+      pkg = { name; version };
       outcome;
-      deps = List.map dep_to_log p.dep_layers;
-      depexts = per_pkg_depexts ~host_status p;
-      source = plan_to_source p;
+      duration_s;
+      context;
       log;
-      overlay = plan_to_overlay p;
-      phases =
-        {
-          fetch = t.fetch_dur;
-          build = t.build_dur;
-          install = t.install_dur;
-          restore = t.restore_dur;
-        };
     }
   in
-  Build_log.write ~fs ~cache_root record;
-  (* Stash a copy inside the layer dir on a successful source build.
-     This is the proof-of-build that survives subsequent cache hits,
-     so a manifest reconstructed at export time can show the original
-     [Ok_built] outcome instead of "cached" for every restore. We
-     deliberately don't overwrite the layer record on [Cached] — that
-     would replace the original build's record with the current run's
-     view, hiding the actual outcome. *)
-  if outcome = Build_log.Ok_built then
-    Build_log.write_layer ~fs ~cache_root ~os_key record
+  Audit.append ~fs ~cache_root event;
+  if outcome = Audit.Ok then begin
+    let prov : Provenance.t =
+      {
+        schema = 1;
+        layer_hash = p.layer_hash;
+        os_key;
+        pkg = { name; version };
+        method_ = method_to_provenance p.method_;
+        built_at = now;
+        duration_s;
+        phases = phases_of_trace t;
+        opam = opam_info_of_plan p ~name ~version;
+        source = plan_to_provenance_source p;
+        deps = List.map dep_to_provenance p.dep_layers;
+        depexts_declared = p.depexts;
+        build_env = { ocaml_version };
+      }
+    in
+    Provenance.write ~fs ~cache_root prov
+  end
 
-let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
-    ~sys ~os_key plan =
+let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
+    ~fs ~clock ~sys ~os_key plan =
   let build_parallelism =
     match jobs with Some n when n > 0 -> n | _ -> default_build_parallelism ()
   in
@@ -712,10 +715,14 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
         Hashtbl.replace traces p.layer_hash t;
         t
   in
-  let host_status = host_depext_status_of_plan plan in
+  let audit_base =
+    match audit_base with Some c -> c | None -> Audit.default_context ()
+  in
+  let ocaml_version = plan.ocaml_version in
   let emit_log ~outcome p =
     let t = trace_for p in
-    write_trace ~fs ~cache_root:plan.cache_root ~os_key ~host_status ~outcome t
+    emit_event ~fs ~cache_root:plan.cache_root ~os_key ~ocaml_version
+      ~audit_base ~outcome t
   in
   let do_work (reporter : reporter) =
     if plan_doomed then
@@ -726,7 +733,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
               match p.method_ with
               | Plan.Binary ->
                   reporter.pkg_event (Cached { pkg = p.pkg });
-                  emit_log ~outcome:Cached p
+                  emit_log ~outcome:Restored p
               | Plan.Source ->
                   let upstream_log = cascade_log p in
                   mark_failed ~p ~log_path:upstream_log;
@@ -738,7 +745,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                           Hashtbl.mem failed_layers d.hash)
                         p.dep_layers
                     with
-                    | Some d -> dep_to_log d
+                    | Some d -> dep_to_audit d
                     | None -> { name = ""; version = ""; hash = "" }
                   in
                   let t = trace_for p in
@@ -769,7 +776,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                 D10.Layer.restore d10 ~hash:p.layer_hash ~prefix;
                 t.restore_dur <- Some (now () -. t0);
                 reporter.pkg_event (Cached { pkg = p.pkg });
-                emit_log ~outcome:Cached p
+                emit_log ~outcome:Restored p
               end)
             group.packages;
           (* Phase 2: parallel fetch+build for Source packages. Skip
@@ -797,7 +804,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                             Hashtbl.mem failed_layers d.hash)
                           p.dep_layers
                       with
-                      | Some d -> dep_to_log d
+                      | Some d -> dep_to_audit d
                       | None -> { name = ""; version = ""; hash = "" }
                     in
                     mark_failed ~p ~log_path:upstream_log;
@@ -888,7 +895,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ~proc_mgr ~fs ~clock
                     ?overlay_handle:p.overlay_handle
                     ?overlay_version:p.overlay_version ();
                   reporter.pkg_event (Built { pkg = p.pkg });
-                  emit_log ~outcome:Ok_built p
+                  emit_log ~outcome:Ok p
                 with exn ->
                   let log_path =
                     write_failure_log ~fs ~cache_root:plan.cache_root ~p ~exn

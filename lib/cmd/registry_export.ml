@@ -71,24 +71,34 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   let n_sources = Oi.Source.Mirror.export ~cache ~dst in
   if n_sources > 0 then
     Fmt.pr "  sources: %d blob(s) at %s/sources/@." n_sources output;
-  (* Build-log manifest: one bundled JSON file with every per-package
-     record from this cache, summarised by outcome. *)
+  (* Manifest = Provenance ⨝ Audit. Provenance gives us one entry per
+     successfully committed layer with its content fields; the audit log
+     gives us a [callers[]] history per layer. Failed-build events that
+     have no corresponding layer surface as separate entries. *)
   let cache_root = Oi.Cache.root_s cache in
-  let records = Oi.Build_log.Manifest.read_all ~fs ~cache_root ~os_key in
-  if records <> [] then begin
+  let provs = Oi.Provenance.read_all ~fs ~cache_root ~os_key in
+  let events = Oi.Audit.read_all ~fs ~cache_root ~os_key in
+  if provs <> [] || events <> [] then begin
     let manifest =
-      Oi.Build_log.Manifest.of_records ~os_key
-        ~exported_at:(Unix.gettimeofday ()) records
+      Oi.Manifest.build ~os_key ~exported_at:(Unix.gettimeofday ()) provs events
     in
     let logs_dir = output / os_key / "logs" in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / logs_dir);
     let path = logs_dir / "manifest.json" in
-    match
-      Jsont_bytesrw.encode_string ~format:Jsont.Indent
-        Oi.Build_log.Manifest.codec manifest
-    with
+    (match
+       Jsont_bytesrw.encode_string ~format:Jsont.Indent Oi.Manifest.codec
+         manifest
+     with
     | Ok s ->
         Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) s;
-        Fmt.pr "  logs: %d record(s) at %s@." manifest.n_packages path
-    | Error e -> Logs.warn (fun m -> m "manifest encode failed: %s" e)
+        Fmt.pr "  manifest: %d entry(ies) at %s@." manifest.n_packages path
+    | Error e -> Logs.warn (fun m -> m "manifest encode failed: %s" e));
+    (* Ship the per-os audit slice so multi-host registry merges can
+       union events. Sorted by event_id (ULID = monotonic) so the file is
+       deterministic. *)
+    if events <> [] then begin
+      Oi.Audit.write_per_os ~fs ~output_dir:output ~os_key events;
+      Fmt.pr "  audit: %d event(s) at %s/audit.jsonl@." (List.length events)
+        (output / os_key)
+    end
   end

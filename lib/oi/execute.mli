@@ -34,6 +34,7 @@ val run :
   ?jobs:int ->
   ?failed_layers:(string, string) Hashtbl.t ->
   ?reporter:reporter ->
+  ?audit_base:Audit.context ->
   proc_mgr:_ Eio.Process.mgr ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   clock:D10.Config.clk ->
@@ -64,4 +65,9 @@ val run :
     hashes are) is skipped — useful for [oi build --all] where each solve group
     is a separate [run] and a failure in one group should prevent identical
     retries in later groups. When omitted, a fresh tracker is used for this call
-    only. *)
+    only.
+
+    [audit_base] supplies the trigger / project / toolchain / host fields
+    written into every {!Audit.event} this run emits; per-pkg [overlay] is
+    folded in from the package plan. Falls back to {!Audit.default_context}
+    (argv summary + hostname, no overlay/toolchain/project) when omitted. *)

@@ -234,6 +234,8 @@ type package_plan = {
   prefix : string;
   overlay_handle : string option;
   overlay_version : string option;
+  opam_path : string option;
+  pkgs_dir : string option;
   depexts : string list;
 }
 
@@ -422,15 +424,30 @@ let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
             let install_file = build_dir / (name_s ^ ".install") in
             let env = Solver.Ctx.compilation_env ctx opam in
             let subst_vars = Solver.Ctx.resolve_substs ctx opam in
+            let pkgs_dir = find_pkg_source_dir ~packages_dirs pkg in
             let overlay_handle, overlay_version =
-              match find_pkg_source_dir ~packages_dirs pkg with
+              match pkgs_dir with
               | None -> (None, None)
               | Some d -> overlay_of_packages_dir d
             in
-            (* Active depexts under the solver's filter env. Single
-               source of truth lives in [Build_log.declared_depexts]. *)
+            let opam_path =
+              Stdlib.Option.map (fun d -> d / name_s / pkg_s / "opam") pkgs_dir
+            in
+            (* Active depexts under the solver's filter env: declared
+               [depexts:] entries whose filter evaluates true. Returned as
+               opaque package-name strings — host install status is computed
+               separately by {!Execute}. *)
             let depexts =
-              Build_log.declared_depexts ~env:(Solver.Ctx.platform_env ctx) opam
+              let env = Solver.Ctx.platform_env ctx in
+              List.fold_left
+                (fun acc (pkgs, filter) ->
+                  if OpamFilter.eval_to_bool ~default:false env filter then
+                    OpamSysPkg.Set.union acc pkgs
+                  else acc)
+                OpamSysPkg.Set.empty
+                (OpamFile.OPAM.depexts opam)
+              |> OpamSysPkg.Set.elements
+              |> List.map OpamSysPkg.to_string
             in
             {
               pkg = pkg_s;
@@ -451,6 +468,8 @@ let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
               prefix;
               overlay_handle;
               overlay_version;
+              opam_path;
+              pkgs_dir;
               depexts;
             })
           names

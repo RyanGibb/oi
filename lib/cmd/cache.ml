@@ -112,6 +112,55 @@ let list_cmd =
 
 (* -- show ---------------------------------------------------------------- *)
 
+(* Render the [Provenance.t] sidecar (when present) below the [layer.json]
+   block. Provenance fields cover the inputs that produced the layer's
+   content hash — opam origin, source URL+kind, declared depexts, ocaml
+   version. Caller context (overlay handle, trigger, etc.) is in the audit
+   log, not here, so this is intentionally content-only. *)
+let pp_origin_kind = function
+  | Oi.Provenance.Reporepo -> "reporepo"
+  | Pin -> "pin"
+  | Url_project -> "url-project"
+  | Local -> "local"
+
+let print_provenance (p : Oi.Provenance.t) =
+  let o = p.opam.origin in
+  let origin_label =
+    match o.handle with
+    | Some h -> Fmt.str "%s @%s" (pp_origin_kind o.kind) h
+    | None -> pp_origin_kind o.kind
+  in
+  Fmt.pr "  opam sha: %s@," p.opam.sha256;
+  Fmt.pr "  origin:   %s@," origin_label;
+  if o.path_in_repo <> "" then Fmt.pr "  path:     %s@," o.path_in_repo;
+  (match p.source with
+  | None -> ()
+  | Some s ->
+      let kind = if s.kind = "" then "" else Fmt.str " (%s)" s.kind in
+      Fmt.pr "  source:   %s%s@," s.url kind;
+      (match s.checksums with
+      | [] -> ()
+      | c :: _ -> Fmt.pr "  checksum: %s@," c));
+  Fmt.pr "  ocaml:    %s@," p.build_env.ocaml_version;
+  if p.depexts_declared <> [] then
+    Fmt.pr "  depexts:  %s@," (String.concat ", " p.depexts_declared);
+  let phases = p.phases in
+  let phase_strs =
+    List.filter_map
+      (fun (name, v) ->
+        match v with
+        | Some s -> Some (Fmt.str "%s=%.2fs" name s)
+        | None -> None)
+      [
+        ("fetch", phases.fetch);
+        ("build", phases.build);
+        ("install", phases.install);
+        ("restore", phases.restore);
+      ]
+  in
+  if phase_strs <> [] then
+    Fmt.pr "  phases:   %s@," (String.concat ", " phase_strs)
+
 let show_cmd =
   let run () cache_dir package =
     Harness.run @@ fun env ->
@@ -122,6 +171,7 @@ let show_cmd =
       Fmt.pr "No layers found.@.";
       exit 0
     end;
+    let cache_root = Eio.Path.native_exn d10.root in
     let entries = Sys.readdir layers_dir |> Array.to_list in
     let matched = ref 0 in
     List.iter
@@ -141,6 +191,9 @@ let show_cmd =
                   m.exit_status
             in
             let files = count_files (layers_dir / hash / "fs") in
+            let prov =
+              Oi.Provenance.load ~fs:h.fs ~cache_root ~os_key:d10.os_key ~hash
+            in
             Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Layer" hash;
             Fmt.pr "  package:  %s@," m.package;
             Fmt.pr "  status:   %s@," status;
@@ -150,7 +203,9 @@ let show_cmd =
             Fmt.pr "  hashes:   %s@,"
               (if m.hashes = [] then "(none)"
                else String.concat ", " (List.map short_hash m.hashes));
-            Fmt.pr "  files:    %d@,@]@." files
+            Fmt.pr "  files:    %d@," files;
+            (match prov with None -> () | Some p -> print_provenance p);
+            Fmt.pr "@,@]@."
         | _ -> ())
       entries;
     if !matched = 0 then Fmt.pr "No layers found matching %S@." package

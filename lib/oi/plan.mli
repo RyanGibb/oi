@@ -119,6 +119,17 @@ type package_plan = {
   overlay_version : string option;
       (** Reporepo overlay version (e.g. ["20260418.6"]). Present iff
           [overlay_handle] is. *)
+  opam_path : string option;
+      (** Absolute path to the opam file the solver picked for this package
+          (the [<packages_dir>/<name>/<name.version>/opam] hit from
+          {!find_pkg_source_dir}). Used by {!Provenance} to compute the opam
+          [sha256] and origin path. [None] if the package's opam file isn't
+          locatable on disk. *)
+  pkgs_dir : string option;
+      (** The [<packages_dir>] root that contained [opam_path]. Distinct from
+          [opam_path] so {!Provenance.origin_of_pkgs_dir} can examine the
+          directory shape (v1/<handle>/packages, pins/sets/<hash>/packages,
+          …). [None] iff [opam_path] is. *)
   depexts : string list;
       (** Declared system packages active under the build's filter env. Names
           are taken straight from [OpamFile.OPAM.depexts] and only retained for
