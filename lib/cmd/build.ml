@@ -1169,8 +1169,7 @@ let cmd =
                  — solve failures don't have a real layer to point at. *)
               let layer_hash =
                 let key =
-                  String.concat " "
-                    (group @ List.map (fun h -> "@" ^ h) handles)
+                  String.concat " " (group @ List.map (fun h -> "@" ^ h) handles)
                 in
                 Digest.to_hex (Digest.string key)
               in
@@ -1181,22 +1180,13 @@ let cmd =
                   (Oi.Audit.default_context ()) with
                   overlay =
                     (match handles with
-                    | [ h ] -> Some { handle = h; version = "" }
+                    | [ h ] -> Some { D10.Overlay.handle = h; version = "" }
                     | _ -> None);
                   toolchain =
-                    Option.map (fun (i : Oi.Toolchain.info) -> i.handle)
+                    Option.map
+                      (fun (i : Oi.Toolchain.info) -> i.handle)
                       toolchain;
                 }
-              in
-              let pkg_id_of_target target : Oi.Audit.pkg_id =
-                match OpamPackage.of_string_opt target with
-                | Some p ->
-                    {
-                      name = OpamPackage.Name.to_string (OpamPackage.name p);
-                      version =
-                        OpamPackage.Version.to_string (OpamPackage.version p);
-                    }
-                | None -> { name = target; version = "" }
               in
               List.iter
                 (fun target ->
@@ -1207,8 +1197,8 @@ let cmd =
                       invocation_id = Oi.Audit.invocation_id ();
                       ts = now;
                       os_key;
-                      layer_hash;
-                      pkg = pkg_id_of_target target;
+                      target = Solve_key layer_hash;
+                      pkg = Oi.Identity.of_string target;
                       outcome = Solve_failed { reason = msg };
                       duration_s = 0.0;
                       context;
@@ -1428,27 +1418,12 @@ let cmd =
           let toolchain_handle =
             Option.map (fun (i : Oi.Toolchain.info) -> i.handle) toolchain
           in
-          let pkg_id_of (p : OpamPackage.t) : Oi.Audit.pkg_id =
-            {
-              name = OpamPackage.Name.to_string (OpamPackage.name p);
-              version = OpamPackage.Version.to_string (OpamPackage.version p);
-            }
-          in
-          let overlay_of (p : OpamPackage.t) : Oi.Audit.overlay_ctx option =
-            match Oi.Plan.overlay_of_pkg ~packages_dirs:pkg_dirs p with
-            | None, _ -> None
-            | Some handle, v_opt ->
-                let version =
-                  match v_opt with Some v -> v | None -> ""
-                in
-                Some { handle; version }
-          in
           List.iter
             (fun (n : Oi.Plan.node) ->
               let context : Oi.Audit.context =
                 {
                   (Oi.Audit.default_context ()) with
-                  overlay = overlay_of n.pkg;
+                  overlay = Oi.Plan.overlay_of_pkg ~packages_dirs:pkg_dirs n.pkg;
                   toolchain = toolchain_handle;
                 }
               in
@@ -1459,8 +1434,8 @@ let cmd =
                   invocation_id = Oi.Audit.invocation_id ();
                   ts = now;
                   os_key;
-                  layer_hash = n.layer_hash;
-                  pkg = pkg_id_of n.pkg;
+                  target = Layer n.layer_hash;
+                  pkg = Oi.Identity.of_opam n.pkg;
                   outcome = Cached;
                   duration_s = 0.0;
                   context;
@@ -1491,8 +1466,8 @@ let cmd =
               Oi.Plan.nodes build_plan
               |> List.filter_map (fun (n : Oi.Plan.node) ->
                   match n.method_ with
-                  | Oi.Plan.Source -> Some n.pkg
-                  | Oi.Plan.Binary -> None)
+                  | Oi.Identity.Source -> Some n.pkg
+                  | Binary -> None)
             in
             if source_pkgs = [] then None
             else
@@ -1601,7 +1576,8 @@ let cmd =
                 {
                   (Oi.Audit.default_context ()) with
                   toolchain =
-                    Option.map (fun (i : Oi.Toolchain.info) -> i.handle)
+                    Option.map
+                      (fun (i : Oi.Toolchain.info) -> i.handle)
                       toolchain;
                 }
               in

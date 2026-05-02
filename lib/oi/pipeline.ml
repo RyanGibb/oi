@@ -177,7 +177,7 @@ let fetch_remote_layers ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
         List.filter_map
           (fun (node : Plan.node) ->
             match node.method_ with
-            | Plan.Source -> Some node.layer_hash
+            | Identity.Source -> Some node.layer_hash
             | Binary -> None)
           (Plan.nodes build_plan)
       in
@@ -319,7 +319,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
          anything that isn't Binary. *)
       let all_layers_cached =
         List.for_all
-          (fun (n : Plan.node) -> n.method_ = Plan.Binary)
+          (fun (n : Plan.node) -> n.method_ = Identity.Binary)
           (Plan.nodes build_plan)
       in
       let persist_layer_cache () =
@@ -342,8 +342,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
           Plan.nodes build_plan
           |> List.filter_map (fun (n : Plan.node) ->
               match n.method_ with
-              | Plan.Source -> Some n.pkg
-              | Plan.Binary -> None)
+              | Identity.Source -> Some n.pkg
+              | Identity.Binary -> None)
         in
         if source_pkgs <> [] then begin
           let entries = Depexts.compute ctx ~packages_dirs source_pkgs in

@@ -117,16 +117,6 @@ let list_cmd =
    content hash — opam origin, source URL+kind, declared depexts, ocaml
    version. Caller context (overlay handle, trigger, etc.) lives in
    {!print_callers} below, sourced from the audit log. *)
-let pp_origin_kind = function
-  | Oi.Provenance.Reporepo -> "reporepo"
-  | Pin -> "pin"
-  | Url_project -> "url-project"
-  | Local -> "local"
-
-let pp_method = function
-  | Oi.Provenance.Source -> "source"
-  | Binary -> "binary"
-
 let pp_duration s =
   if s < 1.0 then Fmt.str "%.0fms" (s *. 1000.)
   else if s < 60.0 then Fmt.str "%.2fs" s
@@ -138,23 +128,21 @@ let pp_duration s =
 let print_provenance (p : Oi.Provenance.t) =
   let o = p.opam.origin in
   let origin_label =
-    match o.handle with
-    | Some h -> Fmt.str "%s @%s" (pp_origin_kind o.kind) h
-    | None -> pp_origin_kind o.kind
+    match o.overlay with
+    | Some ov -> Fmt.str "%a %a" Oi.Origin.pp_kind o.kind D10.Overlay.pp ov
+    | None -> Fmt.str "%a" Oi.Origin.pp_kind o.kind
   in
-  Fmt.pr "  method:   %s@," (pp_method p.method_);
+  Fmt.pr "  method:   %s@," (Oi.Identity.method_to_string p.method_);
   Fmt.pr "  built:    %s (%s)@," (pp_time p.built_at) (pp_duration p.duration_s);
   Fmt.pr "  opam sha: %s@," p.opam.sha256;
   Fmt.pr "  origin:   %s@," origin_label;
   if o.path_in_repo <> "" then Fmt.pr "  path:     %s@," o.path_in_repo;
   (match p.source with
   | None -> ()
-  | Some s ->
+  | Some s -> (
       let kind = if s.kind = "" then "" else Fmt.str " (%s)" s.kind in
       Fmt.pr "  source:   %s%s@," s.url kind;
-      (match s.checksums with
-      | [] -> ()
-      | c :: _ -> Fmt.pr "  checksum: %s@," c));
+      match s.checksums with [] -> () | c :: _ -> Fmt.pr "  checksum: %s@," c));
   Fmt.pr "  ocaml:    %s@," p.build_env.ocaml_version;
   if p.depexts_declared <> [] then
     Fmt.pr "  depexts:  %s@," (String.concat ", " p.depexts_declared);
@@ -173,29 +161,6 @@ let print_provenance (p : Oi.Provenance.t) =
   if phase_strs <> [] then
     Fmt.pr "  phases:   %s@," (String.concat ", " phase_strs)
 
-let outcome_name (o : Oi.Audit.outcome) =
-  match o with
-  | Ok -> "ok"
-  | Cached -> "cached"
-  | Restored -> "restored"
-  | Build_failed _ -> "build_failed"
-  | Install_failed _ -> "install_failed"
-  | Dep_failed _ -> "dep_failed"
-  | Fetch_failed _ -> "fetch_failed"
-  | Depext_missing _ -> "depext_missing"
-  | Solve_failed _ -> "solve_failed"
-  | Skipped _ -> "skipped"
-
-let bump_outcome name = function
-  | [] -> [ (name, 1) ]
-  | os ->
-      let rec walk = function
-        | [] -> [ (name, 1) ]
-        | (n, c) :: rest when n = name -> (n, c + 1) :: rest
-        | head :: rest -> head :: walk rest
-      in
-      walk os
-
 (* Group [events] by overlay handle and render one row per distinct handle
    listing its outcome histogram and the most recent timestamp:
 
@@ -206,7 +171,8 @@ let bump_outcome name = function
 let print_callers events =
   if events = [] then ()
   else begin
-    let by_handle : (string, (string * int) list ref * float ref) Hashtbl.t =
+    let by_handle :
+        (string, (Oi.Outcome.kind * int) list ref * float ref) Hashtbl.t =
       Hashtbl.create 4
     in
     List.iter
@@ -224,7 +190,8 @@ let print_callers events =
               Hashtbl.replace by_handle key v;
               v
         in
-        outcomes_ref := bump_outcome (outcome_name e.outcome) !outcomes_ref;
+        outcomes_ref :=
+          Oi.Outcome.bump (Oi.Outcome.kind_of e.outcome) !outcomes_ref;
         ts_ref := Float.max !ts_ref e.ts)
       events;
     let rows =
@@ -236,14 +203,10 @@ let print_callers events =
     Fmt.pr "  callers:@,";
     List.iter
       (fun (handle, outcomes, last_ts) ->
-        let outcomes =
-          List.sort
-            (fun (n1, c1) (n2, c2) ->
-              if c1 <> c2 then compare c2 c1 else compare n1 n2)
-            outcomes
-        in
         let outcome_str =
-          List.map (fun (n, c) -> Fmt.str "%s×%d" n c) outcomes
+          Oi.Outcome.sort_histogram outcomes
+          |> List.map (fun (k, c) ->
+              Fmt.str "%s×%d" (Oi.Outcome.kind_to_string k) c)
           |> String.concat " "
         in
         Fmt.pr "    %-16s %s  (last %s)@," handle outcome_str (pp_time last_ts))
@@ -261,19 +224,24 @@ let show_cmd =
       exit 0
     end;
     let cache_root = Eio.Path.native_exn d10.root in
-    (* Pull the entire per-os audit slice once and bucket it by layer_hash;
-       cheaper than re-scanning the jsonl per matched layer. *)
+    (* Pull the entire per-os audit slice once and bucket it by layer
+       hash; cheaper than re-scanning the jsonl per matched layer.
+       [Solve_key]-tagged events have no real layer to point at and are
+       skipped here — they only show up in the registry manifest. *)
     let events_by_hash : (string, Oi.Audit.event list) Hashtbl.t =
       let tbl = Hashtbl.create 256 in
       let all = Oi.Audit.read_all ~fs:h.fs ~cache_root ~os_key:d10.os_key in
       List.iter
         (fun (e : Oi.Audit.event) ->
-          let prev =
-            match Hashtbl.find_opt tbl e.layer_hash with
-            | Some xs -> xs
-            | None -> []
-          in
-          Hashtbl.replace tbl e.layer_hash (e :: prev))
+          match e.target with
+          | Solve_key _ -> ()
+          | Layer hash ->
+              let prev =
+                match Hashtbl.find_opt tbl hash with
+                | Some xs -> xs
+                | None -> []
+              in
+              Hashtbl.replace tbl hash (e :: prev))
         all;
       tbl
     in
@@ -402,7 +370,12 @@ let index_cmd =
           in
           if not skip then begin
             let c : D10.Config.t = { d10 with os_key = entry } in
-            D10.Index.rebuild c db;
+            let cache_root = Eio.Path.native_exn d10.root in
+            let overlay_for ~hash =
+              Oi.Provenance.overlay_of_layer ~fs:h.fs ~cache_root ~os_key:entry
+                ~hash
+            in
+            D10.Index.rebuild c ~overlay_for db;
             let nl, nb, nf = D10.Index.stats db ~os_key:entry in
             let l, b, f = !totals in
             totals := (l + nl, b + nb, f + nf);

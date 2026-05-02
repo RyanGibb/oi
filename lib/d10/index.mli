@@ -38,11 +38,17 @@ val close : db -> unit
 
 (** {1 Indexing} *)
 
-val rebuild : Config.t -> db -> unit
-(** [rebuild c db] scans all layers under [<root>/layers/<os_key>/] and
-    populates the index tables. Existing data for [c.os_key] is replaced
+val rebuild :
+  Config.t -> ?overlay_for:(hash:string -> Overlay.t option) -> db -> unit
+(** [rebuild c ?overlay_for db] scans all layers under [<root>/layers/<os_key>/]
+    and populates the index tables. Existing data for [c.os_key] is replaced
     atomically within a transaction. Each layer's [layer.json] is parsed for
-    metadata, and its [fs/] tree is scanned for file paths and binary names. *)
+    metadata, and its [fs/] tree is scanned for file paths and binary names.
+
+    [overlay_for] supplies the per-layer overlay attribution (defaulted to
+    [fun ~hash:_ -> None]). The [oi] cache wires this to read from the layer's
+    [provenance.json] sidecar; tools that don't care about overlay routing can
+    leave it at the default. *)
 
 (** {1 Queries} *)
 
@@ -55,33 +61,31 @@ val find_binary :
   db ->
   binary:string ->
   os_key:string ->
-  (string * string * string * (string * string) option) list
+  (string * string * string * Overlay.t option) list
 (** [find_binary db ~binary ~os_key] returns all layers that provide
     [bin/<binary>] or [sbin/<binary>], as
     [(package_name, package_version, layer_hash, overlay)], sorted by opam
-    version descending (latest version first). [overlay] is
-    [Some (handle, version)] when the layer was tagged with a reporepo overlay,
-    and [None] otherwise (pin-depends, pre-tagging layers). *)
+    version descending (latest version first). [overlay] is set when the layer
+    was tagged with a reporepo overlay; [None] otherwise (pin-depends, local
+    trees). *)
 
 val search_binary :
   db ->
   pattern:string ->
   os_key:string ->
-  (string * string * string * string * (string * string) option) list
+  (string * string * string * string * Overlay.t option) list
 (** [search_binary db ~pattern ~os_key] searches for binaries matching
     [pattern], returning
     [(binary_name, package_name, package_version, layer_hash, overlay)]. The
-    [overlay] field is [Some (handle, version)] when the layer was tagged with a
-    reporepo overlay, and [None] otherwise (pin-depends, pre-tagging layers).
-    The pattern is matched exactly by default; use [*] as a wildcard (mapped to
-    SQL [LIKE %]). Results are sorted by binary name then opam version
-    descending. *)
+    pattern is matched exactly by default; use [*] as a wildcard (mapped to SQL
+    [LIKE %]). Results are sorted by binary name then opam version descending.
+*)
 
 val search_package :
   db ->
   pattern:string ->
   os_key:string ->
-  (string * string * string * (string * string) option) list
+  (string * string * string * Overlay.t option) list
 (** [search_package db ~pattern ~os_key] searches for built packages whose name
     matches [pattern], returning
     [(package_name, package_version, layer_hash, overlay)]. Pattern matching and

@@ -187,10 +187,10 @@ let cmd =
     in
     let overlay_of = function
       | None -> "-"
-      | Some (h, _) ->
-          if overlay_filter <> [] && not (List.mem h overlay_filter) then "-"
-            (* shouldn't happen after later filter, but defensive *)
-          else "@" ^ h
+      | Some (o : D10.Overlay.t) ->
+          if overlay_filter <> [] && not (List.mem o.handle overlay_filter) then
+            "-" (* shouldn't happen after later filter, but defensive *)
+          else "@" ^ o.handle
     in
     (* Binary matches from the index. Each hit emits one [Bin] row. *)
     let bin_rows =

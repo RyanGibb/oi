@@ -33,8 +33,8 @@ let show_counts action_plan =
   List.fold_left
     (fun (c, s) (n : Oi.Plan.node) ->
       match n.method_ with
-      | Oi.Plan.Binary -> (c + 1, s)
-      | Oi.Plan.Source -> (c, s + 1))
+      | Oi.Identity.Binary -> (c + 1, s)
+      | Source -> (c, s + 1))
     (0, 0)
     (Oi.Plan.nodes action_plan)
 
@@ -509,9 +509,14 @@ let show_overlay ~cache_root ~os_key ~handle =
 
 (* Render every cached layer in [<cache>/layers/<os_key>/], optionally
    filtered to a single overlay handle. Rows: handle, package.version,
-   short hash, on-disk size. Sorted by handle then package name. *)
+   short hash, on-disk size. Sorted by handle then package name.
+   Overlay attribution comes from each layer's [provenance.json] sidecar
+   — [layer.json] no longer carries it. *)
 let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
   let layers_dir = cache_root / "layers" / os_key in
+  let overlay_of_hash hash =
+    Oi.Provenance.overlay_of_layer ~fs ~cache_root ~os_key ~hash
+  in
   let rows =
     if not (Sys.file_exists layers_dir) then []
     else
@@ -524,15 +529,22 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
             D10.Layer.load_meta Eio.Path.(fs / layers_dir / hash / "layer.json")
           with
           | None -> None
-          | Some m
-            when match handle with
-                 | None -> true
-                 | Some h -> m.overlay_handle = Some h ->
-              let sz =
-                Oi.Cache.size ~sys Eio.Path.(fs / layers_dir / hash / "fs")
+          | Some m ->
+              let overlay = overlay_of_hash hash in
+              let keep =
+                match handle with
+                | None -> true
+                | Some h -> (
+                    match overlay with
+                    | Some (o : D10.Overlay.t) -> o.handle = h
+                    | None -> false)
               in
-              Some (m, hash, sz)
-          | Some _ -> None)
+              if keep then
+                let sz =
+                  Oi.Cache.size ~sys Eio.Path.(fs / layers_dir / hash / "fs")
+                in
+                Some (m, overlay, hash, sz)
+              else None)
         entries
   in
   if rows = [] then
@@ -544,18 +556,20 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
     Fmt.pr "(no cached layers in %s; run %a to populate)@." scope
       Oi.Style.header_string suggest
   else begin
+    let handle_of (o : D10.Overlay.t option) =
+      match o with Some o -> o.handle | None -> ""
+    in
     let rows =
       List.sort
-        (fun ((a : D10.Layer.meta), _, _) (b, _, _) ->
-          let ha = Stdlib.Option.value a.overlay_handle ~default:"" in
-          let hb = Stdlib.Option.value b.overlay_handle ~default:"" in
-          match String.compare ha hb with
+        (fun ((a : D10.Layer.meta), oa, _, _) (b, ob, _, _) ->
+          match String.compare (handle_of oa) (handle_of ob) with
           | 0 -> String.compare a.package b.package
           | c -> c)
         rows
     in
-    let handle_str (m : D10.Layer.meta) =
-      match m.overlay_handle with Some h -> "@" ^ h | None -> ""
+    let handle_str = function
+      | Some (o : D10.Overlay.t) -> "@" ^ o.handle
+      | None -> ""
     in
     let header =
       match handle with
@@ -566,11 +580,11 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
     let total = ref 0L in
     let table_rows =
       List.map
-        (fun ((m : D10.Layer.meta), hash, sz) ->
+        (fun ((m : D10.Layer.meta), overlay, hash, sz) ->
           total := Int64.add !total sz;
           let short = String.sub hash 0 (min 12 (String.length hash)) in
           [
-            Tty.Span.styled Oi.Style.info (handle_str m);
+            Tty.Span.styled Oi.Style.info (handle_str overlay);
             Tty.Span.text m.package;
             Tty.Span.styled Oi.Style.dim short;
             Tty.Span.text (Fmt.str "%a" Oi.Cache.pp_size sz);

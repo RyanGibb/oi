@@ -25,10 +25,14 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
   let d10 : D10.Config.t =
     { sys; fs; clock; root = Oi.Cache.root cache; os_key }
   in
+  let cache_root = Oi.Cache.root_s cache in
+  let overlay_for ~hash =
+    Oi.Provenance.overlay_of_layer ~fs ~cache_root ~os_key ~hash
+  in
   let rebuild reason =
     Logs.info (fun m -> m "%s local index for %s" reason os_key);
     let db = D10.Index.open_ ~path:index_path in
-    D10.Index.rebuild d10 db;
+    D10.Index.rebuild d10 ~overlay_for db;
     D10.Index.close db
   in
   if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then rebuild "Building"
@@ -109,8 +113,6 @@ let binary_to_package ~sys ~fs ~clock ~cache ~os_key ~registry name =
     D10.Index.close db;
     match results with
     | (pkg, _, _, overlay) :: _ ->
-        let handle =
-          match overlay with Some (h, _) -> Some h | None -> None
-        in
+        let handle = Option.map (fun (o : D10.Overlay.t) -> o.handle) overlay in
         Some (pkg, handle)
     | [] -> None

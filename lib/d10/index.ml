@@ -55,9 +55,7 @@ let schema =
   CREATE INDEX IF NOT EXISTS idx_layers_arch ON layers(arch);
   CREATE INDEX IF NOT EXISTS idx_layers_distro ON layers(distro);
   CREATE INDEX IF NOT EXISTS idx_layers_name ON layers(package_name, os_key);
-  -- idx_layers_overlay is created in [open_] after the ALTER TABLE
-  -- migration has added overlay_handle / overlay_version to pre-existing
-  -- schemas; creating it here would fail on older DBs.
+  CREATE INDEX IF NOT EXISTS idx_layers_overlay ON layers(overlay_handle, overlay_version);
   CREATE INDEX IF NOT EXISTS idx_binaries_name ON layer_binaries(binary_name);
   CREATE INDEX IF NOT EXISTS idx_deps_hash ON layer_deps(layer_hash);
   CREATE INDEX IF NOT EXISTS idx_files_hash ON layer_files(layer_hash);
@@ -70,26 +68,10 @@ let rec mkdir_p dir =
     try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
   end
 
-(* Idempotent ALTER TABLE for older index DBs that predate the
-   overlay_handle / overlay_version columns. SQLite has no
-   [ADD COLUMN IF NOT EXISTS]; we simply ignore the duplicate-column
-   error. *)
-let try_add_column db sql =
-  match Sqlite3.exec db sql with
-  | Sqlite3.Rc.OK -> ()
-  | Sqlite3.Rc.ERROR -> ()
-  | rc ->
-      Fmt.failwith "layer_index sqlite: %s: %s" (Sqlite3.Rc.to_string rc) sql
-
 let open_ ~path =
   mkdir_p (Filename.dirname path);
   let db = Sqlite3.db_open path in
   exec db schema;
-  try_add_column db "ALTER TABLE layers ADD COLUMN overlay_handle TEXT";
-  try_add_column db "ALTER TABLE layers ADD COLUMN overlay_version TEXT";
-  exec db
-    "CREATE INDEX IF NOT EXISTS idx_layers_overlay ON layers(overlay_handle, \
-     overlay_version)";
   exec db "PRAGMA journal_mode=WAL";
   exec db "PRAGMA synchronous=NORMAL";
   db
@@ -137,7 +119,7 @@ let parse_pkg_string s =
       OpamPackage.Version.to_string (OpamPackage.version pkg) )
   with Failure _ -> (s, "")
 
-let rebuild (c : Config.t) db =
+let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None) db =
   let layers_dir = Eio.Path.(c.root / "layers" / c.os_key) in
   let os_key = c.os_key in
   if not (Sysops.file_exists layers_dir) then ()
@@ -173,7 +155,11 @@ let rebuild (c : Config.t) db =
         | None -> ()
         | Some info ->
             let name, version = parse_pkg_string info.package in
-            let null_or_quote = function None -> "NULL" | Some s -> quote s in
+            let oh, ov =
+              match overlay_for ~hash with
+              | None -> ("NULL", "NULL")
+              | Some (o : Overlay.t) -> (quote o.handle, quote o.version)
+            in
             exec db
               (Fmt.str
                  "INSERT OR REPLACE INTO layers (hash, os_key, arch, os, \
@@ -182,9 +168,7 @@ let rebuild (c : Config.t) db =
                   %s, %s, %s, %s, %s, %s, %d, %f, %s, %s)"
                  (quote hash) (quote os_key) (quote arch) (quote os)
                  (quote distro) (quote os_version) (quote name) (quote version)
-                 info.exit_status info.created
-                 (null_or_quote info.overlay_handle)
-                 (null_or_quote info.overlay_version));
+                 info.exit_status info.created oh ov);
             (* Insert deps *)
             List.iteri
               (fun i dep_s ->
@@ -260,18 +244,15 @@ let find_layer db ~name ~version ~os_key =
   ignore (Sqlite3.finalize stmt);
   result
 
+let overlay_of_cols oh ov =
+  if oh = "" then None else Some { Overlay.handle = oh; version = ov }
+
 let find_binary db ~binary ~os_key =
   let results = ref [] in
-  let some_if_set s = if s = "" then None else Some s in
   let cb row =
     match row with
     | [| name; version; hash; oh; ov |] ->
-        let overlay =
-          match (some_if_set oh, some_if_set ov) with
-          | Some h, Some v -> Some (h, v)
-          | _ -> None
-        in
-        results := (name, version, hash, overlay) :: !results
+        results := (name, version, hash, overlay_of_cols oh ov) :: !results
     | _ -> ()
   in
   ignore
@@ -292,16 +273,10 @@ let find_binary db ~binary ~os_key =
 
 let search_package db ~pattern ~os_key =
   let results = ref [] in
-  let some_if_set s = if s = "" then None else Some s in
   let cb row =
     match row with
     | [| name; version; hash; oh; ov |] ->
-        let overlay =
-          match (some_if_set oh, some_if_set ov) with
-          | Some h, Some v -> Some (h, v)
-          | _ -> None
-        in
-        results := (name, version, hash, overlay) :: !results
+        results := (name, version, hash, overlay_of_cols oh ov) :: !results
     | _ -> ()
   in
   let sql_pattern = String.map (fun c -> if c = '*' then '%' else c) pattern in
@@ -325,16 +300,11 @@ let search_package db ~pattern ~os_key =
 
 let search_binary db ~pattern ~os_key =
   let results = ref [] in
-  let some_if_set s = if s = "" then None else Some s in
   let cb row =
     match row with
     | [| binary; name; version; hash; oh; ov |] ->
-        let overlay =
-          match (some_if_set oh, some_if_set ov) with
-          | Some h, Some v -> Some (h, v)
-          | _ -> None
-        in
-        results := (binary, name, version, hash, overlay) :: !results
+        results :=
+          (binary, name, version, hash, overlay_of_cols oh ov) :: !results
     | _ -> ()
   in
   (* Convert user wildcards: * → % *)
@@ -486,11 +456,6 @@ let delete_layers db ~hashes =
 
 let merge_remote db ~remote_path =
   exec db (Fmt.str "ATTACH DATABASE %s AS remote" (quote remote_path));
-  (* Bring older remote index snapshots up to the current schema so the
-     column-position-sensitive [SELECT *] below keeps working. The
-     remote_path is a locally-downloaded copy; migrating it is safe. *)
-  try_add_column db "ALTER TABLE remote.layers ADD COLUMN overlay_handle TEXT";
-  try_add_column db "ALTER TABLE remote.layers ADD COLUMN overlay_version TEXT";
   exec db
     "CREATE TEMP TABLE _new_hashes AS SELECT hash FROM remote.layers WHERE \
      hash NOT IN (SELECT hash FROM main.layers)";

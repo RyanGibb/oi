@@ -46,7 +46,11 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
     let index_path = output / os_key / "index.db" in
     (try Sys.remove index_path with Sys_error _ -> ());
     let db = D10.Index.open_ ~path:index_path in
-    D10.Index.rebuild d10 db;
+    let cache_root = Oi.Cache.root_s cache in
+    let overlay_for ~hash =
+      Oi.Provenance.overlay_of_layer ~fs ~cache_root ~os_key ~hash
+    in
+    D10.Index.rebuild d10 ~overlay_for db;
     if registry <> "" then begin
       let scratch = output / os_key / ".remote-index.db" in
       if

@@ -1,0 +1,68 @@
+(** Outcome of a single package action.
+
+    The rich [t] carries per-failure-mode payloads (which command, which url,
+    which upstream dep, etc.) and is what Audit and Execute speak in. [kind] is
+    the no-payload tag, used by Manifest summaries, the [oi cache show] caller
+    histogram, and the registry browser's status pills. *)
+
+type fetch_kind =
+  | Http_status of int
+  | Checksum_mismatch
+  | Network_timeout
+  | Git_failed
+  | Other of string
+
+type t =
+  | Ok
+      (** Source build completed and the layer was committed. Pairs with a
+          [Provenance.t] under the same layer hash. *)
+  | Cached
+      (** The fast path emitted a Cached event without invoking Execute. *)
+  | Restored
+      (** A Binary package was restored from a layer that was already in the
+          local cache. *)
+  | Build_failed of { command : string; exit_code : int option }
+  | Install_failed of { command : string; exit_code : int option }
+  | Dep_failed of { upstream : Identity.dep }
+  | Fetch_failed of { url : string; kind : fetch_kind }
+  | Depext_missing of { missing : string list; not_found : string list }
+  | Solve_failed of { reason : string }
+  | Skipped of { reason : string }
+
+(** No-payload tag enum. Stable string forms used in summaries, JSON histograms,
+    and the registry browser. *)
+type kind =
+  | K_ok
+  | K_cached
+  | K_restored
+  | K_build_failed
+  | K_install_failed
+  | K_dep_failed
+  | K_fetch_failed
+  | K_depext_missing
+  | K_solve_failed
+  | K_skipped
+
+val kind_of : t -> kind
+val kind_to_string : kind -> string
+val kind_of_string : string -> kind option
+
+(** {1 Histogram helpers} *)
+
+val bump : kind -> (kind * int) list -> (kind * int) list
+(** Increment the count for [kind] in a histogram, preserving the relative order
+    of earlier entries (a new tag is appended at the end). *)
+
+val sort_histogram : (kind * int) list -> (kind * int) list
+(** Stable sort: highest count first, then alphabetic by [kind_to_string]. *)
+
+(** {1 Codecs} *)
+
+val codec : t Jsont.t
+val kind_codec : kind Jsont.t
+val fetch_kind_codec : fetch_kind Jsont.t
+
+(** {1 Classification} *)
+
+val classify_fetch_msg : string -> fetch_kind
+(** Best-effort classification of an OpamRepository / curl error message. *)

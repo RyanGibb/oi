@@ -22,18 +22,13 @@
 
     Captures the full dependency DAG with per-package build phases, preserving
     the parallel structure from the solver. When [~d10] is provided to {!build},
-    packages whose layers already exist in the cache are marked as {!Binary} and
+    packages whose layers already exist in the cache are marked as [Binary] and
     restored directly instead of being built from source. *)
-
-(** How a package will be installed. *)
-type method_ =
-  | Source  (** Build from source (or fetch from remote registry). *)
-  | Binary  (** Restore from the cached layer at [node.layer_hash]. *)
 
 type node = {
   pkg : OpamPackage.t;
   opam : OpamFile.OPAM.t;
-  method_ : method_;
+  method_ : Identity.method_;
   deps : OpamPackage.Name.t list;
       (** Direct dependencies within the plan (determines execution order). *)
   layer_hash : string;
@@ -60,11 +55,10 @@ val nodes : graph -> node list
 val find : graph -> OpamPackage.Name.t -> node
 
 val overlay_of_pkg :
-  packages_dirs:string list -> OpamPackage.t -> string option * string option
-(** Resolve the overlay [(handle, version)] that contributed [pkg]'s opam file,
-    by walking [packages_dirs] for a [<dir>/<name>/<name.version>/opam] hit.
-    Returns [(None, None)] for packages that came from a non-overlay source
-    (pin-depends, raw URL, etc). *)
+  packages_dirs:string list -> OpamPackage.t -> D10.Overlay.t option
+(** Resolve the overlay that contributed [pkg]'s opam file, by walking
+    [packages_dirs] for a [<dir>/<name>/<name.version>/opam] hit. Returns [None]
+    for packages from a non-overlay source (pin-depends, raw URL, local). *)
 
 val layer_hashes : graph -> string list
 (** [layer_hashes g] returns the layer hash for each package in the plan, in
@@ -72,7 +66,7 @@ val layer_hashes : graph -> string list
 
 val pp_tree : ?remote_has:(string -> bool) -> graph Fmt.t
 (** [pp_tree ?remote_has] renders the action graph as a dependency tree.
-    {!Source} packages whose layer hash satisfies [remote_has] are shown as
+    [Source] packages whose layer hash satisfies [remote_has] are shown as
     "remote" (cyan) instead of "source" (blue). *)
 
 (** {1 Executable plan}
@@ -85,16 +79,11 @@ type source_info = { url : string; checksums : string list }
 type patch = { file : string; filter : string option }
 type subst = string
 
-type dep_layer = {
-  pkg : string;  (** dependency package name.version *)
-  hash : string;  (** d10 layer hash *)
-}
-
 type package_plan = {
   pkg : string;
   layer_hash : string;
-  method_ : method_;
-  dep_layers : dep_layer list;
+  method_ : Identity.method_;
+  dep_layers : Identity.dep list;
   source : source_info option;
   extra_sources : (string * source_info) list;
   extra_files : (string * string) list;
@@ -112,24 +101,21 @@ type package_plan = {
   env : string array;
   build_dir : string;
   prefix : string;
-  overlay_handle : string option;
-      (** Reporepo overlay handle that contributed this package's opam file
-          (e.g. ["default"], ["avsm"]), or [None] when the package came from a
-          non-overlay source like a pin-depends tree. *)
-  overlay_version : string option;
-      (** Reporepo overlay version (e.g. ["20260418.6"]). Present iff
-          [overlay_handle] is. *)
+  overlay : D10.Overlay.t option;
+      (** Reporepo overlay that contributed this package's opam file (e.g.
+          [{ handle = "avsm"; version = "" }]), or [None] when the package came
+          from a non-overlay source like a pin-depends tree. *)
   opam_path : string option;
-      (** Absolute path to the opam file the solver picked for this package
-          (the [<packages_dir>/<name>/<name.version>/opam] hit from
+      (** Absolute path to the opam file the solver picked for this package (the
+          [<packages_dir>/<name>/<name.version>/opam] hit from
           {!find_pkg_source_dir}). Used by {!Provenance} to compute the opam
           [sha256] and origin path. [None] if the package's opam file isn't
           locatable on disk. *)
   pkgs_dir : string option;
       (** The [<packages_dir>] root that contained [opam_path]. Distinct from
-          [opam_path] so {!Provenance.origin_of_pkgs_dir} can examine the
-          directory shape (v1/<handle>/packages, pins/sets/<hash>/packages,
-          …). [None] iff [opam_path] is. *)
+          [opam_path] so {!Origin.of_packages_dir} can examine the directory
+          shape (v1/<handle>/packages, pins/sets/<hash>/packages, …). [None] iff
+          [opam_path] is. *)
   depexts : string list;
       (** Declared system packages active under the build's filter env. Names
           are taken straight from [OpamFile.OPAM.depexts] and only retained for

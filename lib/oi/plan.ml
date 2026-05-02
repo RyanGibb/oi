@@ -10,12 +10,10 @@ let ( / ) = Filename.concat
 
 (* -- Action graph -------------------------------------------------------- *)
 
-type method_ = Source | Binary
-
 type node = {
   pkg : OpamPackage.t;
   opam : OpamFile.OPAM.t;
-  method_ : method_;
+  method_ : Identity.method_;
   deps : OpamPackage.Name.t list;
   layer_hash : string;
 }
@@ -126,7 +124,7 @@ let build ctx ?d10 ~packages_dirs pkgs =
               Digest.string (layer_hash ^ ":" ^ tc.hash) |> Digest.to_hex
           | _ -> layer_hash
         in
-        let method_ =
+        let method_ : Identity.method_ =
           match d10 with
           | Some d10 when D10.Layer.succeeded d10 ~hash:layer_hash -> Binary
           | _ -> Source
@@ -174,7 +172,7 @@ let parallel_groups g =
   done;
   List.rev !groups
 
-let pp_method_short ~remote_has fmt = function
+let pp_method_short ~remote_has fmt : Identity.method_ -> unit = function
   | Binary -> Fmt.pf fmt "%a" Style.ok_string "binary"
   | Source ->
       if remote_has then Fmt.pf fmt "%a" Style.info_string "remote"
@@ -213,13 +211,12 @@ let layer_hashes g =
 type source_info = { url : string; checksums : string list }
 type patch = { file : string; filter : string option }
 type subst = string
-type dep_layer = { pkg : string; hash : string }
 
 type package_plan = {
   pkg : string;
   layer_hash : string;
-  method_ : method_;
-  dep_layers : dep_layer list;
+  method_ : Identity.method_;
+  dep_layers : Identity.dep list;
   source : source_info option;
   extra_sources : (string * source_info) list;
   extra_files : (string * string) list;
@@ -232,8 +229,7 @@ type package_plan = {
   env : string array;
   build_dir : string;
   prefix : string;
-  overlay_handle : string option;
-  overlay_version : string option;
+  overlay : D10.Overlay.t option;
   opam_path : string option;
   pkgs_dir : string option;
   depexts : string list;
@@ -250,36 +246,6 @@ type t = {
   total_packages : int;
 }
 
-(* Derive [overlay_handle] / [overlay_version] from a [packages/] dir
-   that an opam file was sourced from. Two layouts are recognised:
-
-   - [<reporepo>/v1/<handle>/packages] — the current materialised
-     overlay layout. Version isn't in the path, so we return [None] for
-     it. The "reporepo" handle is the meta tree (toolchain definitions
-     etc.), not a package overlay; we drop it.
-   - [<data_dir>/repos/overlay-<handle>-<version>/packages] — the
-     legacy clone layout (still produced for some flows).
-
-   Anything else (pin-depends trees, raw URLs) returns [None]. *)
-let overlay_of_packages_dir pkgs_dir =
-  let base = Filename.basename (Filename.dirname pkgs_dir) in
-  let parent =
-    Filename.basename (Filename.dirname (Filename.dirname pkgs_dir))
-  in
-  if String.starts_with ~prefix:"overlay-" base then
-    let rest =
-      String.sub base (String.length "overlay-")
-        (String.length base - String.length "overlay-")
-    in
-    match String.rindex_opt rest '-' with
-    | None -> (None, None)
-    | Some i ->
-        let h = String.sub rest 0 i in
-        let v = String.sub rest (i + 1) (String.length rest - i - 1) in
-        (Some h, Some v)
-  else if parent = "v1" && base <> "reporepo" then (Some base, None)
-  else (None, None)
-
 let find_pkg_source_dir ~packages_dirs pkg =
   let name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
   let full = OpamPackage.to_string pkg in
@@ -287,10 +253,16 @@ let find_pkg_source_dir ~packages_dirs pkg =
     (fun d -> Sys.file_exists (d / name / full / "opam"))
     packages_dirs
 
+(* Resolve overlay attribution by deriving an [Origin.t] from the
+   [packages/] directory the opam file was found in, then projecting onto
+   its [overlay] field. Pins / local trees yield [None]. *)
 let overlay_of_pkg ~packages_dirs pkg =
   match find_pkg_source_dir ~packages_dirs pkg with
-  | None -> (None, None)
-  | Some d -> overlay_of_packages_dir d
+  | None -> None
+  | Some d ->
+      let name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
+      let full = OpamPackage.to_string pkg in
+      (Origin.of_packages_dir ~pkgs_dir:d ~name ~full).overlay
 
 let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
   let prefix = build_prefix in
@@ -347,11 +319,7 @@ let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
                   with
                   | None -> None
                   | Some n ->
-                      Some
-                        {
-                          pkg = OpamPackage.to_string n.pkg;
-                          hash = n.layer_hash;
-                        })
+                      Some (Identity.dep_of_opam n.pkg ~hash:n.layer_hash))
                 node.deps
             in
             let source =
@@ -425,10 +393,12 @@ let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
             let env = Solver.Ctx.compilation_env ctx opam in
             let subst_vars = Solver.Ctx.resolve_substs ctx opam in
             let pkgs_dir = find_pkg_source_dir ~packages_dirs pkg in
-            let overlay_handle, overlay_version =
+            let overlay =
               match pkgs_dir with
-              | None -> (None, None)
-              | Some d -> overlay_of_packages_dir d
+              | None -> None
+              | Some d ->
+                  (Origin.of_packages_dir ~pkgs_dir:d ~name:name_s ~full:pkg_s)
+                    .overlay
             in
             let opam_path =
               Stdlib.Option.map (fun d -> d / name_s / pkg_s / "opam") pkgs_dir
@@ -466,8 +436,7 @@ let resolve_groups ctx ~packages_dirs ~cache_root ~os_key:_ ~build_prefix g =
               env;
               build_dir;
               prefix;
-              overlay_handle;
-              overlay_version;
+              overlay;
               opam_path;
               pkgs_dir;
               depexts;
@@ -501,15 +470,18 @@ let pp_commands fmt cmds =
 let pp_package ~os_key fmt p =
   let short_hash h = String.sub h 0 (min 12 (String.length h)) in
   let method_s =
-    match p.method_ with Source -> "source" | Binary -> "binary (cached)"
+    match p.method_ with
+    | Identity.Source -> "source"
+    | Binary -> "binary (cached)"
   in
   Fmt.pf fmt "@[<v>  %a [%s]@," Style.header_string p.pkg method_s;
   Fmt.pf fmt "    layer: %s/%s@," os_key (short_hash p.layer_hash);
   if p.dep_layers <> [] then begin
     Fmt.pf fmt "    needs:@,";
     List.iter
-      (fun (d : dep_layer) ->
-        Fmt.pf fmt "      %s → %s/%s@," d.pkg os_key (short_hash d.hash))
+      (fun (d : Identity.dep) ->
+        Fmt.pf fmt "      %s → %s/%s@," (Identity.to_string d.id) os_key
+          (short_hash d.hash))
       p.dep_layers
   end;
   (match p.source with

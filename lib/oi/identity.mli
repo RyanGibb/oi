@@ -1,0 +1,40 @@
+(** Package identity types shared across the audit / provenance / manifest /
+    plan modules.
+
+    Every place that needs to talk about "this opam package, and how it relates
+    to a layer" reaches for these — one set of records, one set of codecs, no
+    conversion shims at the boundaries. *)
+
+type t = { name : string; version : string }
+(** A name + version pair. ["foo"] / ["1.2.3"]. *)
+
+val of_string : string -> t
+(** Parse a [name.version] string. Falls back to [{ name = s; version = "" }]
+    when the input doesn't match opam's package shape. *)
+
+val to_string : t -> string
+(** [name ^ "." ^ version], or just [name] when [version] is empty. *)
+
+val of_opam : OpamPackage.t -> t
+
+type dep = { id : t; hash : string }
+(** A layer dependency: an [Identity.t] paired with the d10 layer hash that
+    holds the dependency's compiled output. Used by both the build plan
+    ([Plan.package_plan.dep_layers]) and the provenance / audit records. *)
+
+val dep_of_opam : OpamPackage.t -> hash:string -> dep
+
+(** How a package made it into the prefix.
+
+    - [Source] — built from source during this run (or fetched from a remote
+      registry, then promoted).
+    - [Binary] — restored from an existing layer in the local d10 cache. *)
+type method_ = Source | Binary
+
+val method_to_string : method_ -> string
+
+(** {1 Codecs} *)
+
+val codec : t Jsont.t
+val dep_codec : dep Jsont.t
+val method_codec : method_ Jsont.t

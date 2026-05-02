@@ -5,6 +5,13 @@
     from the opam [effective_part] of the package and all its direct
     dependencies.
 
+    Two sidecar files live next to [layer.json]: [provenance.json]
+    ({!Oi.Provenance.t}) carries the immutable content-addressed inputs that
+    produced the layer, and [audit.jsonl] (one per cache root, not per layer)
+    records every caller invocation that contributed a build attempt. The
+    [layer.json] tracked here is the d10-internal cache record; the richer audit
+    / provenance views are queried via the [oi] modules.
+
     {2 On-disk structure}
 
     {v
@@ -40,13 +47,10 @@ type meta = {
   deps : string list;  (** Direct dependency name.versions. *)
   hashes : string list;  (** Layer hashes of direct dependencies. *)
   created : float;  (** Unix timestamp of layer creation. *)
-  overlay_handle : string option;
-      (** Reporepo overlay handle that contributed this package's opam file, or
-          [None] for legacy builds and pin-depends-only packages. *)
-  overlay_version : string option;
-      (** Reporepo overlay version (e.g. ["20260418.6"]) when [overlay_handle]
-          is set. Pins the layer to a specific reporepo snapshot. *)
 }
+(** Cache-internal record; the richer per-caller event log and immutable content
+    provenance (which includes overlay attribution) live in [Oi.Audit] and
+    [Oi.Provenance] sidecars next to this file. *)
 
 val save_meta : _ Eio.Path.t -> meta -> unit
 (** [save_meta path meta] writes [meta] as JSON to [path], creating parent
@@ -85,16 +89,12 @@ val store :
   deps:string list ->
   parent_hashes:string list ->
   exit_status:int ->
-  ?overlay_handle:string ->
-  ?overlay_version:string ->
-  unit ->
   unit
 (** [store c ~hash ~prefix ~files ~package ~deps ~parent_hashes ~exit_status]
     creates a layer at [<root>/layers/<os_key>/<hash>/]. Each file in [files]
     (relative paths within [prefix]) is hardlinked into [fs/]. Symlinks are
     preserved by recreating them with the same target. Writes [layer.json] with
-    the provided metadata. [overlay_handle] / [overlay_version] are persisted so
-    later indexing knows which reporepo entry contributed this package. *)
+    the provided metadata. *)
 
 val restore : Config.t -> hash:string -> prefix:string -> unit
 (** [restore c ~hash ~prefix] hardlinks the layer's [fs/] tree into [prefix] via

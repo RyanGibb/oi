@@ -492,53 +492,12 @@ let new_trace ~now p =
     text_log = None;
   }
 
-(* Split a "name.version" string into its parts. [Audit] and [Provenance]
-   have structurally identical [pkg_id] records; we return [Audit]'s and
-   convert at the call site since the conversion is trivial. *)
-let parse_pkg s : Audit.pkg_id =
-  match OpamPackage.of_string_opt s with
-  | Some p ->
-      {
-        name = OpamPackage.Name.to_string (OpamPackage.name p);
-        version = OpamPackage.Version.to_string (OpamPackage.version p);
-      }
-  | None -> { name = s; version = "" }
-
-let dep_to_audit (d : Plan.dep_layer) : Audit.dep =
-  let id = parse_pkg d.pkg in
-  { name = id.name; version = id.version; hash = d.hash }
-
-let dep_to_provenance (d : Plan.dep_layer) : Provenance.dep =
-  let id = parse_pkg d.pkg in
-  { name = id.name; version = id.version; hash = d.hash }
-
-let plan_to_overlay_ctx (p : Plan.package_plan) : Audit.overlay_ctx option =
-  match p.overlay_handle with
-  | None -> None
-  | Some handle ->
-      let version =
-        match p.overlay_version with Some v -> v | None -> ""
-      in
-      Some { handle; version }
-
-let plan_to_provenance_source (p : Plan.package_plan) :
-    Provenance.source_info option =
-  Option.map
-    (fun (s : Plan.source_info) : Provenance.source_info ->
-      { url = s.url; kind = Provenance.classify_url s.url;
-        checksums = s.checksums })
-    p.source
-
-let method_to_provenance = function
-  | Plan.Source -> Provenance.Source
-  | Plan.Binary -> Provenance.Binary
-
-(* Classify an outer-loop exception into an Audit.outcome. The [phase]
-   argument disambiguates Build vs Install for non-Fetch errors. *)
-let outcome_of_exn ~phase exn : Audit.outcome =
+(* Classify an outer-loop exception into an Outcome.t. The [phase] argument
+   disambiguates Build vs Install for non-Fetch errors. *)
+let outcome_of_exn ~phase exn : Outcome.t =
   match exn with
   | Error.E (Fetch_failed { url; msg }) ->
-      Fetch_failed { url; kind = Audit.classify_fetch_msg msg }
+      Fetch_failed { url; kind = Outcome.classify_fetch_msg msg }
   | Error.E (Build_failed { cmd; _ }) -> (
       match phase with
       | `Install -> Install_failed { command = cmd; exit_code = None }
@@ -551,8 +510,8 @@ let outcome_of_exn ~phase exn : Audit.outcome =
 
 (* Build the Audit + (optional) Provenance for a terminal package event. The
    [audit_base] carries trigger / project / toolchain / host; per-pkg overlay
-   is folded in here. Provenance writes only fire on [Ok], because that's the
-   only outcome that committed a layer dir to disk. *)
+   is folded in here. Provenance writes only fire on [Ok], because that's
+   the only outcome that committed a layer dir to disk. *)
 let phases_of_trace (t : trace) : Provenance.phases =
   {
     fetch = t.fetch_dur;
@@ -568,35 +527,43 @@ let opam_info_of_plan (p : Plan.package_plan) ~name ~version :
       let full = if version = "" then name else Fmt.str "%s.%s" name version in
       {
         sha256 = Provenance.hash_opam_file ~path;
-        origin = Provenance.origin_of_pkgs_dir ~pkgs_dir ~name ~full;
+        origin = Origin.of_packages_dir ~pkgs_dir ~name ~full;
       }
   | _ ->
       {
         sha256 = "";
-        origin = { kind = Local; handle = None; path_in_repo = "" };
+        origin = { kind = Local; overlay = None; path_in_repo = "" };
       }
+
+let provenance_source_of_plan (p : Plan.package_plan) :
+    Provenance.source_info option =
+  Option.map
+    (fun (s : Plan.source_info) : Provenance.source_info ->
+      {
+        url = s.url;
+        kind = Provenance.classify_url s.url;
+        checksums = s.checksums;
+      })
+    p.source
 
 let emit_event ~fs ~cache_root ~os_key ~ocaml_version ~audit_base ~outcome
     (t : trace) =
   let p = t.pkg in
-  let id = parse_pkg p.pkg in
-  let name = id.name and version = id.version in
+  let id = Identity.of_string p.pkg in
   let now = Unix.gettimeofday () in
   let duration_s = now -. t.started_at in
   let log =
     Option.map
       (fun log_path ->
         let tail =
-          match (outcome : Audit.outcome) with
+          match (outcome : Outcome.t) with
           | Ok | Cached | Restored -> None
           | _ -> Audit.tail_of_file ~path:log_path
         in
         { Audit.text_path = log_path; tail })
       t.text_log
   in
-  let context =
-    { audit_base with Audit.overlay = plan_to_overlay_ctx p }
-  in
+  let context = { audit_base with Audit.overlay = p.overlay } in
   let event : Audit.event =
     {
       schema = 1;
@@ -604,8 +571,8 @@ let emit_event ~fs ~cache_root ~os_key ~ocaml_version ~audit_base ~outcome
       invocation_id = Audit.invocation_id ();
       ts = now;
       os_key;
-      layer_hash = p.layer_hash;
-      pkg = { name; version };
+      target = Layer p.layer_hash;
+      pkg = id;
       outcome;
       duration_s;
       context;
@@ -613,20 +580,20 @@ let emit_event ~fs ~cache_root ~os_key ~ocaml_version ~audit_base ~outcome
     }
   in
   Audit.append ~fs ~cache_root event;
-  if outcome = Audit.Ok then begin
+  if outcome = Outcome.Ok then begin
     let prov : Provenance.t =
       {
         schema = 1;
         layer_hash = p.layer_hash;
         os_key;
-        pkg = { name; version };
-        method_ = method_to_provenance p.method_;
+        pkg = id;
+        method_ = p.method_;
         built_at = now;
         duration_s;
         phases = phases_of_trace t;
-        opam = opam_info_of_plan p ~name ~version;
-        source = plan_to_provenance_source p;
-        deps = List.map dep_to_provenance p.dep_layers;
+        opam = opam_info_of_plan p ~name:id.name ~version:id.version;
+        source = provenance_source_of_plan p;
+        deps = p.dep_layers;
         depexts_declared = p.depexts;
         build_env = { ocaml_version };
       }
@@ -665,11 +632,11 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
     if not (Hashtbl.mem failed_layers p.layer_hash) then
       Hashtbl.replace failed_layers p.layer_hash log_path
   in
-  let is_dep_failed (d : Plan.dep_layer) = Hashtbl.mem failed_layers d.hash in
+  let is_dep_failed (d : Identity.dep) = Hashtbl.mem failed_layers d.hash in
   (* First dep's log path, for cascading skip messages. *)
   let cascade_log (p : Plan.package_plan) =
     List.find_map
-      (fun (d : Plan.dep_layer) -> Hashtbl.find_opt failed_layers d.hash)
+      (fun (d : Identity.dep) -> Hashtbl.find_opt failed_layers d.hash)
       p.dep_layers
     |> Stdlib.Option.value ~default:""
   in
@@ -683,7 +650,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
      common dep fails early in [--all] and drags hundreds of groups
      with it. *)
   let is_pkg_doomed (p : Plan.package_plan) =
-    p.method_ <> Plan.Source
+    p.method_ <> Identity.Source
     || Hashtbl.mem failed_layers p.layer_hash
     || List.exists is_dep_failed p.dep_layers
   in
@@ -731,22 +698,22 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
           List.iter
             (fun (p : Plan.package_plan) ->
               match p.method_ with
-              | Plan.Binary ->
+              | Identity.Binary ->
                   reporter.pkg_event (Cached { pkg = p.pkg });
                   emit_log ~outcome:Restored p
-              | Plan.Source ->
+              | Source ->
                   let upstream_log = cascade_log p in
                   mark_failed ~p ~log_path:upstream_log;
                   reporter.pkg_event (Dep_failed { pkg = p.pkg; upstream_log });
-                  let upstream =
+                  let upstream : Identity.dep =
                     match
                       List.find_opt
-                        (fun (d : Plan.dep_layer) ->
+                        (fun (d : Identity.dep) ->
                           Hashtbl.mem failed_layers d.hash)
                         p.dep_layers
                     with
-                    | Some d -> dep_to_audit d
-                    | None -> { name = ""; version = ""; hash = "" }
+                    | Some d -> d
+                    | None -> { id = { name = ""; version = "" }; hash = "" }
                   in
                   let t = trace_for p in
                   t.text_log <-
@@ -763,7 +730,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
            that just finished. *)
           List.iter
             (fun (p : Plan.package_plan) ->
-              if p.method_ = Plan.Binary then begin
+              if p.method_ = Identity.Binary then begin
                 reporter.pkg_event
                   (Started
                      {
@@ -790,22 +757,22 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
             List.filter
               (fun (p : Plan.package_plan) ->
                 if
-                  p.method_ = Plan.Source
+                  p.method_ = Identity.Source
                   && (not (Hashtbl.mem failed_layers p.layer_hash))
                   && not (List.exists is_dep_failed p.dep_layers)
                 then true
                 else begin
-                  if p.method_ = Plan.Source then begin
+                  if p.method_ = Identity.Source then begin
                     let upstream_log = cascade_log p in
-                    let upstream =
+                    let upstream : Identity.dep =
                       match
                         List.find_opt
-                          (fun (d : Plan.dep_layer) ->
+                          (fun (d : Identity.dep) ->
                             Hashtbl.mem failed_layers d.hash)
                           p.dep_layers
                       with
-                      | Some d -> dep_to_audit d
-                      | None -> { name = ""; version = ""; hash = "" }
+                      | Some d -> d
+                      | None -> { id = { name = ""; version = "" }; hash = "" }
                     in
                     mark_failed ~p ~log_path:upstream_log;
                     reporter.pkg_event
@@ -859,7 +826,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
           List.iter
             (fun (p : Plan.package_plan) ->
               if
-                p.method_ = Plan.Source
+                p.method_ = Identity.Source
                 && not (Hashtbl.mem failed_layers p.layer_hash)
               then begin
                 reporter.pkg_event
@@ -880,7 +847,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
                   in
                   let dep_hashes =
                     List.filter_map
-                      (fun (d : Plan.dep_layer) ->
+                      (fun (d : Identity.dep) ->
                         if D10.Layer.succeeded d10 ~hash:d.hash then Some d.hash
                         else None)
                       p.dep_layers
@@ -889,11 +856,9 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
                     ~package:p.pkg
                     ~deps:
                       (List.map
-                         (fun (d : Plan.dep_layer) -> d.pkg)
+                         (fun (d : Identity.dep) -> Identity.to_string d.id)
                          p.dep_layers)
-                    ~parent_hashes:dep_hashes ~exit_status:0
-                    ?overlay_handle:p.overlay_handle
-                    ?overlay_version:p.overlay_version ();
+                    ~parent_hashes:dep_hashes ~exit_status:0;
                   reporter.pkg_event (Built { pkg = p.pkg });
                   emit_log ~outcome:Ok p
                 with exn ->

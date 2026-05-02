@@ -46,31 +46,17 @@ type meta = {
   deps : string list;
   hashes : string list;
   created : float;
-  overlay_handle : string option;
-  overlay_version : string option;
 }
 
 let meta_jsont : meta Jsont.t =
   let open Jsont in
-  Object.map ~kind:"layer meta"
-    (fun
-      package exit_status deps hashes created overlay_handle overlay_version ->
-      {
-        package;
-        exit_status;
-        deps;
-        hashes;
-        created;
-        overlay_handle;
-        overlay_version;
-      })
+  Object.map ~kind:"layer meta" (fun package exit_status deps hashes created ->
+      { package; exit_status; deps; hashes; created })
   |> Object.mem "package" string ~enc:(fun i -> i.package)
   |> Object.mem "exit_status" int ~enc:(fun i -> i.exit_status)
   |> Object.mem "deps" (list string) ~dec_absent:[] ~enc:(fun i -> i.deps)
   |> Object.mem "hashes" (list string) ~dec_absent:[] ~enc:(fun i -> i.hashes)
   |> Object.mem "created" number ~enc:(fun i -> i.created)
-  |> Object.opt_mem "overlay_handle" string ~enc:(fun i -> i.overlay_handle)
-  |> Object.opt_mem "overlay_version" string ~enc:(fun i -> i.overlay_version)
   |> Object.finish
 
 let save_meta path meta =
@@ -106,7 +92,7 @@ let succeeded c ~hash =
   | None -> false
 
 let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
-    ~exit_status ?overlay_handle ?overlay_version () =
+    ~exit_status =
   let d = dir_s c ~hash in
   let fs_dir = d / "fs" in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(c.fs / fs_dir);
@@ -141,8 +127,6 @@ let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
       deps;
       hashes = parent_hashes;
       created = Eio.Time.now c.clock;
-      overlay_handle;
-      overlay_version;
     }
 
 let restore (c : Config.t) ~hash ~prefix =
