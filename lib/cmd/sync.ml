@@ -190,11 +190,6 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
   in
-  let say_field label fmt =
-    if quiet then
-      Fmt.kstr (fun s -> Logs.info (fun m -> m "%s: %s" label s)) fmt
-    else Fmt.kstr (fun s -> Oi.Say.field label "%s" s) fmt
-  in
   let say_info fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
@@ -211,9 +206,14 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   if deps = [] && extra_cli = [] && url_project.roots = [] then
     Oi.Error.config_error "No .opam files found in %s." cwd;
   say_step "Sync %s" cwd;
-  if deps <> [] then say_field "deps" "%s" (String.concat ", " deps);
+  if deps <> [] then
+    if quiet then Logs.info (fun m -> m "deps: %s" (String.concat ", " deps))
+    else Oi.Say.field_list "deps" deps;
   if url_project.roots <> [] then
-    say_field "with-deps" "%s" (String.concat ", " url_project.roots);
+    if quiet then
+      Logs.info (fun m ->
+          m "with-deps: %s" (String.concat ", " url_project.roots))
+    else Oi.Say.field_list "with-deps" url_project.roots;
   let conf =
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
@@ -235,19 +235,26 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
       ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
   in
   if project_overlays <> [] then
-    say_field "overlays" "%s" (String.concat ", " project_overlays);
+    if quiet then
+      Logs.info (fun m ->
+          m "overlays: %s" (String.concat ", " project_overlays))
+    else Oi.Say.field_list "overlays" project_overlays;
   let with_repos = project_overlays @ with_repos in
   let all_extras =
     Target.merge_extras
       ~cli:(Target.cli_extra_repos ~fs ~sys ?toolchain with_repos)
       ~project:(project.extra_repos @ url_project.extra_repos)
   in
-  if all_extras <> [] then
-    say_field "extra-repos" "%s"
-      (String.concat ", "
-         (List.map
-            (fun (e : Oi.Project.extra_repo) -> Fmt.str "%s (%s)" e.name e.url)
-            all_extras));
+  if all_extras <> [] then begin
+    let labels =
+      List.map
+        (fun (e : Oi.Project.extra_repo) -> Fmt.str "%s (%s)" e.name e.url)
+        all_extras
+    in
+    if quiet then
+      Logs.info (fun m -> m "extra-repos: %s" (String.concat ", " labels))
+    else Oi.Say.field_list "extra-repos" labels
+  end;
   let remote = Terms.remote_of_registry registry in
   let extra_constraints = Oi.Project.Script.constraints extra_cli in
   let extra_names =
@@ -272,11 +279,12 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     let on_phase msg =
       if quiet then Logs.info (fun m -> m "%s" msg) else Oi.Say.step "%s" msg
     in
+    let on_progress msg = if not quiet then Oi.Say.progress msg in
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
       ~extra_repos:all_extras
       ~pins:(project.pins @ url_project.pins)
       ~refresh ~constraints:extra_constraints ~project_root:cwd ?remote ?jobs
-      ?toolchain ?local_packages_dir ~on_phase names
+      ?toolchain ?local_packages_dir ~on_phase ~on_progress names
   in
   let oi_dir = cwd / "_oi" in
   let prefix = oi_dir / "prefix" in

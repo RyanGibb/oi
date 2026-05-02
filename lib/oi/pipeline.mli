@@ -112,6 +112,7 @@ val cache_urls :
 
 val fetch_remote_layers :
   ?on_phase:(string -> unit) ->
+  ?on_progress:(string -> unit) ->
   ?jobs:int ->
   remote:D10.Layer.remote option ->
   d10:D10.Config.t ->
@@ -124,9 +125,14 @@ val fetch_remote_layers :
     graph with downloaded layers promoted to [Binary]. No-op when
     [remote = None] or every layer is already cached.
 
-    [on_phase] receives aggregated status across the parallel fiber pool — both
-    completed-layer counts and cumulative bytes received. Throttled to ~20Hz
-    internally; safe to wire into a [Tty.Progress] sink. *)
+    Progress reporting is split:
+    - [on_phase] receives one-shot milestones (e.g. the final "Fetched N/M
+      layers" summary).
+    - [on_progress] receives the high-frequency byte/count updates, throttled to
+      ~20Hz. Typically wired to an in-place line sink like {!Say.progress}.
+
+    When only [on_phase] is supplied, byte updates fall through to it so
+    spinner-style callers ([oi run]) keep showing live activity. *)
 
 val build :
   sys:D10.Sysops.t ->
@@ -148,6 +154,7 @@ val build :
   ?project_root:string ->
   ?local_packages_dir:string ->
   ?on_phase:(string -> unit) ->
+  ?on_progress:(string -> unit) ->
   ?preflight_done:(unit -> unit) ->
   OpamPackage.Name.t list ->
   string list

@@ -13,7 +13,18 @@
     future reuse. *)
 
 type pkg_event =
-  | Started of { pkg : string; stage : int; total_stages : int }
+  | Started of {
+      pkg : string;
+      phase : string;
+          (** "restore" / "fetch" / "build" / "install" — the lifecycle
+              sub-phase the package is entering. Multiple [Started] events fire
+              per source package as it transitions fetch → build → install;
+              binary packages get a single [Started] with phase ["restore"].
+              Reporters use this to drive a phase indicator in the progress bar.
+          *)
+      stage : int;
+      total_stages : int;
+    }
   | Cached of { pkg : string }
   | Built of { pkg : string }
   | Build_failed of { pkg : string; log : string }

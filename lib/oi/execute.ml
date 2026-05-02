@@ -423,7 +423,7 @@ let install_package ~proc_mgr ~fs (p : Plan.package_plan) =
 (* -- Reporter ------------------------------------------------------------- *)
 
 type pkg_event =
-  | Started of { pkg : string; stage : int; total_stages : int }
+  | Started of { pkg : string; phase : string; stage : int; total_stages : int }
   | Cached of { pkg : string }
   | Built of { pkg : string }
   | Build_failed of { pkg : string; log : string }
@@ -448,8 +448,8 @@ let with_default_reporter ~clock ~total_packages ~n_stages f =
       pkg_event =
         (fun e ->
           match e with
-          | Started { pkg; stage; total_stages = _ } ->
-              Ui.with_msg ui (Fmt.str "[%s] %s" (stage_s stage) pkg)
+          | Started { pkg; phase; stage; total_stages = _ } ->
+              Ui.with_msg ui (Fmt.str "[%s] %s %s" (stage_s stage) phase pkg)
           | Cached _ | Built _ -> Ui.tick ui
           | Dep_failed _ -> ()
           | Build_failed { pkg; log } ->
@@ -735,6 +735,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
                   (Started
                      {
                        pkg = p.pkg;
+                       phase = "restore";
                        stage = group.stage;
                        total_stages = n_stages;
                      });
@@ -791,19 +792,24 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
             Eio.Fiber.List.iter ~max_fibers:build_parallelism
               (fun (p : Plan.package_plan) ->
                 active := !active + 1;
-                reporter.pkg_event
-                  (Started
-                     {
-                       pkg = p.pkg;
-                       stage = group.stage;
-                       total_stages = n_stages;
-                     });
+                let started phase =
+                  reporter.pkg_event
+                    (Started
+                       {
+                         pkg = p.pkg;
+                         phase;
+                         stage = group.stage;
+                         total_stages = n_stages;
+                       })
+                in
+                started "fetch";
                 let t = trace_for p in
                 (try
                    Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / p.build_dir);
                    let t0 = now () in
                    fetch_phase ~cache_urls ~fs ~cache_root:plan.cache_root p;
                    t.fetch_dur <- Some (now () -. t0);
+                   started "build";
                    let t1 = now () in
                    build_phase ~proc_mgr ~fs p;
                    t.build_dur <- Some (now () -. t1)
@@ -833,6 +839,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
                   (Started
                      {
                        pkg = p.pkg;
+                       phase = "install";
                        stage = group.stage;
                        total_stages = n_stages;
                      });

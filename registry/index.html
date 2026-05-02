@@ -287,11 +287,27 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
   border-radius: 6px;
   overflow: hidden;
 }
-.pkg-list-header {
+/* Column track widths kept identical between header and rows so the
+   columns line up. The package column is bounded with [minmax] so it
+   doesn't run away on wide windows; surplus width goes to the distros
+   column instead, where each new distro chip can use it. */
+.pkg-list-header,
+.pkg-row {
   display: grid;
-  grid-template-columns: 110px 1fr 110px 110px 80px 70px;
+  grid-template-columns:
+    110px              /* status badge */
+    minmax(180px, 320px) /* package name+version, capped */
+    minmax(100px, 1fr)   /* per-distro chip strip — flexes */
+    100px              /* overlay tags */
+    96px               /* short layer hash */
+    70px               /* method */
+    64px;              /* duration */
   gap: 0.6rem;
-  padding: 0.35rem 0.85rem;
+  padding: 0.3rem 0.85rem;
+  align-items: center;
+}
+.pkg-list-header {
+  padding-top: 0.35rem; padding-bottom: 0.35rem;
   background: var(--bg-sunken);
   border-bottom: 1px solid var(--border);
   font-family: ui-monospace, monospace;
@@ -302,13 +318,8 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
   font-weight: 600;
 }
 .pkg-row {
-  display: grid;
-  grid-template-columns: 110px 1fr 110px 110px 80px 70px;
-  gap: 0.6rem;
-  padding: 0.3rem 0.85rem;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
-  align-items: center;
   font-family: ui-monospace, SF Mono, Monaco, monospace;
   font-size: 0.78rem;
   position: relative;
@@ -351,6 +362,38 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
 .outcome-cached { background: var(--cached); color: white; }
 .outcome-warn { background: var(--warn); color: white; }
 .outcome-fail { background: var(--fail); color: white; }
+.outcome-missing { background: var(--bg-sunken); color: var(--fg-faint); border: 1px dashed var(--border); }
+
+/* Per-distro mini chips: one per probed os_key, colored by that
+   distro's outcome for this package. Missing data shows as a dim
+   dashed dot so the user can spot "every distro succeeded except
+   this one" at a glance. */
+.distro-chips {
+  display: flex; flex-wrap: wrap; gap: 0.2rem;
+}
+.distro-chip {
+  display: inline-block;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  font-family: ui-monospace, monospace;
+  border: 1px solid transparent;
+}
+.distro-chip:hover { border-color: rgba(255, 255, 255, 0.5); }
+.distro-chip.outcome-missing {
+  font-weight: 400;
+  cursor: default;
+}
+.distro-chip.outcome-missing:hover { border-color: transparent; }
+.distro-chip.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .pkg-name { font-weight: 600; }
 .pkg-version { color: var(--fg-dim); }
 .pkg-meta { color: var(--fg-dim); font-size: 0.72rem; text-align: right; }
@@ -541,16 +584,40 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
 .pkg-detail .dim { color: var(--fg-dim); }
 
 .empty { text-align: center; color: var(--fg-dim); padding: 2.5rem; }
+.loading { max-width: 480px; margin: 4rem auto; }
+.loading-bar {
+  width: 100%; height: 6px; border-radius: 3px;
+  background: var(--bg-sunken); overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+.loading-bar-fill {
+  height: 100%; width: 0%; background: var(--accent);
+  transition: width 0.15s ease-out;
+}
+.loading-status { font-size: 0.85rem; color: var(--fg); margin-bottom: 0.4rem; }
+.loading-detail {
+  font-size: 0.7rem; color: var(--fg-dim); font-family: ui-monospace, monospace;
+  display: grid; grid-template-columns: auto 1fr auto;
+  gap: 0.2rem 0.6rem; max-width: 100%;
+  text-align: left; margin: 0 auto; padding: 0 1rem;
+}
+.loading-detail .row { display: contents; }
+.loading-detail .row .status-ok { color: var(--ok); }
+.loading-detail .row .status-fail { color: var(--fail); }
+.loading-detail .row .status-pending { color: var(--fg-dim); }
 .spinner { display: inline-block; width: 1rem; height: 1rem; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 0.5rem; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 760px) {
   .filters { grid-template-columns: 1fr; }
   .pkg-list-header, .pkg-row {
-    grid-template-columns: 90px 1fr 80px 70px;
+    /* On narrow screens drop the per-row layer/method/duration trio
+       and the overlay column — they'd squeeze the package name to
+       almost nothing. Status / package / distros stay visible. */
+    grid-template-columns: 90px 1fr minmax(80px, 1fr);
   }
-  .pkg-list-header .col-method, .pkg-list-header .col-overlay,
-  .pkg-row > :nth-child(3), .pkg-row > :nth-child(5) { display: none; }
+  .pkg-list-header > :nth-child(n + 4),
+  .pkg-row > :nth-child(n + 4) { display: none; }
 }
 </style>
 </head>
@@ -562,7 +629,17 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
   <select class="os-select" id="os-select" title="Select OS"></select>
 </header>
 <main>
-  <div id="content"><div class="empty"><span class="spinner"></span>Loading manifests…</div></div>
+  <div id="content">
+    <div class="empty loading">
+      <div class="loading-bar">
+        <div class="loading-bar-fill" id="loading-fill"></div>
+      </div>
+      <div class="loading-status" id="loading-status">
+        <span class="spinner"></span>Loading manifests…
+      </div>
+      <div class="loading-detail" id="loading-detail"></div>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -667,6 +744,57 @@ function handlesOf(r) {
     set.add(c.overlay ? c.overlay.handle : "(none)");
   }
   return [...set].sort();
+}
+
+// "alpine~3.23~x86_64" → "alpine 3.23". Used for the small distro
+// chips in the row strip so the chip is short but unambiguous.
+function shortDistro(osKey) {
+  const p = parseOsKey(osKey);
+  return p.short || p.name;
+}
+
+// Cross-distro outcome for a given (pkg.name, pkg.version). Returns
+// [{ os_key, outcome, layer_hash }, ...] over every loaded manifest
+// — including a sentinel { outcome: "missing" } for distros where
+// the package has no entry, so the strip lines up across rows. *)
+function distroStripFor(pkg) {
+  const out = [];
+  for (const k of PROBE_OS_KEYS) {
+    const m = state.manifests.get(k);
+    if (!m) continue;
+    const hit = m.results.find(
+      r => r.pkg.name === pkg.name && r.pkg.version === pkg.version);
+    if (hit) {
+      out.push({ os_key: k, outcome: hit.headline_outcome,
+                 layer_hash: hit.layer_hash });
+    } else {
+      out.push({ os_key: k, outcome: "missing", layer_hash: null });
+    }
+  }
+  return out;
+}
+
+function renderDistroChips(pkg) {
+  const cells = distroStripFor(pkg);
+  if (cells.length === 0) return "";
+  return `<span class="distro-chips">${cells.map(c => {
+    const grp = c.outcome === "missing" ? "missing" : (OUTCOME_GROUPS[c.outcome] || "ok");
+    const label = shortDistro(c.os_key);
+    const isActive = c.os_key === state.active;
+    const cls = "distro-chip outcome-" + grp + (isActive ? " active" : "");
+    const tip = c.outcome === "missing"
+      ? `${c.os_key}: not built (click disabled)`
+      : `${c.os_key}: ${c.outcome.replace(/_/g, " ")} — click to drill in`;
+    // Carry the os_key + layer_hash on the chip so the click handler
+    // can switch [state.active] and expand the same package's row in
+    // the target distro's manifest. Missing chips have no layer_hash
+    // and stay non-interactive.
+    const hashAttr = c.layer_hash
+      ? ` data-hash="${escapeHtml(c.layer_hash)}"` : "";
+    const oskAttr = c.outcome === "missing"
+      ? "" : ` data-os-key="${escapeHtml(c.os_key)}"`;
+    return `<span class="${cls}"${oskAttr}${hashAttr} title="${escapeHtml(tip)}">${escapeHtml(label)}</span>`;
+  }).join("")}</span>`;
 }
 
 // "alpine~3.23~x86_64" -> { name, version, arch, short, full }
@@ -1119,6 +1247,7 @@ function renderPackages(m, osKey) {
   const headerRow = `<div class="pkg-list-header">
     <span>status</span>
     <span>package</span>
+    <span>distros</span>
     <span class="col-overlay">overlay</span>
     <span style="text-align:right">layer</span>
     <span class="col-method" style="text-align:right">method</span>
@@ -1145,10 +1274,11 @@ function renderPackages(m, osKey) {
     const rowHtml = `<div class="pkg-row${expanded}${upstream}" data-hash="${escapeHtml(r.layer_hash)}">
       <span class="outcome-badge outcome-${grp}">${r.headline_outcome.replace(/_/g, " ")}</span>
       <span><span class="pkg-name">${escapeHtml(r.pkg.name)}</span> <span class="pkg-version">${escapeHtml(r.pkg.version)}</span></span>
+      ${renderDistroChips(r.pkg)}
       ${chips}
-      <span class="pkg-meta">${escapeHtml(r.layer_hash.slice(0,12))}</span>
-      <span class="pkg-meta">${escapeHtml(r.method)}</span>
-      <span class="pkg-meta">${r.duration_s != null ? fmtDuration(r.duration_s) : "—"}</span>
+      <span class="pkg-meta" style="text-align:right">${escapeHtml(r.layer_hash.slice(0,12))}</span>
+      <span class="pkg-meta" style="text-align:right">${escapeHtml(r.method)}</span>
+      <span class="pkg-meta" style="text-align:right">${r.duration_s != null ? fmtDuration(r.duration_s) : "—"}</span>
     </div>`;
     return rowHtml + (state.expanded === r.layer_hash ? renderDetail(r, osKey) : "");
   }).join("")}</div>`;
@@ -1241,6 +1371,26 @@ function render() {
     row.onclick = (e) => {
       // Clicks on links inside an expanded panel must not collapse the row.
       if (e.target.closest("a[data-jump]")) return;
+      // Clicking a distro chip jumps to that distro's view of the same
+      // package. The active os_key changes, the OS dropdown updates,
+      // and the row stays expanded so the user can read the failure
+      // detail without an extra click. Missing chips (no data) are
+      // skipped because they have no layer_hash to expand.
+      const chip = e.target.closest(".distro-chip[data-os-key]");
+      if (chip) {
+        e.stopPropagation();
+        const targetOs = chip.dataset.osKey;
+        const targetHash = chip.dataset.hash;
+        if (!targetOs || !targetHash) return;
+        if (!state.manifests.has(targetOs)) return;
+        state.active = targetOs;
+        expand(targetHash);
+        writeHash(targetOs, targetHash);
+        render();
+        const t = document.querySelector(`.pkg-row[data-hash="${targetHash}"]`);
+        if (t) t.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
       const hash = row.dataset.hash;
       if (state.expanded === hash) {
         state.expanded = null;
@@ -1308,12 +1458,43 @@ function applyHash() {
 }
 
 (async function init() {
-  // Fetch manifest + audit slice for every probed os_key in parallel. Audit
-  // is best-effort: a registry that ships only manifest.json still works,
+  // Fetch manifest + audit slice for every probed os_key in parallel,
+  // updating a per-distro loading bar as each completes. Audit is
+  // best-effort: a registry that ships only manifest.json still works,
   // it just loses the per-event drill-down in the detail panel.
+  const fill = document.getElementById("loading-fill");
+  const statusEl = document.getElementById("loading-status");
+  const detailEl = document.getElementById("loading-detail");
+  // Pre-populate the detail rows so the user sees the full set of
+  // probes immediately, then watches each one tick from "pending" to
+  // "ok" / "fail" / "missing" as it lands.
+  detailEl.innerHTML = PROBE_OS_KEYS
+    .map(k => `<div class="row" data-osk="${escapeHtml(k)}">
+        <span class="status-pending">·</span>
+        <span>${escapeHtml(k)}</span>
+        <span class="status-pending">pending</span>
+      </div>`)
+    .join("");
+  let done = 0;
+  const total = PROBE_OS_KEYS.length;
+  const tick = (k, label, cls) => {
+    done++;
+    fill.style.width = `${Math.round((done / total) * 100)}%`;
+    statusEl.textContent = `Loaded ${done}/${total} manifests…`;
+    const row = detailEl.querySelector(`[data-osk="${CSS.escape(k)}"]`);
+    if (row) {
+      const [icon, _name, status] = row.children;
+      icon.textContent = cls === "fail" ? "✗" : "✓";
+      icon.className = cls === "fail" ? "status-fail" : "status-ok";
+      status.textContent = label;
+      status.className = cls === "fail" ? "status-fail" : "status-ok";
+    }
+  };
   const results = await Promise.all(
     PROBE_OS_KEYS.map(async k => {
       const [m, a] = await Promise.all([fetchManifest(k), fetchAudit(k)]);
+      if (m) tick(k, `${m.n_packages} entries`, "ok");
+      else tick(k, "missing", "fail");
       return [k, m, a];
     }));
   for (const [k, m, a] of results) {

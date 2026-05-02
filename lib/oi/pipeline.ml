@@ -175,8 +175,8 @@ let fmt_mb n =
     Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
   else Fmt.str "%LdB" n
 
-let fetch_remote_layers ?on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
-    build_plan =
+let fetch_remote_layers ?on_phase ?on_progress ?jobs ~remote ~d10 ~packages_dirs
+    ~ctx ~pkgs build_plan =
   match remote with
   | None -> build_plan
   | Some r ->
@@ -211,22 +211,34 @@ let fetch_remote_layers ?on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
              in-flight fibers. We're under [Eio.Fiber.List.iter] which
              on the default [Eio_posix] backend uses fibers (cooperative,
              no preemption between yield points), so a plain ref is
-             safe — no mutex needed. *)
+             safe — no mutex needed.
+
+             Routing: per-tick byte updates go to [on_progress] (a
+             high-frequency in-place sink), while one-shot milestone
+             messages — start of phase, final summary — go to [on_phase]
+             (typically a [Say.step] line). When [on_progress] isn't
+             supplied, byte updates fall through to [on_phase] so
+             callers like [oi run]'s spinner still see live activity. *)
           let done_count = ref 0 in
           let bytes_total = ref 0L in
           let last_emit = ref 0.0 in
           let throttle_s = 0.05 in
-          let emit () =
-            match on_phase with
-            | None -> ()
-            | Some f ->
-                let now = Unix.gettimeofday () in
-                if now -. !last_emit >= throttle_s then begin
-                  last_emit := now;
-                  f
-                    (Fmt.str "Fetching layers from registry (%d/%d, %s)"
-                       !done_count n_total (fmt_mb !bytes_total))
-                end
+          (* Byte updates prefer [on_progress] (in-place sink). Fall back
+             to [on_phase] so callers that only supplied a milestone sink
+             — typically [oi run]'s spinner — still see live activity. *)
+          let progress_sink =
+            match (on_progress, on_phase) with
+            | Some f, _ | None, Some f -> f
+            | None, None -> fun _ -> ()
+          in
+          let emit_progress () =
+            let now = Unix.gettimeofday () in
+            if now -. !last_emit >= throttle_s then begin
+              last_emit := now;
+              progress_sink
+                (Fmt.str "Fetching layers from registry (%d/%d, %s)" !done_count
+                   n_total (fmt_mb !bytes_total))
+            end
           in
           (* Per-fiber received counter so we don't double-count when
              retries / chunked downloads call [on_progress] cumulatively
@@ -235,7 +247,7 @@ let fetch_remote_layers ?on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
             let prev = !hash_ref in
             hash_ref := received;
             bytes_total := Int64.add !bytes_total (Int64.sub received prev);
-            emit ()
+            emit_progress ()
           in
           Eio.Fiber.List.iter
             ~max_fibers:(fetch_parallelism ?jobs ())
@@ -252,17 +264,23 @@ let fetch_remote_layers ?on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
                   ()
               then begin
                 incr done_count;
-                emit ();
+                emit_progress ();
                 Logs.info (fun m -> m "Fetched %s from registry" hash)
               end)
             available;
-          (* Final line — guaranteed past the throttle window. *)
+          (* Wipe the in-place progress line (if any) and emit the final
+             summary as a milestone — [on_phase] is a "fresh line" sink,
+             so the summary lands on its own row rather than overwriting
+             the last progress update. *)
+          (match on_progress with
+          | Some _ -> Say.progress_clear ()
+          | None -> ());
           (match on_phase with
-          | None -> ()
           | Some f ->
               f
                 (Fmt.str "Fetched %d/%d layers from registry (%s)" !done_count
-                   n_total (fmt_mb !bytes_total)));
+                   n_total (fmt_mb !bytes_total))
+          | None -> ());
           Plan.build ctx ~d10 ~packages_dirs pkgs
         end
       end
@@ -272,7 +290,8 @@ let fetch_remote_layers ?on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx ~pkgs
 let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
     ?remote ?jobs ?toolchain ?(constraints = OpamPackage.Name.Map.empty)
-    ?project_root ?local_packages_dir ?on_phase ?preflight_done names =
+    ?project_root ?local_packages_dir ?on_phase ?on_progress ?preflight_done
+    names =
   let _ = preflight_done in
   let on_phase =
     match on_phase with
@@ -389,8 +408,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         | None -> build_plan
         | Some _ ->
             on_phase "Checking registry for prebuilt layers";
-            fetch_remote_layers ~on_phase ?jobs ~remote ~d10 ~packages_dirs ~ctx
-              ~pkgs build_plan
+            fetch_remote_layers ~on_phase ?on_progress ?jobs ~remote ~d10
+              ~packages_dirs ~ctx ~pkgs build_plan
       in
       let hashes = Plan.layer_hashes build_plan in
       (* Every layer in the plan must be cached (Binary method) to skip

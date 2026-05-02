@@ -392,10 +392,12 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
   else begin
     let layer_hashes =
       let on_phase msg = Oi.Say.step "%s" msg in
+      let on_progress = Oi.Say.progress in
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~extra_repos:all_extras ~pins:url_project.pins ~refresh
         ~constraints:extra_constraints ?remote ?jobs ?toolchain
-        ?local_packages_dir:url_project.packages_dir ~on_phase names
+        ?local_packages_dir:url_project.packages_dir ~on_phase ~on_progress
+        names
     in
     match
       find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes

@@ -23,6 +23,25 @@ val field : string -> ('a, Format.formatter, unit, unit) format4 -> 'a
 (** [field "deps" "%s" v] prints ["  deps:    v"] with the label dim and a fixed
     alignment column for the value. *)
 
+val field_list : ?sep:string -> string -> string list -> unit
+(** [field_list ?sep "deps" items] prints a field whose value is a list of
+    items, joined with [sep] (default [", "]) and word-wrapped to the terminal
+    width. Continuation lines are indented to line up with the value column.
+    No-op when [items = []]. *)
+
+val progress : string -> unit
+(** [progress msg] writes [msg] in dim style on the current line, replacing
+    whatever was there (via [\r\033[K]) without emitting a newline. Used for
+    in-place high-frequency status updates (e.g. "Fetching layers (12/47,
+    34MB)" during a registry pull). The next non-progress write — typically
+    a {!step} or {!progress_clear} — replaces or overwrites the line.
+    No-op on non-TTY. *)
+
+val progress_clear : unit -> unit
+(** Erase the current in-place [progress] line without emitting a newline. Use
+    before a final {!step} so the summary lands cleanly on the same row. No-op
+    on non-TTY. *)
+
 val header : ('a, Format.formatter, unit, unit) format4 -> 'a
 (** [header "%s" h] prints ["h"] in bold — used for section headers in
     multi-block reports ([oi show], [oi config]). *)
