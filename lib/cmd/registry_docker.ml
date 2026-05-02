@@ -329,8 +329,15 @@ let service_name d =
    built from source inside this container — otherwise the prior
    registry's cached binaries would short-circuit most of the work and
    the produced manifest would be all "cached" outcomes. The point of
-   this flow is to re-validate every layer end-to-end. *)
-let build_export_cmd () = "oi build --refresh --all --registry= --export /out"
+   this flow is to re-validate every layer end-to-end.
+
+   [OI_BUILD_PARALLELISM=$(nproc)] overrides the [min cpu_count 4] cap
+   that {!Oi.Execute.default_build_parallelism} applies for macOS fd-limit
+   safety. Inside a Linux container with a high [nofile] ulimit (set on
+   the service below) we want to use every core on the host. *)
+let build_export_cmd () =
+  "OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all --registry= \
+   --export /out"
 
 let docker_compose_yaml ~distros ~registry_host_path () =
   let buf = Buffer.create 1024 in
@@ -361,6 +368,16 @@ let docker_compose_yaml ~distros ~registry_host_path () =
       Printf.ksprintf out "    image: oi-registry-%s\n" name;
       Printf.ksprintf out "    command: [\"sh\", \"-c\", %s]\n"
         (Printf.sprintf "%S" cmd);
+      (* Raise the per-container fd limit so high parallelism doesn't
+         hit the kernel's default 1024 nofile cap. Each in-flight oi
+         build holds capture pipes, compiler subprocess pipes, and
+         transient fetch / patch handles — at [nproc] concurrent
+         builds on a many-core host that easily climbs into the
+         thousands. 65536 leaves plenty of headroom. *)
+      Printf.ksprintf out "    ulimits:\n";
+      Printf.ksprintf out "      nofile:\n";
+      Printf.ksprintf out "        soft: 65536\n";
+      Printf.ksprintf out "        hard: 65536\n";
       Printf.ksprintf out "    volumes:\n";
       Printf.ksprintf out "      - %s:/out\n" registry_host_path)
     distros;

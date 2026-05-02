@@ -167,9 +167,25 @@ module OS = struct
           | s -> `Other s)
       | None -> `Other "linux"
 
-  let detect_macos ~proc_mgr =
-    if has_cmd ~proc_mgr "brew" then `Homebrew
-    else if has_cmd ~proc_mgr "port" then `MacPorts
+  (* On Apple Silicon, Homebrew installs to [/opt/homebrew/bin/brew],
+     which is NOT on the default PATH — users get it on PATH by running
+     [eval "$(/opt/homebrew/bin/brew shellenv)"] in their shell init.
+     Anywhere oi is launched without that init (GUI launcher, cron, IDE
+     plugin, /usr/bin/env), [which brew] fails. Probe the canonical
+     install paths directly first, then fall back to PATH lookup. *)
+  let probe_paths ~fs paths = List.exists (exists ~fs) paths
+
+  let detect_macos ~fs ~proc_mgr =
+    let brew_paths =
+      [
+        "/opt/homebrew/bin/brew";  (* Apple Silicon default *)
+        "/usr/local/bin/brew";     (* Intel default *)
+      ]
+    in
+    let port_paths = [ "/opt/local/bin/port" ] in
+    if probe_paths ~fs brew_paths || has_cmd ~proc_mgr "brew" then `Homebrew
+    else if probe_paths ~fs port_paths || has_cmd ~proc_mgr "port" then
+      `MacPorts
     else `None
 
   let detect_version ~proc_mgr ~os_release kind =
@@ -201,7 +217,7 @@ module OS = struct
     let kind =
       match uname with
       | "linux" -> `Linux (detect_linux ~fs ~os_release)
-      | "darwin" | "osx" | "macos" -> `MacOS (detect_macos ~proc_mgr)
+      | "darwin" | "osx" | "macos" -> `MacOS (detect_macos ~fs ~proc_mgr)
       | "freebsd" -> `FreeBSD
       | "openbsd" -> `OpenBSD
       | "netbsd" -> `NetBSD

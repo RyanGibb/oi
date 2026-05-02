@@ -345,6 +345,12 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
               | Identity.Source -> Some n.pkg
               | Identity.Binary -> None)
         in
+        Log.info (fun m ->
+            m
+              "depext check: %d source pkg(s); platform os=%s os-distribution=%s \
+               os-family=%s"
+              (List.length source_pkgs) conf.os conf.os_distribution
+              conf.os_family);
         if source_pkgs <> [] then begin
           let entries = Depexts.compute ctx ~packages_dirs source_pkgs in
           let all =
@@ -352,8 +358,32 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
               (fun acc e -> OpamSysPkg.Set.union acc e.Depexts.sys_pkgs)
               OpamSysPkg.Set.empty entries
           in
+          Log.info (fun m ->
+              m "depext check: %d pkg(s) declare matching depexts, union = %d"
+                (List.length entries)
+                (OpamSysPkg.Set.cardinal all));
+          (* Defensive nudge for the case where source packages exist but
+             declare no depexts active for this platform. Common on macOS
+             when the package's opam file only declares Linux distros, or
+             when the homebrew filter clause is missing. The build may
+             still need system libraries (gmp, openssl, pkg-config, …);
+             we emit a one-liner so the user isn't blindsided by a
+             low-level [./configure] failure with no prior warning. *)
+          if OpamSysPkg.Set.is_empty all && conf.os = "macos" then
+            Fmt.epr
+              "%a no system depexts matched for %d source package(s) on \
+               macOS. If the build fails with missing headers (gmp.h, \
+               openssl/ssl.h, …), install them with %a.@."
+              Style.warn_string "note:"
+              (List.length source_pkgs)
+              Style.accent_string "brew install <pkg>";
           if not (OpamSysPkg.Set.is_empty all) then (
             let st = Depexts.status all in
+            Log.info (fun m ->
+                m "depext status: installed=%d missing=%d not_found=%d"
+                  (OpamSysPkg.Set.cardinal st.installed)
+                  (OpamSysPkg.Set.cardinal st.missing)
+                  (OpamSysPkg.Set.cardinal st.not_found));
             if not (OpamSysPkg.Set.is_empty st.missing) then begin
               Fmt.epr
                 "%a system packages are not installed. The build may fail at \
@@ -370,7 +400,14 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
                 Style.warn_string "warning:"
                 (st.not_found |> OpamSysPkg.Set.elements
                 |> List.map OpamSysPkg.to_string
-                |> String.concat ", "))
+                |> String.concat ", "));
+          (* Force the warnings out to the terminal *before* Plan.resolve
+             takes a few seconds and the Execute.run progress bar takes
+             over the cursor. Format's [@.] does flush, but we belt-and-
+             braces it here because [Ui] uses ANSI cursor moves that have
+             been observed to interleave oddly with buffered stderr in
+             some macOS terminals. *)
+          (try Stdlib.flush stderr with _ -> ())
         end;
         let exec_plan =
           Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
