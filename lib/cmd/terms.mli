@@ -54,6 +54,15 @@ val reporepo_url : unit -> string
 val default_registry : string
 (** [https://oi.ci.dev]. *)
 
-val remote_of_registry : string -> D10.Layer.remote option
-(** Convert a registry URL string to a {!D10.Layer.remote}. Empty string returns
-    [None] (registry disabled). *)
+val use_registry : Oi.Use_registry.t Cmdliner.Term.t
+(** [--use-registry] term, accepting [all], [archives], or [never]. Defaults to
+    {!Oi.Use_registry.All}. *)
+
+type remotes = {
+  layer_remote : D10.Layer.remote option;
+  source_remote : D10.Layer.remote option;
+}
+
+val remotes_of : url:string -> mode:Oi.Use_registry.t -> remotes
+(** Split [(url, mode)] into the two remotes the pipeline consumes separately.
+    Errors if [url] is empty unless [mode = Never]. *)

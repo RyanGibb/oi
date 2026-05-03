@@ -806,9 +806,9 @@ module Set_roots = struct
           pkgs
       in
       (match
-        Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle
-          ~root_packages:groups ()
-      with
+         Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle
+           ~root_packages:groups ()
+       with
       | `Bumped e ->
           Fmt.pr "Bumped %s to %s (root-packages: %d entr%s)@." e.handle
             e.version

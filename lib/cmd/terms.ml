@@ -114,6 +114,42 @@ let reporepo_path () =
 let reporepo_url () =
   getenv_or ~default:Oi.Source.Reporepo.default_url "OI_REPOREPO_URL"
 
-let remote_of_registry = function
-  | "" -> None
-  | url -> Some (`Http_remote url : D10.Layer.remote)
+let use_registry_conv =
+  let parser s =
+    match Oi.Use_registry.of_string s with
+    | Ok v -> Ok v
+    | Error msg -> Error (`Msg msg)
+  in
+  Arg.conv ~docv:"MODE" (parser, Oi.Use_registry.pp)
+
+let use_registry =
+  let doc =
+    "What to consult the remote registry for. $(b,all) (default): binary \
+     layers and source archives. $(b,archives): source archives only — every \
+     layer is built from scratch (CI registry-build mode). $(b,never): offline \
+     w.r.t. the registry; upstream source fetches still happen."
+  in
+  Arg.(
+    value
+    & opt use_registry_conv Oi.Use_registry.All
+    & info ~docv:"MODE" ~doc [ "use-registry" ])
+
+type remotes = {
+  layer_remote : D10.Layer.remote option;
+  source_remote : D10.Layer.remote option;
+}
+
+let remotes_of ~url ~(mode : Oi.Use_registry.t) =
+  match mode with
+  | Never -> { layer_remote = None; source_remote = None }
+  | All | Archives ->
+      if url = "" then
+        Oi.Error.config_error
+          "--use-registry=%s requires a non-empty --registry URL (use \
+           --use-registry=never for fully offline)"
+          (Oi.Use_registry.to_string mode);
+      let r : D10.Layer.remote = `Http_remote url in
+      {
+        layer_remote = (if mode = All then Some r else None);
+        source_remote = Some r;
+      }

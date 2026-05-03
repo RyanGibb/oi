@@ -146,6 +146,46 @@ module Reporepo = struct
   let overlay_packages_dir ~path ~handle =
     overlay_dir ~path ~handle / "packages"
 
+  let iter_opam_files ~path ?(include_handles = []) ?(skip_handles = []) f =
+    let v1 = v1_root ~path in
+    if not (Sys.file_exists v1) then ()
+    else
+      let sorted_subdirs root =
+        if not (Sys.file_exists root) then []
+        else
+          Sys.readdir root |> Array.to_list
+          |> List.filter (fun n ->
+              (not (String.starts_with ~prefix:"." n))
+              && Sys.is_directory (root / n))
+          |> List.sort String.compare
+      in
+      let handle_ok h =
+        (* [v1/reporepo/] is the meta-overlay holding handle-registration
+           entries, not an archive-bearing overlay. *)
+        h <> "reporepo"
+        && (include_handles = [] || List.mem h include_handles)
+        && not (List.mem h skip_handles)
+      in
+      let strip_pkg_prefix pkg pkg_ver_dir =
+        let prefix = pkg ^ "." in
+        if String.starts_with ~prefix pkg_ver_dir then
+          String.sub pkg_ver_dir (String.length prefix)
+            (String.length pkg_ver_dir - String.length prefix)
+        else pkg_ver_dir
+      in
+      sorted_subdirs v1 |> List.filter handle_ok
+      |> List.iter (fun handle ->
+          let pkgs_dir = overlay_packages_dir ~path ~handle in
+          sorted_subdirs pkgs_dir
+          |> List.iter (fun pkg ->
+              let pkg_dir = pkgs_dir / pkg in
+              sorted_subdirs pkg_dir
+              |> List.filter (fun pv -> Sys.file_exists (pkg_dir / pv / "opam"))
+              |> List.iter (fun pkg_ver_dir ->
+                  let opam_path = pkg_dir / pkg_ver_dir / "opam" in
+                  let version = strip_pkg_prefix pkg pkg_ver_dir in
+                  f ~handle ~pkg ~version ~opam_path)))
+
   type entry = {
     handle : string;
     version : string;
@@ -938,45 +978,20 @@ module Reporepo = struct
           "%s: %s URLs are not supported in v1 materialisation (URL: %s)" where
           name (OpamUrl.to_string u)
 
-  (* Special-case host rewrite: tangled.org's plain HTTPS clone path is
-     flaky in our hands, but the same content is mirrored on
-     git.recoil.org without the [.git] suffix. We rewrite up front so
-     both the [ls-remote] query and the URL we bake into the opam file
-     point at the more reliable host. *)
-  let rewrite_host (u : OpamUrl.t) : OpamUrl.t =
-    let prefix = "tangled.org/" in
-    if u.transport = "https" && String.starts_with ~prefix u.path then
-      let after =
-        String.sub u.path (String.length prefix)
-          (String.length u.path - String.length prefix)
-      in
-      let after =
-        if
-          String.length after >= 4
-          && String.sub after (String.length after - 4) 4 = ".git"
-        then String.sub after 0 (String.length after - 4)
-        else after
-      in
-      { u with path = "git.recoil.org/" ^ after }
-    else u
-
   (* Resolve a single URL into a content-addressed form. The caller maps
      the polymorphic-variant outcome to whatever opam-file mutation it
-     needs; the four cases are: keep as-is, replace the URL (sha or host
-     rewrite), add a checksum to a tarball that lacked one, or report
-     why we couldn't pin it. *)
-  let try_resolve_url ~fs ~sys ~where (u_in : OpamUrl.t) ~has_checksum :
+     needs; the three cases are: keep as-is, replace the URL (sha pin),
+     add a checksum to a tarball that lacked one, or report why we
+     couldn't pin it. *)
+  let try_resolve_url ~fs ~sys ~where (u : OpamUrl.t) ~has_checksum :
       [ `Keep
       | `Replace_url of OpamUrl.t
       | `Add_checksum of OpamHash.t
       | `Failed of string ] =
-    let u = rewrite_host u_in in
-    let host_changed = u.path <> u_in.path in
     match classify_url ~where u with
     | `Git ->
         begin match u.hash with
-        | Some sha when is_sha_string sha ->
-            if host_changed then `Replace_url u else `Keep
+        | Some sha when is_sha_string sha -> `Keep
         | ref_opt -> begin
             (* git(1) doesn't understand opam's [git+https://...]
                spelling — strip the [git+] backend prefix and feed it the
@@ -995,7 +1010,7 @@ module Reporepo = struct
           end
         end
     | `Tarball ->
-        if has_checksum then if host_changed then `Replace_url u else `Keep
+        if has_checksum then `Keep
         else begin
           let url_str = OpamUrl.to_string u in
           let tmp = Filename.temp_file "oi-bump-tarball-" ".bin" in
@@ -1920,4 +1935,174 @@ module Mirror = struct
                  put dst
                with _ -> ());
             !promoted)
+
+  (* -- Bulk fetch into the mirror (used by [oi build --archives-only]) --- *)
+
+  type archive = { url : OpamUrl.t; checksums : OpamHash.t list; pkg : string }
+
+  type fetch_summary = {
+    fetched : int;
+    cached : int;
+    failed : (string * string) list;
+    bytes_added : int64;
+  }
+
+  let read_opam path =
+    try Some (OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)))
+    with _ -> None
+
+  let archive_of_url ~pkg u =
+    { url = OpamFile.URL.url u; checksums = OpamFile.URL.checksum u; pkg }
+
+  (* Drop checksum-less entries: a content-addressed mirror needs a hash
+     to key on. In practice this skips git+ pins (the commit hash takes
+     the place of an integrity check), which are resolved by clone, not
+     by archive download. *)
+  let archives_of_opam ~pkg opam =
+    let main =
+      match OpamFile.OPAM.url opam with None -> [] | Some u -> [ u ]
+    in
+    let extras = List.map snd (OpamFile.OPAM.extra_sources opam) in
+    main @ extras
+    |> List.map (archive_of_url ~pkg)
+    |> List.filter (fun a -> a.checksums <> [])
+
+  let archives_of_opam_file ~path ~pkg =
+    match read_opam path with
+    | None ->
+        Log.info (fun m -> m "skipping unreadable opam file: %s" path);
+        []
+    | Some opam -> archives_of_opam ~pkg opam
+
+  let dedup_by_url archives =
+    let seen : (string, unit) Hashtbl.t = Hashtbl.create 256 in
+    List.filter
+      (fun a ->
+        let key = OpamUrl.to_string a.url in
+        if Hashtbl.mem seen key then false
+        else (
+          Hashtbl.add seen key ();
+          true))
+      archives
+
+  (* Compact progress label: hostname + final path component. The full URL
+     is too long for a single-line in-place progress sink. *)
+  let label_of_url (u : OpamUrl.t) =
+    let strip_scheme s =
+      match String.index_opt s ':' with
+      | None -> s
+      | Some i ->
+          let rest = String.sub s (i + 1) (String.length s - i - 1) in
+          let rec drop_slashes s =
+            if String.length s > 0 && s.[0] = '/' then
+              drop_slashes (String.sub s 1 (String.length s - 1))
+            else s
+          in
+          drop_slashes rest
+    in
+    let no_scheme = strip_scheme (OpamUrl.to_string u) in
+    let host, rest =
+      match String.index_opt no_scheme '/' with
+      | None -> (no_scheme, "")
+      | Some i ->
+          ( String.sub no_scheme 0 i,
+            String.sub no_scheme (i + 1) (String.length no_scheme - i - 1) )
+    in
+    let basename =
+      match String.rindex_opt rest '/' with
+      | None -> rest
+      | Some i -> String.sub rest (i + 1) (String.length rest - i - 1)
+    in
+    if basename = "" then host else host ^ "/" ^ basename
+
+  let collect_archives ~packages_dirs pkgs =
+    let opam_path_for pkg =
+      let name_s = OpamPackage.Name.to_string (OpamPackage.name pkg) in
+      let pkg_s = OpamPackage.to_string pkg in
+      List.find_opt Sys.file_exists
+        (List.map (fun d -> d / name_s / pkg_s / "opam") packages_dirs)
+    in
+    pkgs
+    |> List.concat_map (fun pkg ->
+        match opam_path_for pkg with
+        | None -> []
+        | Some path ->
+            archives_of_opam_file ~path ~pkg:(OpamPackage.to_string pkg))
+    |> dedup_by_url
+
+  let mirror_has ~mirror_dir checksums =
+    List.exists
+      (fun ck ->
+        Sys.file_exists (List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)))
+      checksums
+
+  let fetch_one ~fs ~mirror_dir ~cache_root ~cache_dir ~tmp_dir a =
+    let tmp = tmp_dir / Fmt.str "%d.%d.bin" (Unix.getpid ()) (Random.bits ()) in
+    (try Unix.unlink tmp with Unix.Unix_error _ -> ());
+    let dst_file = OpamFilename.of_string tmp in
+    let result =
+      try
+        OpamRepository.pull_file a.pkg ~cache_dir ~cache_urls:[]
+          ~silent_hits:true dst_file a.checksums [ a.url ]
+        |> OpamProcess.Job.run
+      with exn -> OpamTypes.Not_available (None, Printexc.to_string exn)
+    in
+    let outcome =
+      match result with
+      | OpamTypes.Result () | OpamTypes.Up_to_date () -> (
+          try
+            let _ = promote ~fs ~cache_root a.checksums in
+            (* Size lookup goes through the mirror because opam may have
+               served from its download-cache without writing to [tmp]. *)
+            let bytes =
+              match a.checksums with
+              | ck :: _ ->
+                  file_size
+                    (List.fold_left ( / ) mirror_dir (OpamHash.to_path ck))
+              | [] -> 0L
+            in
+            `Fetched bytes
+          with exn -> `Failed (Printexc.to_string exn))
+      | OpamTypes.Not_available (_, msg) -> `Failed msg
+    in
+    (try Sys.remove tmp with Sys_error _ -> ());
+    outcome
+
+  let fetch_archives ~fs ~cache
+      ?(on_progress = fun ~fetched:_ ~total:_ ~current:_ -> ()) archives =
+    let mirror_dir = dir ~cache in
+    let cache_root = Cache.root_s cache in
+    let cache_dir =
+      OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
+    in
+    let tmp_dir = mirror_dir / ".incoming" in
+    mkdir_p ~fs mirror_dir;
+    mkdir_p ~fs tmp_dir;
+    let total = List.length archives in
+    let fetched = ref 0 and cached = ref 0 and failed = ref [] in
+    let bytes_added = ref 0L in
+    let done_count () = !fetched + !cached + List.length !failed in
+    List.iter
+      (fun a ->
+        on_progress ~fetched:(done_count ()) ~total
+          ~current:(Some (label_of_url a.url));
+        if mirror_has ~mirror_dir a.checksums then incr cached
+        else
+          match fetch_one ~fs ~mirror_dir ~cache_root ~cache_dir ~tmp_dir a with
+          | `Fetched bytes ->
+              incr fetched;
+              bytes_added := Int64.add !bytes_added bytes
+          | `Failed msg ->
+              Log.info (fun m ->
+                  m "fetch failed: %s -> %s" (OpamUrl.to_string a.url) msg);
+              failed := (OpamUrl.to_string a.url, msg) :: !failed)
+      archives;
+    on_progress ~fetched:total ~total ~current:None;
+    (try Unix.rmdir tmp_dir with Unix.Unix_error _ -> ());
+    {
+      fetched = !fetched;
+      cached = !cached;
+      failed = List.rev !failed;
+      bytes_added = !bytes_added;
+    }
 end

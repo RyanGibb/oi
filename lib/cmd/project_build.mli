@@ -21,6 +21,7 @@ val run :
   cache:Oi.Cache.t ->
   data_dir:string ->
   registry:string ->
+  use_registry:Oi.Use_registry.t ->
   ?refresh:bool ->
   ?with_repos:string list ->
   ?with_deps:string list ->

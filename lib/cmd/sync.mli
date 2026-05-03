@@ -57,6 +57,7 @@ val do_sync :
   cache:Oi.Cache.t ->
   data_dir:string ->
   registry:string ->
+  use_registry:Oi.Use_registry.t ->
   cwd:string ->
   unit ->
   string * Oi.Toolchain.info option

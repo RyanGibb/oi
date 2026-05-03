@@ -3,8 +3,8 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let cmd =
-  let run () data_dir cache_dir refresh skip_local registry with_repos with_deps
-      jobs toolchain cmd args =
+  let run () data_dir cache_dir refresh skip_local registry use_registry
+      with_repos with_deps jobs toolchain cmd args =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
@@ -30,7 +30,7 @@ let cmd =
         let _, tc =
           Sync.do_sync ~quiet:true ~refresh ~skip_local ~with_repos ~with_deps
             ?jobs ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
-            ~data_dir ~registry ~cwd ()
+            ~data_dir ~registry ~use_registry ~cwd ()
         in
         tc
       end
@@ -95,7 +95,8 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.skip_local $ Terms.registry $ Terms.with_repos $ Terms.with_deps
-      $ Terms.jobs $ Terms.toolchain $ cmd $ args)
+      $ Terms.skip_local $ Terms.registry $ Terms.use_registry
+      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ cmd
+      $ args)
 
 (* -- config -------------------------------------------------------------- *)

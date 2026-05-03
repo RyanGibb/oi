@@ -105,25 +105,25 @@ val filter_compatible_overlays :
 (** {1 Build pipeline} *)
 
 val cache_urls :
-  cache:Cache.t -> remote:D10.Layer.remote option -> OpamUrl.t list
+  cache:Cache.t -> source_remote:D10.Layer.remote option -> OpamUrl.t list
 (** [cache_urls] for opam's [pull_tree]/[pull_file] to probe before falling back
     to upstream: always includes the local {!Source.Mirror}; with a remote
-    registry, also the registry's [sources/] subtree. *)
+    [source_remote], also the registry's [sources/] subtree. *)
 
 val fetch_remote_layers :
   ?on_phase:(string -> unit) ->
   ?on_progress:(string -> unit) ->
   ?jobs:int ->
-  remote:D10.Layer.remote option ->
+  layer_remote:D10.Layer.remote option ->
   d10:D10.Config.t ->
   packages_dirs:string list ->
   ctx:Solver.Ctx.t ->
   pkgs:OpamPackage.t list ->
   Plan.graph ->
   Plan.graph
-(** Try fetching uncached [Source] layers from [remote]. Returns a new plan
-    graph with downloaded layers promoted to [Binary]. No-op when
-    [remote = None] or every layer is already cached.
+(** Try fetching uncached [Source] layers from [layer_remote]. Returns a new
+    plan graph with downloaded layers promoted to [Binary]. No-op when
+    [layer_remote = None] or every layer is already cached.
 
     Progress reporting is split:
     - [on_phase] receives one-shot milestones (e.g. the final "Fetched N/M
@@ -147,7 +147,8 @@ val build :
   ?extra_repos:Project.extra_repo list ->
   ?pins:Project.pin list ->
   ?refresh:bool ->
-  ?remote:D10.Layer.remote ->
+  ?layer_remote:D10.Layer.remote ->
+  ?source_remote:D10.Layer.remote ->
   ?jobs:int ->
   ?toolchain:Toolchain.info ->
   ?constraints:OpamFormula.version_constraint OpamTypes.name_map ->

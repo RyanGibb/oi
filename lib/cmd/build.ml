@@ -323,14 +323,16 @@ let find_target_layer ~fs ~cache ~os_key ~pkg_name layer_hashes =
    consumer prefix. Backs [oi build PKG --test] / [oi build @h/PKG
    --test]. *)
 let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
-    ~data_dir ~registry ?(refresh = false) ?(with_repos = []) ?(with_deps = [])
-    ?jobs ?toolchain ?(dry_run = false) () =
+    ~data_dir ~registry ~use_registry ?(refresh = false) ?(with_repos = [])
+    ?(with_deps = []) ?jobs ?toolchain ?(dry_run = false) () =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let conf =
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
-  let remote = Terms.remote_of_registry registry in
+  let { Terms.layer_remote; source_remote } =
+    Terms.remotes_of ~url:registry ~mode:use_registry
+  in
   let target_display = target in
   let target, with_repos, with_deps, target_pin =
     match Target.split_handle_prefix target with
@@ -395,9 +397,9 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
       let on_progress = Oi.Say.progress in
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~extra_repos:all_extras ~pins:url_project.pins ~refresh
-        ~constraints:extra_constraints ?remote ?jobs ?toolchain
-        ?local_packages_dir:url_project.packages_dir ~on_phase ~on_progress
-        names
+        ~constraints:extra_constraints ?layer_remote ?source_remote ?jobs
+        ?toolchain ?local_packages_dir:url_project.packages_dir ~on_phase
+        ~on_progress names
     in
     match
       find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes
@@ -448,12 +450,57 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
         end
   end
 
+(* -- Mirror sync helper (shared by --archives-only and --every-version) -- *)
+
+let format_bytes n =
+  let f = Int64.to_float n in
+  if Int64.compare n 1_073_741_824L >= 0 then
+    Fmt.str "%.2fGB" (f /. 1_073_741_824.)
+  else if Int64.compare n 1_048_576L >= 0 then Fmt.str "%.1fMB" (f /. 1_048_576.)
+  else if Int64.compare n 1_024L >= 0 then Fmt.str "%.1fKB" (f /. 1_024.)
+  else Fmt.str "%LdB" n
+
+(* Fetch [archives] into the local mirror, with a single throttled
+   progress line and a one-line summary. Returns 0 if every fetch
+   succeeded (or was already cached), 1 if any failed — the
+   warn-and-continue contract documented for [oi build --archives-only]. *)
+let mirror_archives ~fs ~cache ~label archives =
+  let archives = Oi.Source.Mirror.dedup_by_url archives in
+  let total = List.length archives in
+  Oi.Say.step "Mirroring %d source archive(s) (%s)" total label;
+  let last_msg = ref "" in
+  let on_progress ~fetched ~total ~current =
+    let msg =
+      match current with
+      | None -> Fmt.str "fetched %d/%d" fetched total
+      | Some c -> Fmt.str "fetched %d/%d  %s" fetched total c
+    in
+    if msg <> !last_msg then begin
+      last_msg := msg;
+      Oi.Say.progress msg
+    end
+  in
+  let summary =
+    Oi.Source.Mirror.fetch_archives ~fs ~cache ~on_progress archives
+  in
+  Oi.Say.progress_clear ();
+  Oi.Say.step "Mirror sync complete";
+  Oi.Say.info "fetched: %d  cached: %d  failed: %d  added: %s" summary.fetched
+    summary.cached
+    (List.length summary.failed)
+    (format_bytes summary.bytes_added);
+  List.iter
+    (fun (url, msg) -> Oi.Say.warn "fetch failed %s: %s" url msg)
+    summary.failed;
+  if summary.failed = [] then 0 else 1
+
 (* -- oi build dispatcher ------------------------------------------------ *)
 
 let cmd =
   let run () data_dir cache_dir refresh skip_local dry_run all only skip
-      registry with_repos with_deps jobs toolchain_override depext_only export
-      envrc_mode deps_only targets =
+      registry use_registry with_repos with_deps jobs toolchain_override
+      depext_only export envrc_mode deps_only archives_only every_version
+      targets =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
@@ -484,6 +531,11 @@ let cmd =
     if export <> None && depext_only then
       Oi.Error.config_error
         "oi build: --export and --depext are mutually exclusive";
+    if archives_only && (export <> None || depext_only || deps_only) then
+      Oi.Error.config_error
+        "oi build --archives-only: cannot combine with --export, --depext, or \
+         --deps-only (no build runs, so there's nothing to publish, depext, or \
+         pre-install)";
     if deps_only && not project_mode then
       Oi.Error.config_error
         "oi build --deps-only: only valid in project mode (cwd has no *.opam, \
@@ -491,6 +543,33 @@ let cmd =
     let no_spec = targets = [] && (not all) && not project_mode in
     if no_spec && export <> None then needs_spec "--export";
     if no_spec && depext_only then needs_spec "--depext";
+    if no_spec && archives_only then needs_spec "--archives-only";
+    if every_version && not archives_only then
+      Oi.Error.config_error
+        "oi build --every-version: only valid with --archives-only (it skips \
+         the solver and walks every recorded reporepo opam file)";
+    if every_version then begin
+      let path = Terms.reporepo_path () in
+      Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
+        ~url:(Terms.reporepo_url ());
+      let archives =
+        let seen : (string, unit) Hashtbl.t = Hashtbl.create 4096 in
+        let acc = ref [] in
+        Oi.Source.Reporepo.iter_opam_files ~path ~include_handles:only
+          ~skip_handles:skip (fun ~handle ~pkg ~version ~opam_path ->
+            let pkg_label = Fmt.str "@%s/%s.%s" handle pkg version in
+            Oi.Source.Mirror.archives_of_opam_file ~path:opam_path
+              ~pkg:pkg_label
+            |> List.iter (fun (a : Oi.Source.Mirror.archive) ->
+                let key = OpamUrl.to_string a.url in
+                if not (Hashtbl.mem seen key) then begin
+                  Hashtbl.add seen key ();
+                  acc := a :: !acc
+                end));
+        List.rev !acc
+      in
+      exit (mirror_archives ~fs ~cache ~label:"every-version" archives)
+    end;
     if depext_only && all then begin
       let conf =
         Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
@@ -518,8 +597,9 @@ let cmd =
         else
           let action = if deps_only then `Deps_only else `Build in
           Project_build.run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
-            ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps ?jobs
-            ?toolchain:toolchain_override ~envrc_mode ~dry_run ~cwd:cwd_s ()
+            ~cache ~data_dir ~registry ~use_registry ~refresh ~with_repos
+            ~with_deps ?jobs ?toolchain:toolchain_override ~envrc_mode ~dry_run
+            ~cwd:cwd_s ()
       in
       do_export_if_set ~ok:(ec = 0) ();
       exit ec
@@ -533,7 +613,9 @@ let cmd =
     let conf =
       Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
     in
-    let remote = Terms.remote_of_registry registry in
+    let { Terms.layer_remote; source_remote } =
+      Terms.remotes_of ~url:registry ~mode:use_registry
+    in
     (* When [--all] is set, walk every overlay in the reporepo and
        derive targets from each one:
        - skip [default] (ocaml/opam-repository) — its ~10k packages
@@ -1257,6 +1339,15 @@ let cmd =
       OpamSysPkg.Set.iter (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p)) all;
       exit 0
     end;
+    if archives_only then begin
+      let archives =
+        List.concat_map
+          (fun (_, _, pkg_dirs, pkgs, _, _, _) ->
+            Oi.Source.Mirror.collect_archives ~packages_dirs:pkg_dirs pkgs)
+          solutions
+      in
+      exit (mirror_archives ~fs ~cache ~label:"solved" archives)
+    end;
     (* 2. Each solve group is its own build group (no cross-group
        merging). Dedup-by-layer-hash already happens inside the layer
        cache; merging here would only gain shared plan construction
@@ -1389,7 +1480,7 @@ let cmd =
         let n_pkgs = n_build + n_cached in
         if dry_run then begin
           let remote_has =
-            match remote with
+            match layer_remote with
             | Some r ->
                 let idx = D10.Layer.fetch_remote_index d10 ~remote:r in
                 fun h -> Hashtbl.mem idx h
@@ -1578,7 +1669,7 @@ let cmd =
           let build_outcome : [ `Ok | `Fail of string * (string * string) list ]
               =
             let build_plan =
-              Oi.Pipeline.fetch_remote_layers ?jobs ~remote ~d10
+              Oi.Pipeline.fetch_remote_layers ?jobs ~layer_remote ~d10
                 ~packages_dirs:pkg_dirs ~ctx:group_ctx ~pkgs:sorted_pkgs
                 build_plan
             in
@@ -1589,7 +1680,7 @@ let cmd =
                   ~os_key ~ocaml_version:conf.ocaml_version build_plan
               in
               exec_plan_ref := Some exec_plan;
-              let cache_urls = Oi.Pipeline.cache_urls ~cache ~remote in
+              let cache_urls = Oi.Pipeline.cache_urls ~cache ~source_remote in
               let audit_base : Oi.Audit.context =
                 {
                   (Oi.Audit.default_context ()) with
@@ -1725,6 +1816,32 @@ let cmd =
              before $(b,dune build). Use after a manifest edit."
           [ "deps-only" ])
   in
+  let archives_only =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Solve as usual but only fetch source archives into the local \
+             mirror at $(b,\\$OI_CACHE_DIR/mirror/) — no build, no prefix \
+             assembly, no install. Use to seed a server-side source mirror \
+             from any build spec ($(b,PKG), $(b,@HANDLE), $(b,@HANDLE/PKG), \
+             $(b,--all)). Mutually exclusive with $(b,--export), \
+             $(b,--depext), and $(b,--deps-only)."
+          [ "archives-only" ])
+  in
+  let every_version =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Only meaningful with $(b,--archives-only). Skip the solver and \
+             walk every $(b,(handle, pkg, version)) tuple in the reporepo, \
+             fetching every recorded archive into the mirror. Includes the \
+             $(b,default) overlay (opam-repository), so this is the \
+             complete-mirror mode for a server. $(b,--only) / $(b,--skip) \
+             still filter overlays."
+          [ "every-version" ])
+  in
   let info =
     Cmd.info "build" ~doc:"Build a project, package, overlay, or every overlay"
       ~man:
@@ -1767,14 +1884,15 @@ let cmd =
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
       $ Terms.skip_local $ dry_run $ all $ only $ skip $ Terms.registry
-      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
-      $ depext_only $ export $ Sync.envrc_mode_arg $ deps_only $ targets)
+      $ Terms.use_registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
+      $ Terms.toolchain $ depext_only $ export $ Sync.envrc_mode_arg $ deps_only
+      $ archives_only $ every_version $ targets)
 
 (* -- oi test ------------------------------------------------------------ *)
 
 let test_cmd =
-  let run () data_dir cache_dir refresh skip_local registry with_repos with_deps
-      jobs toolchain_override envrc_mode dry_run targets =
+  let run () data_dir cache_dir refresh skip_local registry use_registry
+      with_repos with_deps jobs toolchain_override envrc_mode dry_run targets =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
@@ -1799,16 +1917,16 @@ let test_cmd =
             cwd_s;
         let ec =
           Project_build.run ~action:`Test ~fs ~proc_mgr ~clock ~sys ~platform
-            ~os_key ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps
-            ?jobs ?toolchain:toolchain_override ~envrc_mode ~dry_run ~cwd:cwd_s
-            ()
+            ~os_key ~cache ~data_dir ~registry ~use_registry ~refresh
+            ~with_repos ~with_deps ?jobs ?toolchain:toolchain_override
+            ~envrc_mode ~dry_run ~cwd:cwd_s ()
         in
         exit ec
     | [ target ] ->
         let ec =
           run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
-            ~cache ~data_dir ~registry ~refresh ~with_repos ~with_deps ?jobs
-            ?toolchain:toolchain_override ~dry_run ()
+            ~cache ~data_dir ~registry ~use_registry ~refresh ~with_repos
+            ~with_deps ?jobs ?toolchain:toolchain_override ~dry_run ()
         in
         exit ec
     | _ ->
@@ -1849,5 +1967,6 @@ let test_cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.skip_local $ Terms.registry $ Terms.with_repos $ Terms.with_deps
-      $ Terms.jobs $ Terms.toolchain $ Sync.envrc_mode_arg $ dry_run $ targets)
+      $ Terms.skip_local $ Terms.registry $ Terms.use_registry
+      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
+      $ Sync.envrc_mode_arg $ dry_run $ targets)

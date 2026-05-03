@@ -1,7 +1,7 @@
 let ( / ) = Filename.concat
 
 let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
-    ?toolchain ?remote script_path cli_deps args =
+    ?toolchain ?source_remote script_path cli_deps args =
   let file_deps = Oi.Project.Script.parse_deps_from_file ~fs script_path in
   let all_deps = Oi.Project.Script.dedup (file_deps @ cli_deps) in
   if all_deps = [] then
@@ -53,7 +53,7 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
         Oi.Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
           ~ocaml_version:conf.ocaml_version plan
       in
-      let cache_urls = Oi.Pipeline.cache_urls ~cache ~remote in
+      let cache_urls = Oi.Pipeline.cache_urls ~cache ~source_remote in
       Oi.Execute.run ~cache_urls ~proc_mgr ~fs
         ~clock:(clock :> D10.Config.clk)
         ~sys ~os_key exec_plan

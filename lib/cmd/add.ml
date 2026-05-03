@@ -6,8 +6,8 @@ let constr_to_op_ver (op, ver) =
   (OpamFormula.string_of_relop op, OpamPackage.Version.to_string ver)
 
 let cmd =
-  let run () data_dir cache_dir refresh registry with_repos toolchain package
-      pkg_spec =
+  let run () data_dir cache_dir refresh registry use_registry with_repos
+      toolchain package pkg_spec =
     Harness.run @@ fun env ->
     let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
       Harness.bootstrap env cache_dir
@@ -44,7 +44,7 @@ let cmd =
     ignore
       (Sync.do_sync ~refresh ~with_repos ~with_deps:[ pkg_spec ] ?toolchain
          ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
-         ~cwd ());
+         ~use_registry ~cwd ());
     (* Phase 2: edit dune-project. Reload in case something touched it
        during the sync (shouldn't, but cheap to be defensive). *)
     let dp = Oi.Project.Dune.load ~fs ~cwd in
@@ -83,7 +83,7 @@ let cmd =
     ignore
       (Sync.do_sync ~quiet:true ~refresh:false ~with_repos ~with_deps:[]
          ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
-         ~registry ~cwd ());
+         ~registry ~use_registry ~cwd ());
     Fmt.pr "Done.@."
   in
   let pkg_spec =
@@ -130,6 +130,7 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.with_repos $ Terms.toolchain $ package $ pkg_spec)
+      $ Terms.registry $ Terms.use_registry $ Terms.with_repos $ Terms.toolchain
+      $ package $ pkg_spec)
 
 (* -- exec ---------------------------------------------------------------- *)

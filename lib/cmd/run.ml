@@ -3,7 +3,7 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let run_impl () data_dir cache_dir refresh skip_local dry_run registry
-    toolchain_override target with_deps with_repos jobs args =
+    use_registry toolchain_override target with_deps with_repos jobs args =
   Harness.run @@ fun env ->
   let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
     Harness.bootstrap env cache_dir
@@ -123,7 +123,9 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
   let conf =
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
-  let remote = Terms.remote_of_registry registry in
+  let { Terms.layer_remote; source_remote } =
+    Terms.remotes_of ~url:registry ~mode:use_registry
+  in
   (* URL-projects in [--with=…]: clone each URL into the pin cache,
        scan its *.opam files, and merge the contribution as pins +
        solver roots + overlays + extra_repos. *)
@@ -308,9 +310,10 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
     let layer_hashes =
       with_preflight_bar @@ fun ~on_phase ~preflight_done ->
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-        ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh ?remote
-        ?jobs ?toolchain ~constraints:extra_constraints ?local_packages_dir
-        ~on_phase ~preflight_done names
+        ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
+        ?layer_remote ?source_remote ?jobs ?toolchain
+        ~constraints:extra_constraints ?local_packages_dir ~on_phase
+        ~preflight_done names
     in
     Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
     let prefix =
@@ -415,8 +418,8 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
         with_preflight_bar @@ fun ~on_phase ~preflight_done ->
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
-          ?remote ?jobs ?toolchain ~constraints ?local_packages_dir ~on_phase
-          ~preflight_done dep_opam_names
+          ?layer_remote ?source_remote ?jobs ?toolchain ~constraints
+          ?local_packages_dir ~on_phase ~preflight_done dep_opam_names
     in
     if dry_run && dep_opam_names = [] then
       (* No deps to solve, but still in dry-run mode — just exit *)
@@ -425,7 +428,7 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
       Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
     in
     Script_runner.run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache
-      ~data_dir ?toolchain ?remote target extra_deps args
+      ~data_dir ?toolchain ?source_remote target extra_deps args
   end
   else begin
     (* Include --with deps in every solve *)
@@ -791,8 +794,9 @@ let info_oix =
 let term ~skip_local =
   Term.(
     const run_impl $ Terms.log $ Terms.data_dir $ Terms.cache_dir
-    $ Terms.refresh $ skip_local $ dry_run $ Terms.registry $ Terms.toolchain
-    $ target $ Terms.with_deps $ Terms.with_repos $ Terms.jobs $ args)
+    $ Terms.refresh $ skip_local $ dry_run $ Terms.registry $ Terms.use_registry
+    $ Terms.toolchain $ target $ Terms.with_deps $ Terms.with_repos $ Terms.jobs
+    $ args)
 
 let cmd = Cmd.v info_run (term ~skip_local:Terms.skip_local)
 let cmd_x = Cmd.v info_oix (term ~skip_local:(Term.const true))

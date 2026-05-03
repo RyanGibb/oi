@@ -153,9 +153,9 @@ let filter_compatible_overlays ~reporepo_path ~toolchain handles =
 
 (* -- Build helpers ------------------------------------------------------- *)
 
-let cache_urls ~cache ~remote =
+let cache_urls ~cache ~source_remote =
   let local = Source.Mirror.url ~cache in
-  match remote with
+  match source_remote with
   | Some (`Http_remote r) -> [ local; Source.Mirror.remote_url ~registry:r ]
   | None | Some _ -> [ local ]
 
@@ -175,9 +175,9 @@ let fmt_mb n =
     Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
   else Fmt.str "%LdB" n
 
-let fetch_remote_layers ?on_phase ?on_progress ?jobs ~remote ~d10 ~packages_dirs
-    ~ctx ~pkgs build_plan =
-  match remote with
+let fetch_remote_layers ?on_phase ?on_progress ?jobs ~layer_remote ~d10
+    ~packages_dirs ~ctx ~pkgs build_plan =
+  match layer_remote with
   | None -> build_plan
   | Some r ->
       let source_hashes =
@@ -289,9 +289,9 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ~remote ~d10 ~packages_dirs
 
 let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
-    ?remote ?jobs ?toolchain ?(constraints = OpamPackage.Name.Map.empty)
-    ?project_root ?local_packages_dir ?on_phase ?on_progress ?preflight_done
-    names =
+    ?layer_remote ?source_remote ?jobs ?toolchain
+    ?(constraints = OpamPackage.Name.Map.empty) ?project_root
+    ?local_packages_dir ?on_phase ?on_progress ?preflight_done names =
   let _ = preflight_done in
   let on_phase =
     match on_phase with
@@ -394,7 +394,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
       let build_plan = Plan.build ctx ~d10 ~packages_dirs pkgs in
       if dry_run then begin
         let remote_has =
-          match remote with
+          match layer_remote with
           | Some r ->
               let idx = D10.Layer.fetch_remote_index d10 ~remote:r in
               fun h -> Hashtbl.mem idx h
@@ -404,11 +404,11 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         exit 0
       end;
       let build_plan =
-        match remote with
+        match layer_remote with
         | None -> build_plan
         | Some _ ->
             on_phase "Checking registry for prebuilt layers";
-            fetch_remote_layers ~on_phase ?on_progress ?jobs ~remote ~d10
+            fetch_remote_layers ~on_phase ?on_progress ?jobs ~layer_remote ~d10
               ~packages_dirs ~ctx ~pkgs build_plan
       in
       let hashes = Plan.layer_hashes build_plan in
@@ -522,7 +522,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
           Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
             ~ocaml_version:conf.ocaml_version build_plan
         in
-        let urls = cache_urls ~cache ~remote in
+        let urls = cache_urls ~cache ~source_remote in
         Execute.run ~cache_urls:urls ~proc_mgr ~fs ?jobs
           ~clock:(clock :> D10.Config.clk)
           ~sys ~os_key exec_plan;
