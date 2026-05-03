@@ -14,7 +14,7 @@
   eio
   eio_posix
   eio.unix
-  nox-xdge
+  nox-xdg
   nox-tty
   nox-tty-eio
   dockerfile-opam

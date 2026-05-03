@@ -25,6 +25,6 @@
  (depends (ocaml (>= 5.2.0)) dune-build-info (eio_main (>= 1.0)) (d10 (= :version))
   (osrel (= :version)) (opam-format (>= 2.2.0)) (opam-state (>= 2.2.0))
   (opam-client (>= 2.2.0)) (opam-repository (>= 2.2.0))
-  (opam-0install (>= 0.4)) nox-tty nox-tty-eio nox-xdge
+  (opam-0install (>= 0.4)) nox-tty nox-tty-eio nox-xdg
   cmdliner fmt logs jsont bytesrw sqlite3 parsexp sexplib0
   (dockerfile (>= 8.3.0)) (dockerfile-opam (>= 8.3.0))))
