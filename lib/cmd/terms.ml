@@ -35,7 +35,7 @@ let data_dir =
               | _ -> default_path))
     $ arg)
 
-let cache_dir = Xdge.Cmd.cache_term Workspace.app_name
+let cache_dir = Xdg_eio.Cmd.cache_term Workspace.app_name
 
 let refresh =
   Arg.(
