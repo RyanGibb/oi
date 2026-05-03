@@ -20,7 +20,7 @@ depends: [
   "opam-0install" {>= "0.4"}
   "nox-tty"
   "nox-tty-eio"
-  "nox-xdge"
+  "nox-xdg"
   "cmdliner"
   "fmt"
   "logs"
