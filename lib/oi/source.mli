@@ -248,6 +248,13 @@ module Reporepo : sig
   (** Stage and commit any uncommitted changes, [git pull --rebase] to bring in
       upstream history, then [git push] if local is ahead. *)
 
+  val commit_dirty :
+    sys:D10.Sysops.t -> path:string -> msg:string -> unit -> string list
+  (** Stage and commit any uncommitted changes in the reporepo at [path] with
+      commit message [msg]. Returns the list of files that were committed (empty
+      when the working tree is already clean, and no commit is created in that
+      case). *)
+
   val add :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     sys:D10.Sysops.t ->

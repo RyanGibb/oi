@@ -243,7 +243,7 @@ module Reporepo = struct
           (git_at_out ~sys ~path [ "rev-list"; "--count"; base ^ ".." ^ head ])
       with _ -> 0
 
-  let push ?(on_step_start = fun _ _ -> ()) ~sys ~path () =
+  let commit_dirty ~sys ~path ~msg () =
     assert_clone path;
     let porcelain = git_at_out ~sys ~path [ "status"; "--porcelain" ] in
     let dirty_paths =
@@ -252,11 +252,25 @@ module Reporepo = struct
           if String.length line < 4 then None
           else Some (String.sub line 3 (String.length line - 3)))
     in
+    if dirty_paths = [] then []
+    else begin
+      git_at ~sys ~path [ "add"; "-A" ];
+      git_at_inherit ~sys ~path [ "commit"; "-m"; msg ];
+      dirty_paths
+    end
+
+  let push ?(on_step_start = fun _ _ -> ()) ~sys ~path () =
     on_step_start 1 "commit local changes";
     let commit_step =
+      let porcelain = git_at_out ~sys ~path [ "status"; "--porcelain" ] in
+      let dirty_paths =
+        porcelain |> String.split_on_char '\n'
+        |> List.filter_map (fun line ->
+            if String.length line < 4 then None
+            else Some (String.sub line 3 (String.length line - 3)))
+      in
       if dirty_paths = [] then Step_commit { files = [] }
-      else begin
-        git_at ~sys ~path [ "add"; "-A" ];
+      else
         let summary =
           if List.length dirty_paths = 1 then List.hd dirty_paths
           else Fmt.str "%d files" (List.length dirty_paths)
@@ -269,9 +283,8 @@ module Reporepo = struct
             summary
             (String.concat "\n" (List.map (fun p -> "  " ^ p) dirty_paths))
         in
-        git_at_inherit ~sys ~path [ "commit"; "-m"; msg ];
+        let _ = commit_dirty ~sys ~path ~msg () in
         Step_commit { files = dirty_paths }
-      end
     in
     on_step_start 2 "pull --rebase from upstream";
     let head_before = git_at_out ~sys ~path [ "rev-parse"; "HEAD" ] in

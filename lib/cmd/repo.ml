@@ -48,6 +48,15 @@ let parse_depend_spec s =
       let v = String.sub s (i + 1) (String.length s - i - 1) in
       (h, Some v)
 
+let auto_commit ~sys ~reporepo ~op =
+  match
+    Oi.Source.Reporepo.commit_dirty ~sys ~path:reporepo
+      ~msg:(Fmt.str "oi repo %s" op) ()
+  with
+  | [] -> ()
+  | files ->
+      Fmt.pr "  committed %d file(s) to reporepo HEAD@." (List.length files)
+
 let parse_handle_version s =
   match String.index_opt s '=' with
   | None -> (s, None)
@@ -493,7 +502,8 @@ module Add = struct
            unavailable@."
           summary.total summary.kept summary.rewrote
           (List.length summary.unavailable)
-      end
+      end;
+      auto_commit ~sys ~reporepo ~op:(Fmt.str "add %s" handle)
     in
     let handle =
       Arg.(
@@ -621,7 +631,8 @@ module Bump = struct
         (fun (pkg, reason) ->
           Fmt.pr "    %a %s: %s@." Oi.Style.warn_string "unavailable" pkg reason)
         summary.unavailable
-    end
+    end;
+    auto_commit ~sys ~reporepo ~op:(Fmt.str "bump %s" handle)
 
   let cmd =
     let run () reporepo reporepo_url handle_opt all url ref_ toolchain
@@ -794,7 +805,7 @@ module Set_roots = struct
           (fun t -> match parse_group t with [] -> None | g -> Some g)
           pkgs
       in
-      match
+      (match
         Oi.Source.Reporepo.bump ~fs ~sys ~path:reporepo ~handle
           ~root_packages:groups ()
       with
@@ -805,7 +816,8 @@ module Set_roots = struct
             (if List.length e.root_packages = 1 then "y" else "ies")
       | `Unchanged e ->
           Fmt.pr "No change: %s.%s already has that root-packages list.@."
-            e.handle e.version
+            e.handle e.version);
+      auto_commit ~sys ~reporepo ~op:(Fmt.str "set-roots %s" handle)
     in
     let handle =
       Arg.(
@@ -875,7 +887,11 @@ module Remove = struct
       Oi.Source.Reporepo.remove ~fs ~path:reporepo ~handle ?version ();
       Fmt.pr "Removed %s%s from %s@." handle
         (match version with None -> " (all versions)" | Some v -> "." ^ v)
-        reporepo
+        reporepo;
+      auto_commit ~sys ~reporepo
+        ~op:
+          (Fmt.str "remove %s%s" handle
+             (match version with None -> "" | Some v -> "." ^ v))
     in
     let handle_spec =
       Arg.(

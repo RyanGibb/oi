@@ -466,19 +466,37 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
               m "depext check: %d pkg(s) declare matching depexts, union = %d"
                 (List.length entries)
                 (OpamSysPkg.Set.cardinal all));
-          (* Defensive nudge for the case where source packages exist but
-             declare no depexts active for this platform. Common on macOS
-             when the package's opam file only declares Linux distros, or
-             when the homebrew filter clause is missing. The build may
-             still need system libraries (gmp, openssl, pkg-config, …);
-             we emit a one-liner so the user isn't blindsided by a
-             low-level [./configure] failure with no prior warning. *)
-          if OpamSysPkg.Set.is_empty all && conf.os = "macos" then
-            Say.warn
-              "no system depexts matched for %d source package(s) on macOS. If \
-               the build fails with missing headers (gmp.h, openssl/ssl.h, …), \
-               install them with: brew install <pkg>"
-              (List.length source_pkgs);
+          (* Per-layer nudge for source packages that declare no active
+             depexts on this platform. Compute the set of pkgs WITH active
+             depexts and subtract from [source_pkgs] to find the silent
+             ones. The build may still need system libraries (gmp,
+             openssl, pkg-config, …) and we'd rather warn upfront than
+             surface a [./configure] failure mid-build. *)
+          let with_depexts =
+            List.fold_left
+              (fun acc e -> OpamPackage.Set.add e.Depexts.pkg acc)
+              OpamPackage.Set.empty entries
+          in
+          let without_depexts =
+            List.filter
+              (fun p -> not (OpamPackage.Set.mem p with_depexts))
+              source_pkgs
+          in
+          (match without_depexts with
+          | [] -> ()
+          | pkgs ->
+              let names =
+                pkgs
+                |> List.map (fun p ->
+                    OpamPackage.Name.to_string (OpamPackage.name p))
+                |> List.sort_uniq String.compare
+                |> String.concat ", "
+              in
+              Say.warn
+                "no %s depexts declared for source build(s): %s. If the build \
+                 fails with missing headers, install the relevant system \
+                 packages."
+                conf.os names);
           if not (OpamSysPkg.Set.is_empty all) then (
             let st = Depexts.status all in
             Log.info (fun m ->
