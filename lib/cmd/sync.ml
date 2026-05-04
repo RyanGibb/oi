@@ -50,12 +50,22 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
   in
   let install_named ~tool_name ~constraints =
     let name = OpamPackage.Name.of_string tool_name in
+    (* Surface the per-tool [Pipeline.build] phases (build solver
+       context, solve, plan, fetch layers) and Execute's per-package
+       progress so a long tool build doesn't look like a hang. In
+       quiet mode the phase narration drops to [Logs.info], matching
+       the rest of [install_tools]. *)
+    let on_phase msg =
+      if quiet then Logs.info (fun m -> m "%s" msg)
+      else Oi.Say.step "  [%s] %s" tool_name msg
+    in
+    let on_progress msg = if not quiet then Oi.Say.progress msg in
     try
       let hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~session ~extra_repos ~pins ?refresh ?layer_remote
           ?source_remote ?jobs ?toolchain ~constraints ~project_root:cwd
-          [ name ]
+          ~on_phase ~on_progress [ name ]
       in
       match leaf_hash_for ~fs ~cache ~os_key ~want_name:tool_name hashes with
       | None ->

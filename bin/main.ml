@@ -128,6 +128,7 @@ let () =
         Oi_cmd.Clean.cmd;
         Oi_cmd.Cache.cmd;
         Oi_cmd.Self.cmd;
+        Oi_cmd.Source.cmd;
       ]
   in
   exit (Cmd.eval group)

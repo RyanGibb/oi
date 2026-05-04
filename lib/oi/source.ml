@@ -964,16 +964,21 @@ module Reporepo = struct
          (function '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' -> true | _ -> false)
          s
 
-  (* Classify [u] for v1 materialisation — git or tarball. Anything else
-     hard-errors: the v1 invariant is that the corpus is git+tarball-only. *)
-  let classify_url ~where (u : OpamUrl.t) : [ `Git | `Tarball ] =
+  (* Classify [u] for v1 materialisation. Reporepo entries are
+     git-or-tarball only; project pin-depends additionally accept
+     [file://] paths (opam's [rsync] backend) so a bundle of locally
+     extracted sources can pin-depends-back to itself. [`Local] is
+     not produced for reporepo URLs — those still hard-error
+     downstream — but [try_resolve_url] short-circuits it as a
+     [Keep] since a local-dir pin doesn't need URL resolution. *)
+  let classify_url ~where (u : OpamUrl.t) :
+      [ `Git | `Tarball | `Local ] =
     match u.OpamUrl.backend with
     | `git -> `Git
     | `http -> `Tarball
-    | (`rsync | `darcs | `hg) as b ->
-        let name =
-          match b with `rsync -> "rsync" | `darcs -> "darcs" | `hg -> "hg"
-        in
+    | `rsync -> `Local
+    | (`darcs | `hg) as b ->
+        let name = match b with `darcs -> "darcs" | `hg -> "hg" in
         Error.config_error
           "%s: %s URLs are not supported in v1 materialisation (URL: %s)" where
           name (OpamUrl.to_string u)
@@ -989,6 +994,13 @@ module Reporepo = struct
       | `Add_checksum of OpamHash.t
       | `Failed of string ] =
     match classify_url ~where u with
+    | `Local ->
+        (* Local-directory pins (opam [rsync] backend, [file://]
+           URLs) don't need resolution — the path on disk is already
+           the source of truth. [Pin.fetch_pin] later calls
+           [OpamRepository.pull_tree] which handles the rsync-copy
+           itself. *)
+        `Keep
     | `Git ->
         begin match u.hash with
         | Some sha when is_sha_string sha -> `Keep

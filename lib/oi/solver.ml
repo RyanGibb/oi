@@ -761,7 +761,9 @@ module Cache = struct
         Hashtbl.add signature_memo packages_dir r;
         r
 
-  let key ~(conf : Ctx.conf) ~packages_dirs ~constraints ~names ?toolchain () =
+  let key ?(test = OpamPackage.Name.Set.empty)
+      ?(doc = OpamPackage.Name.Set.empty) ~(conf : Ctx.conf) ~packages_dirs
+      ~constraints ~names ?toolchain () =
     let signatures =
       List.map (fun d -> (d, signature_for_packages_dir d)) packages_dirs
     in
@@ -810,6 +812,16 @@ module Cache = struct
         List.map OpamPackage.Name.to_string names |> List.sort String.compare
       in
       List.iter (add "name") ns;
+      (* Test / doc roots that opt into [{with-test}] / [{with-doc}]
+         dep filters change the closure, so they must enter the cache
+         key. Sorted so iteration order doesn't perturb the digest. *)
+      let render_set s =
+        OpamPackage.Name.Set.elements s
+        |> List.map OpamPackage.Name.to_string
+        |> List.sort String.compare
+      in
+      List.iter (add "test") (render_set test);
+      List.iter (add "doc") (render_set doc);
       (match toolchain with
       | None -> ()
       | Some (tc : Ctx.toolchain) -> add "toolchain_hash" tc.hash);
@@ -912,6 +924,14 @@ let std_env ?(ocaml_native = true) ?opam_version (conf : Ctx.conf) v =
       Some (OpamTypes.S "")
   | "ocaml:native" -> Some (OpamTypes.B ocaml_native)
   | "ocaml:version" -> Some (OpamTypes.S conf.ocaml_version)
+  (* Legacy opam 1.2 spelling — still appears in old [available:] /
+     [depends:] filters (e.g. [hmap.0.8.1] which is [opam-version:
+     "1.2"]). opam 2 routes this through [ocaml:version], but the
+     solver sees the unrewritten field; alias it here so [available:
+     ocaml-version >= "4.02.0"] evaluates rather than being silently
+     dropped (which the solver then reports as "no known
+     implementations"). *)
+  | "ocaml-version" -> Some (OpamTypes.S conf.ocaml_version)
   | "enable-ocaml-beta-repository" -> None
   | v ->
       OpamConsole.warning "Unknown variable %S" v;
@@ -996,8 +1016,8 @@ let topo_sort ~packages_dirs ~conf pkgs =
   List.iter (fun p -> visit (OpamPackage.name p)) pkgs;
   List.rev !result
 
-let solve_dir ~env ~packages_dirs ~constraints names =
-  let dir_ctx = Dir_context.create ~env ~constraints packages_dirs in
+let solve_dir ?test ?doc ~env ~packages_dirs ~constraints names =
+  let dir_ctx = Dir_context.create ?test ?doc ~env ~constraints packages_dirs in
   match Inst.solve dir_ctx names with
   | Ok sels -> Ok (Inst.packages_of_result sels)
   | Error diag -> Error (Inst.diagnostics diag)
@@ -1036,13 +1056,15 @@ let augment_compiler_constraints ctx constraints =
                 acc)
         tc.root_names constraints
 
-let solve_with_dir_context ctx ~packages_dirs ~constraints names =
+let solve_with_dir_context ?test ?doc ctx ~packages_dirs ~constraints names =
   let constraints = augment_compiler_constraints ctx constraints in
   Log.info (fun m ->
       m "Solving for %a (toolchain-pinned compiler)"
         Fmt.(list ~sep:comma string)
         (List.map OpamPackage.Name.to_string names));
-  match solve_dir ~env:(ctx_env ctx) ~packages_dirs ~constraints names with
+  match
+    solve_dir ?test ?doc ~env:(ctx_env ctx) ~packages_dirs ~constraints names
+  with
   | Ok pkgs ->
       Log.info (fun m -> m "Solution: %d packages to build" (List.length pkgs));
       Ok (pkgs, packages_dirs)
@@ -1078,7 +1100,7 @@ let log_package_sources ~packages_dirs pkgs =
       end)
     packages_dirs
 
-let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
+let solve ?test ?doc ~fs ~cache_root ctx ~packages_dirs ~constraints names =
   let conf = Ctx.conf ctx in
   let names =
     match Ctx.toolchain ctx with
@@ -1121,7 +1143,9 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
       Log.info (fun m -> m "Selected: %s" (String.concat ", " interesting))
   in
   let run_solve () =
-    match solve_with_dir_context ctx ~packages_dirs ~constraints names with
+    match
+      solve_with_dir_context ?test ?doc ctx ~packages_dirs ~constraints names
+    with
     | Ok (pkgs, _) ->
         let pkgs = topo_sort ~packages_dirs ~conf:(Ctx.conf ctx) pkgs in
         log_package_sources ~packages_dirs pkgs;
@@ -1130,7 +1154,7 @@ let solve ~fs ~cache_root ctx ~packages_dirs ~constraints names =
     | Error _ as e -> e
   in
   match
-    Cache.key ~conf ~packages_dirs ~constraints ~names
+    Cache.key ?test ?doc ~conf ~packages_dirs ~constraints ~names
       ?toolchain:(Ctx.toolchain ctx) ()
   with
   | None -> run_solve ()

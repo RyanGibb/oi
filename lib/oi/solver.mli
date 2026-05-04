@@ -186,6 +186,8 @@ end
 
 module Cache : sig
   val key :
+    ?test:OpamPackage.Name.Set.t ->
+    ?doc:OpamPackage.Name.Set.t ->
     conf:Ctx.conf ->
     packages_dirs:string list ->
     constraints:OpamFormula.version_constraint OpamTypes.name_map ->
@@ -196,7 +198,10 @@ module Cache : sig
   (** MD5 hex digest used as the cache key, or [None] if any [packages_dir] is
       not under a git working tree (in which case the caller should skip both
       {!lookup} and {!store}). [git rev-parse HEAD] results are memoised
-      process-wide. *)
+      process-wide.
+
+      [test] / [doc] enter the digest so a [+test/+doc] solve and a base
+      solve don't collide in the cache — the closures differ. *)
 
   val lookup : cache_root:string -> key:string -> OpamPackage.t list option
 
@@ -220,6 +225,8 @@ end
 (** {1 Solving} *)
 
 val solve :
+  ?test:OpamPackage.Name.Set.t ->
+  ?doc:OpamPackage.Name.Set.t ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   cache_root:string ->
   Ctx.t ->
@@ -231,6 +238,11 @@ val solve :
     order. Successful solves are persisted to {!Cache} and re-used when an
     identical input is presented again.
 
+    [test] / [doc] enable [{with-test}] / [{with-doc}] dependency filters for
+    the named packages — typically the solve roots, so [opam install
+    --with-test foo] semantics. Empty by default. Both feed into the solve
+    cache key, so [+test/+doc] and base solves coexist without colliding.
+
     The compiler pin always comes from the toolchain set on {!Ctx.t} (consumer
     solves go through {!Pipeline.resolve_toolchain}, which returns the
     [x-oi-default-toolchain] entry when no [--toolchain] is given). Solves
@@ -238,6 +250,8 @@ val solve :
     removed when the default-toolchain wiring went in. *)
 
 val solve_dir :
+  ?test:OpamPackage.Name.Set.t ->
+  ?doc:OpamPackage.Name.Set.t ->
   env:(string -> OpamVariable.variable_contents option) ->
   packages_dirs:string list ->
   constraints:OpamFormula.version_constraint OpamTypes.name_map ->
