@@ -127,6 +127,7 @@ let () =
         Oi_cmd.Repo.cmd;
         Oi_cmd.Clean.cmd;
         Oi_cmd.Cache.cmd;
+        Oi_cmd.Self.cmd;
       ]
   in
   exit (Cmd.eval group)
