@@ -67,3 +67,10 @@ val root_packages : string
 val repos : string
 (** [x-repos: [...]] — project [*.opam] field listing extra reporepo handles
     ([@HANDLE]) or repository URLs the project depends on. *)
+
+val reporepo_hash : string
+(** [x-reporepo-hash: <sha>] — git revision of the default reporepo at the time
+    a bundle ([oi source]) was produced. Stamps the metadata snapshot the solve
+    used so a downstream [oi build] can reproduce the same opam-file resolution
+    by rolling the local reporepo back to that sha. Information-only for now;
+    consumed by [oi build] in a future revision. *)

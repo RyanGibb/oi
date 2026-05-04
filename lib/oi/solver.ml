@@ -39,21 +39,66 @@ module Dir_context = struct
     prefer_oldest : bool;
   }
 
+  (* Temporary opam-file rewrites applied just before the solver sees
+     each candidate. Every quirk is a workaround for a specific
+     upstream issue; each one carries a TODO so audits surface it
+     when the cause is gone. The on-disk opam file is untouched —
+     layer hashes and [Plan.resolve] keep seeing the canonical file.
+
+     - [graphics] (global): the legacy [graphics] package is almost
+       always listed by upstream packages as an optional plotting /
+       demo dep, but pulls in X11 + cairo on systems that don't have
+       them and breaks the solve. Strip it from every package's
+       [depends:]. TODO(remove-quirk): drop this once upstreams move
+       their graphics deps under [depopts:] (where they belong).
+     - [odoc] / [bisect_ppx]: as of 2026-05, [odoc.3.x] depends on
+       [bisect_ppx], whose latest release has no version compatible
+       with OCaml 5.4.x — the solver rejects the whole odoc subtree.
+       Strip [bisect_ppx] from odoc's [depends:]. odoc itself only
+       uses bisect_ppx for coverage during its own dev, so dropping
+       it is safe. TODO(remove-quirk): once a [bisect_ppx] release
+       supports OCaml 5.4 (or odoc relaxes the constraint), delete
+       the odoc branch. *)
+  let stripped_deps =
+    let global = [ "graphics" ] in
+    let per_pkg = function "odoc" -> [ "bisect_ppx" ] | _ -> [] in
+    fun consumer ->
+      List.map OpamPackage.Name.of_string
+        (global @ per_pkg (OpamPackage.Name.to_string consumer))
+
+  let quirk_filter_depends pkg opam =
+    let strip = stripped_deps (OpamPackage.name pkg) in
+    if strip = [] then opam
+    else
+      let drop n = List.exists (OpamPackage.Name.equal n) strip in
+      let depends = OpamFile.OPAM.depends opam in
+      let depends' =
+        OpamFormula.map
+          (fun ((n, _) as atom) ->
+            if drop n then OpamFormula.Empty else Atom atom)
+          depends
+      in
+      OpamFile.OPAM.with_depends depends' opam
+
   let load t pkg =
     let { OpamPackage.name; version = _ } = pkg in
-    match OpamPackage.Name.Map.find_opt name t.pins with
-    | Some (_, opam) -> opam
-    | None ->
-        List.find_map
-          (fun packages_dir ->
-            let opam =
-              packages_dir
-              / OpamPackage.Name.to_string name
-              / OpamPackage.to_string pkg / "opam"
-            in
-            if Sys.file_exists opam then Some opam else None)
-          t.packages_dirs
-        |> Option.get |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read
+    let raw =
+      match OpamPackage.Name.Map.find_opt name t.pins with
+      | Some (_, opam) -> opam
+      | None ->
+          List.find_map
+            (fun packages_dir ->
+              let opam =
+                packages_dir
+                / OpamPackage.Name.to_string name
+                / OpamPackage.to_string pkg / "opam"
+              in
+              if Sys.file_exists opam then Some opam else None)
+            t.packages_dirs
+          |> Option.get |> OpamFilename.raw |> OpamFile.make
+          |> OpamFile.OPAM.read
+    in
+    quirk_filter_depends pkg raw
 
   let user_restrictions t name =
     OpamPackage.Name.Map.find_opt name t.constraints
@@ -690,12 +735,16 @@ module Cache = struct
 
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
-  (* Bumped to v7: v6 keys were silently stale because the
+  (* Bumped to v8: [Dir_context.quirk_filter_depends] (the
+     [graphics] / odoc-bisect_ppx strip) changes the closure for
+     queries that previously cached a graphics-tainted solve; v7
+     keys would return stale results.
+     Bumped to v7: v6 keys were silently stale because the
      [compute_git_signature] precondition assumed [<packages_dir>/../
      .git] existed, which is false for reporepo overlays nested under
      [<repo>/v1/<handle>/packages/]. Those entries fell back to a
      path-only signature that never changed across [oi repo bump]. *)
-  let schema_version = "v7"
+  let schema_version = "v8"
   let signature_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
 
   let read_process_output cmd =
