@@ -2,12 +2,36 @@ open Cmdliner
 
 let ( / ) = Filename.concat
 
-let setup_log style_renderer level =
+let setup_log style_renderer level verbose_http =
   Fmt_tty.setup_std_outputs ?style_renderer ();
   Logs.set_level level;
-  Logs.set_reporter (Tty.Progress.logs_reporter (Logs_fmt.reporter ()))
+  Logs.set_reporter (Tty.Progress.logs_reporter (Logs_fmt.reporter ()));
+  Requests.Cmd.setup_log_sources ~verbose_http level;
+  (* Quiet the HTTP-stack sources unless the user explicitly asks for
+     protocol-level chatter. [Requests.Cmd.setup_log_sources] only sets a
+     handful of [requests.*] sources; the rest (the HTTP/2 client, the
+     connection pool handler, the TLS layer) inherit the global Info level
+     and emit per-request "ALPN / handshake / Frame reader" lines that
+     drown out our own narration. Iterate the registered sources and
+     pin every HTTP-related one to [Warning] when [--verbose-http] is
+     off; [--verbose-http] (or [OI_VERBOSE_HTTP=1]) restores the library's
+     own level mapping. *)
+  if not verbose_http then begin
+    let prefixes = [ "requests"; "h2."; "tls."; "h1." ] in
+    List.iter
+      (fun src ->
+        let name = Logs.Src.name src in
+        if List.exists (fun p -> String.starts_with ~prefix:p name) prefixes
+        then Logs.Src.set_level src (Some Logs.Warning))
+      (Logs.Src.list ())
+  end
 
-let log = Term.(const setup_log $ Fmt_cli.style_renderer () $ Logs_cli.level ())
+let verbose_http_term = Requests.Cmd.verbose_http_term Workspace.app_name
+
+let log =
+  Term.(
+    const (fun s l v -> setup_log s l v.Requests.Cmd.value)
+    $ Fmt_cli.style_renderer () $ Logs_cli.level () $ verbose_http_term)
 
 let data_dir =
   let app_upper = String.uppercase_ascii Workspace.app_name in

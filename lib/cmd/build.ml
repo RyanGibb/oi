@@ -323,8 +323,9 @@ let find_target_layer ~fs ~cache ~os_key ~pkg_name layer_hashes =
    consumer prefix. Backs [oi build PKG --test] / [oi build @h/PKG
    --test]. *)
 let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
-    ~data_dir ~registry ~use_registry ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?toolchain ?(dry_run = false) () =
+    ~data_dir ~registry ~use_registry ~session ?(refresh = false)
+    ?(with_repos = []) ?(with_deps = []) ?jobs ?toolchain ?(dry_run = false) ()
+    =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let conf =
@@ -396,7 +397,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
       let on_phase msg = Oi.Say.step "%s" msg in
       let on_progress = Oi.Say.progress in
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-        ~extra_repos:all_extras ~pins:url_project.pins ~refresh
+        ~session ~extra_repos:all_extras ~pins:url_project.pins ~refresh
         ~constraints:extra_constraints ?layer_remote ?source_remote ?jobs
         ?toolchain ?local_packages_dir:url_project.packages_dir ~on_phase
         ~on_progress names
@@ -501,9 +502,18 @@ let cmd =
       registry use_registry with_repos with_deps jobs toolchain_override
       depext_only export envrc_mode deps_only archives_only every_version
       targets =
-    Harness.run @@ fun env ->
-    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-      Harness.bootstrap env cache_dir
+    Harness.run @@ fun ~sw env ->
+    let {
+      Harness.proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform;
+      os_key;
+      cache;
+      http_session;
+    } =
+      Harness.bootstrap ~sw env cache_dir
     in
     (* Project mode: no positional, no --all, *.opam present in cwd.
        [--skip-local] forces non-project mode regardless. *)
@@ -597,9 +607,9 @@ let cmd =
         else
           let action = if deps_only then `Deps_only else `Build in
           Project_build.run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
-            ~cache ~data_dir ~registry ~use_registry ~refresh ~with_repos
-            ~with_deps ?jobs ?toolchain:toolchain_override ~envrc_mode ~dry_run
-            ~cwd:cwd_s ()
+            ~cache ~data_dir ~registry ~use_registry ~session:http_session
+            ~refresh ~with_repos ~with_deps ?jobs ?toolchain:toolchain_override
+            ~envrc_mode ~dry_run ~cwd:cwd_s ()
       in
       do_export_if_set ~ok:(ec = 0) ();
       exit ec
@@ -1482,7 +1492,10 @@ let cmd =
           let remote_has =
             match layer_remote with
             | Some r ->
-                let idx = D10.Layer.fetch_remote_index d10 ~remote:r in
+                let idx =
+                  D10.Layer.fetch_remote_index d10 ~session:http_session
+                    ~remote:r
+                in
                 fun h -> Hashtbl.mem idx h
             | None -> fun _ -> false
           in
@@ -1653,25 +1666,21 @@ let cmd =
              repeated summary lines for its dependents. *)
           let collect_failures (exec_plan : Oi.Plan.t) =
             let seen = Hashtbl.create 16 in
-            List.concat_map
-              (fun (g : Oi.Plan.group) ->
-                List.filter_map
-                  (fun (p : Oi.Plan.package_plan) ->
-                    match Hashtbl.find_opt failed_layers p.layer_hash with
-                    | Some path when path <> "" && not (Hashtbl.mem seen path)
-                      ->
-                        Hashtbl.replace seen path ();
-                        Some (p.pkg, path)
-                    | _ -> None)
-                  g.packages)
-              exec_plan.groups
+            List.filter_map
+              (fun (p : Oi.Plan.package_plan) ->
+                match Hashtbl.find_opt failed_layers p.layer_hash with
+                | Some path when path <> "" && not (Hashtbl.mem seen path) ->
+                    Hashtbl.replace seen path ();
+                    Some (p.pkg, path)
+                | _ -> None)
+              exec_plan.packages
           in
           let build_outcome : [ `Ok | `Fail of string * (string * string) list ]
               =
             let build_plan =
-              Oi.Pipeline.fetch_remote_layers ?jobs ~layer_remote ~d10
-                ~packages_dirs:pkg_dirs ~ctx:group_ctx ~pkgs:sorted_pkgs
-                build_plan
+              Oi.Pipeline.fetch_remote_layers ?jobs ~session:http_session
+                ~layer_remote ~d10 ~packages_dirs:pkg_dirs ~ctx:group_ctx
+                ~pkgs:sorted_pkgs build_plan
             in
             let exec_plan_ref = ref None in
             try
@@ -1893,9 +1902,18 @@ let cmd =
 let test_cmd =
   let run () data_dir cache_dir refresh skip_local registry use_registry
       with_repos with_deps jobs toolchain_override envrc_mode dry_run targets =
-    Harness.run @@ fun env ->
-    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-      Harness.bootstrap env cache_dir
+    Harness.run @@ fun ~sw env ->
+    let {
+      Harness.proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform;
+      os_key;
+      cache;
+      http_session;
+    } =
+      Harness.bootstrap ~sw env cache_dir
     in
     let cwd_s, _ = Workspace.resolved_cwd fs in
     let project_mode =
@@ -1917,16 +1935,17 @@ let test_cmd =
             cwd_s;
         let ec =
           Project_build.run ~action:`Test ~fs ~proc_mgr ~clock ~sys ~platform
-            ~os_key ~cache ~data_dir ~registry ~use_registry ~refresh
-            ~with_repos ~with_deps ?jobs ?toolchain:toolchain_override
-            ~envrc_mode ~dry_run ~cwd:cwd_s ()
+            ~os_key ~cache ~data_dir ~registry ~use_registry
+            ~session:http_session ~refresh ~with_repos ~with_deps ?jobs
+            ?toolchain:toolchain_override ~envrc_mode ~dry_run ~cwd:cwd_s ()
         in
         exit ec
     | [ target ] ->
         let ec =
           run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key
-            ~cache ~data_dir ~registry ~use_registry ~refresh ~with_repos
-            ~with_deps ?jobs ?toolchain:toolchain_override ~dry_run ()
+            ~cache ~data_dir ~registry ~use_registry ~session:http_session
+            ~refresh ~with_repos ~with_deps ?jobs ?toolchain:toolchain_override
+            ~dry_run ()
         in
         exit ec
     | _ ->

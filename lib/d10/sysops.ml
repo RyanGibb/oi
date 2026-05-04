@@ -273,6 +273,48 @@ module Http = struct
     with exn ->
       Log.debug (fun m -> m "http %s: %s" url (Printexc.to_string exn));
       false
+
+  (* -- Session-based pooled HTTP -------------------------------------------
+
+     [Requests.One.get]/[head] open a fresh TCP+TLS connection per call, so a
+     batch of N parallel layer fetches against [oi.ci.dev] does N TLS
+     handshakes (and N HTTP/2 setups when ALPN picks h2) — wasteful even
+     before we count the concurrency loss from not multiplexing on a single
+     h2 connection. A [Requests.t] session shares a connection pool across
+     requests and lets concurrent fibers multiplex over the same h2 stream,
+     so N parallel fetches collapse to one handshake plus N concurrent
+     STREAM frames. *)
+  type session = Requests.t
+
+  let env_of t : < clock : _ Eio.Time.clock ; net : _ Eio.Net.t ; fs : _ > =
+    object
+      method clock = t.clock
+      method net = t.net
+      method fs = t.fs
+    end
+
+  let with_session ~sw t f =
+    let session = Requests.v ~sw (env_of t) in
+    f session
+
+  let fetch_session ?on_progress session ~url ~dst =
+    try
+      let resp = Requests.get session url in
+      if not (Requests.Response.ok resp) then begin
+        Log.debug (fun m ->
+            m "http %s: status %d" url (Requests.Response.status_code resp));
+        false
+      end
+      else begin
+        let total = Requests.Response.content_length resp in
+        let body = Requests.Response.body resp in
+        Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
+            copy_with_progress ?on_progress ?total body out);
+        true
+      end
+    with exn ->
+      Log.debug (fun m -> m "http %s: %s" url (Printexc.to_string exn));
+      false
 end
 
 (* -- Git operations ------------------------------------------------------ *)

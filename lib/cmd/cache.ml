@@ -57,8 +57,8 @@ let count_files dir =
 
 let list_cmd =
   let run () cache_dir =
-    Harness.run @@ fun env ->
-    let h = Harness.bootstrap env cache_dir in
+    Harness.run @@ fun ~sw env ->
+    let h = Harness.bootstrap ~sw env cache_dir in
     with_d10 h @@ fun d10 ->
     let layers_dir = layers_root_s d10 in
     Fmt.pr "%a %s@.@." Oi.Style.header_string "Layers" d10.os_key;
@@ -215,8 +215,8 @@ let print_callers events =
 
 let show_cmd =
   let run () cache_dir package =
-    Harness.run @@ fun env ->
-    let h = Harness.bootstrap env cache_dir in
+    Harness.run @@ fun ~sw env ->
+    let h = Harness.bootstrap ~sw env cache_dir in
     with_d10 h @@ fun d10 ->
     let layers_dir = layers_root_s d10 in
     if not (Sys.file_exists layers_dir) then begin
@@ -302,8 +302,8 @@ let show_cmd =
 
 let binaries_cmd =
   let run () cache_dir =
-    Harness.run @@ fun env ->
-    let h = Harness.bootstrap env cache_dir in
+    Harness.run @@ fun ~sw env ->
+    let h = Harness.bootstrap ~sw env cache_dir in
     with_d10 h @@ fun d10 ->
     let index_path = index_path_s d10 in
     if not (Sys.file_exists index_path) then begin
@@ -348,8 +348,8 @@ let binaries_cmd =
 
 let index_cmd =
   let run () cache_dir =
-    Harness.run @@ fun env ->
-    let h = Harness.bootstrap env cache_dir in
+    Harness.run @@ fun ~sw env ->
+    let h = Harness.bootstrap ~sw env cache_dir in
     with_d10 h @@ fun d10 ->
     let layers_root = Eio.Path.native_exn d10.root / "layers" in
     let index_path = layers_root / "index.db" in
@@ -416,8 +416,8 @@ let index_cmd =
 
 let stats_cmd =
   let run () cache_dir =
-    Harness.run @@ fun env ->
-    let h = Harness.bootstrap env cache_dir in
+    Harness.run @@ fun ~sw env ->
+    let h = Harness.bootstrap ~sw env cache_dir in
     with_d10 h @@ fun d10 ->
     let index_path = index_path_s d10 in
     if not (Sys.file_exists index_path) then begin

@@ -79,9 +79,9 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
 let cmd =
   let run () cache_dir data_dir all toolchains sources binaries dune_cache repos
       opam_root pins dry_run target =
-    Harness.run @@ fun env ->
+    Harness.run @@ fun ~sw env ->
     let { Harness.fs; clock; sys; os_key; cache; _ } =
-      Harness.bootstrap env cache_dir
+      Harness.bootstrap ~sw env cache_dir
     in
     let bulk_flags =
       all || toolchains || sources || binaries || dune_cache || repos

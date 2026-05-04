@@ -8,9 +8,18 @@ let constr_to_op_ver (op, ver) =
 let cmd =
   let run () data_dir cache_dir refresh registry use_registry with_repos
       toolchain package pkg_spec =
-    Harness.run @@ fun env ->
-    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-      Harness.bootstrap env cache_dir
+    Harness.run @@ fun ~sw env ->
+    let {
+      Harness.proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform;
+      os_key;
+      cache;
+      http_session;
+    } =
+      Harness.bootstrap ~sw env cache_dir
     in
     let cwd, _ = Workspace.resolved_cwd fs in
     (* Fail fast before the sync's 10-second repo refresh. *)
@@ -44,7 +53,7 @@ let cmd =
     ignore
       (Sync.do_sync ~refresh ~with_repos ~with_deps:[ pkg_spec ] ?toolchain
          ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
-         ~use_registry ~cwd ());
+         ~use_registry ~session:http_session ~cwd ());
     (* Phase 2: edit dune-project. Reload in case something touched it
        during the sync (shouldn't, but cheap to be defensive). *)
     let dp = Oi.Project.Dune.load ~fs ~cwd in
@@ -83,7 +92,7 @@ let cmd =
     ignore
       (Sync.do_sync ~quiet:true ~refresh:false ~with_repos ~with_deps:[]
          ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
-         ~registry ~use_registry ~cwd ());
+         ~registry ~use_registry ~session:http_session ~cwd ());
     Fmt.pr "Done.@."
   in
   let pkg_spec =

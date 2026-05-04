@@ -1,16 +1,21 @@
 [@@@ai_disclosure "ai-generated"]
-[@@@ai_model "claude-opus-4-6"]
+[@@@ai_model "claude-opus-4-7"]
 [@@@ai_provider "Anthropic"]
 
-(** Stage-based parallel build executor.
+(** DAG-driven parallel build executor with per-package staging.
 
-    Executes a {!Plan.t} by processing stages sequentially. Within each stage,
-    fetch and build run in parallel via Eio fibers. Install is serialised at
-    stage boundaries. Uses {!Installer} to process [.install] files directly via
-    the opam libraries (no external [opam-installer] binary).
+    Executes a {!Plan.t} as a dependency graph: one fiber per package, each
+    awaiting promises for its in-plan deps before doing its own work. Source
+    packages build into their own staging dir (seeded with hardlinks of every
+    transitive dep layer), so [snapshot]/[diff] captures only the new files
+    without contention with sibling fibers — no shared prefix and no mutex. A
+    semaphore caps concurrent build phases (CPU-bound, fd-heavy); restores and
+    installs run unsynchronised across the DAG. The {!Installer} module
+    processes [.install] files directly via the opam libraries (no external
+    [opam-installer] binary).
 
-    Layers are captured via {!D10.Prefix.diff} and stored in the d10 cache for
-    future reuse. *)
+    Layers are captured via {!D10.Prefix.diff} against the staging baseline and
+    stored in the d10 cache for future reuse. *)
 
 type pkg_event =
   | Started of {
@@ -22,8 +27,6 @@ type pkg_event =
               binary packages get a single [Started] with phase ["restore"].
               Reporters use this to drive a phase indicator in the progress bar.
           *)
-      stage : int;
-      total_stages : int;
     }
   | Cached of { pkg : string }
   | Built of { pkg : string }
@@ -63,7 +66,7 @@ val run :
     {!Source_mirror.url}, {!Source_mirror.remote_url}) before falling back to
     the upstream URL.
 
-    [jobs] caps the number of packages built in parallel within a stage. Each
+    [jobs] caps the number of packages whose build phase runs concurrently. Each
     in-flight build spawns subprocess pipes plus a recursive tree of compiler
     processes, so raising this too high exhausts the process's [RLIMIT_NOFILE].
     Resolution order: explicit [jobs] argument wins, then [OI_BUILD_PARALLELISM]

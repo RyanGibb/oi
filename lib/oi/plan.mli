@@ -8,10 +8,12 @@
     Two-stage:
     - {!build} returns a {!graph} (the action DAG with [method_] / layer hashes
       decided per package). This is the structural plan suitable for dry-run
-      output, parallel-group inspection, and layer-cache lookups.
+      output and layer-cache lookups.
     - {!resolve} expands a {!graph} into a {!t} with all opam variables,
-      filters, and commands turned into concrete shell commands grouped by stage
-      — what {!Execute.run} consumes.
+      filters, and commands turned into concrete shell commands. Packages are
+      listed in topological order; the executor schedules them as a DAG, with
+      each package's dep promises gating its own work, so there is no notion of
+      a discrete "stage" or "group" past this point.
 
     Build directories are deterministic under the oi cache root at
     [{cache_root}/build/_build/{pkg}-{short_hash}/], with the shared prefix at
@@ -20,10 +22,10 @@
 
 (** {1 Action graph}
 
-    Captures the full dependency DAG with per-package build phases, preserving
-    the parallel structure from the solver. When [~d10] is provided to {!build},
-    packages whose layers already exist in the cache are marked as [Binary] and
-    restored directly instead of being built from source. *)
+    The full dependency DAG with per-package build phases. When [~d10] is
+    provided to {!build}, packages whose layers already exist in the cache are
+    marked as [Binary] and restored directly instead of being built from source.
+*)
 
 type node = {
   pkg : OpamPackage.t;
@@ -37,7 +39,7 @@ type node = {
 (** A single package action in the plan. *)
 
 type graph
-(** A DAG of nodes keyed by package name, preserving parallel structure. *)
+(** A DAG of nodes keyed by package name. *)
 
 val build :
   Solver.Ctx.t ->
@@ -65,15 +67,16 @@ val layer_hashes : graph -> string list
     topological order. Used for prefix assembly. *)
 
 val pp_tree : ?remote_has:(string -> bool) -> graph Fmt.t
-(** [pp_tree ?remote_has] renders the action graph as a dependency tree.
-    [Source] packages whose layer hash satisfies [remote_has] are shown as
-    "remote" (cyan) instead of "source" (blue). *)
+(** [pp_tree ?remote_has] renders the action graph as a topological dependency
+    listing — one line per package, in build order, with each package's direct
+    in-plan deps shown inline. [Source] packages whose layer hash satisfies
+    [remote_has] are shown as "remote" (cyan) instead of "source" (blue). *)
 
 (** {1 Executable plan}
 
-    Fully resolved build/install commands, grouped into parallel stages —
-    packages within a stage have no inter-dependencies and can build
-    concurrently in separate prefixes. *)
+    Fully resolved build/install commands in topological order. Each package
+    knows its direct in-plan deps via {!package_plan.dep_layers}; the executor
+    treats this as a DAG of fibers gated on per-package promises. *)
 
 type source_info = { url : string; checksums : string list }
 type patch = { file : string; filter : string option }
@@ -123,19 +126,30 @@ type package_plan = {
           none. *)
 }
 
-type group = { stage : int; packages : package_plan list }
-
 type t = {
-  groups : group list;
+  packages : package_plan list;
+      (** Every package in the plan, in topological order. The executor walks
+          this list to spawn one fiber per package; each fiber awaits its
+          [dep_layers]'s promises before starting its own work. *)
   cache_root : string;
   os_key : string;
   ocaml_version : string;
   build_prefix : string;
-      (** Prefix into which every package in this plan is built and installed.
-          Usually [{cache_root}/build/prefix] for consumer solves; set to a
-          toolchain dir when building a fixed-prefix toolchain. *)
-  total_packages : int;
+      (** Planning sentinel: the prefix path that {!Solver.Ctx.resolve} baked
+          into every package's commands and env at resolution time. The executor
+          doesn't actually install into this path — it computes a per-package
+          staging dir under [<cache_root>/build/staging/<hash>/] and
+          string-rebases [build_prefix → staging] in commands and env before
+          running the build. Hermetic per-package installs eliminate the
+          shared-prefix mutex and let restores / installs run in parallel. *)
 }
+
+val staging_dir : t -> package_plan -> string
+(** [staging_dir t p] is [<cache_root>/build/staging/<p.layer_hash>] — the
+    per-package directory the executor materialises by hardlink-copying [p]'s
+    in-plan deps and then running [p]'s build / install commands against. The
+    path is deterministic from the layer hash so concurrent fibers never
+    collide. *)
 
 val resolve :
   Solver.Ctx.t ->

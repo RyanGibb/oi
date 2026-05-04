@@ -427,4 +427,23 @@ module Mirror : sig
       on — no exception is raised. [on_progress] receives [current=Some label]
       just before each fetch and [current=None] after the last; [label] is the
       host + basename of the URL, suitable for an in-place progress line. *)
+
+  type origin =
+    | Local_mirror of string
+        (** Resolved file path on disk under a [file://] cache_url. *)
+    | Other
+        (** Either the remote registry or the upstream URL — opam's [pull_tree]
+            will resolve the actual source via [cache_urls] without our
+            involvement. Also returned when the source has no checksums (e.g.
+            [git+...] URLs, which can't live in a content-addressed mirror). *)
+
+  val classify_source :
+    cache_urls:OpamUrl.t list -> checksums:OpamHash.t list -> origin
+  (** [classify_source ~cache_urls ~checksums] probes each [file://] cache_url
+      for any of [checksums] via {!Sys.file_exists}, returning
+      [Local_mirror path] on the first hit and [Other] otherwise. Used by
+      {!Execute} to log whether a fetch hits the local mirror — HTTP cache_urls
+      are intentionally not probed (a per-package HEAD round-trip just to refine
+      the log line isn't worth it; opam's [pull_tree] handles the cache
+      hierarchy itself). *)
 end

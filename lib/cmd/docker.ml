@@ -102,9 +102,9 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
 let cmd =
   let run () data_dir cache_dir refresh test_mode all distro src_context output
       =
-    Harness.run @@ fun env ->
+    Harness.run @@ fun ~sw env ->
     let { Harness.fs; sys; platform; cache; _ } =
-      Harness.bootstrap env cache_dir
+      Harness.bootstrap ~sw env cache_dir
     in
     if test_mode && all then
       Oi.Error.config_error "oi docker: --test and --all are mutually exclusive";

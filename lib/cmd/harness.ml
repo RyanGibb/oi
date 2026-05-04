@@ -6,6 +6,7 @@ type env = {
   platform : Osrel.t;
   os_key : string;
   cache : Oi.Cache.t;
+  http_session : D10.Sysops.Http.session;
 }
 
 let pp_one_exn fmt = function
@@ -39,16 +40,19 @@ let with_error_handling f =
 (* Forced to the POSIX backend rather than [Eio_main.run] so builds under
    Linux don't pick up [eio_linux] / io_uring — we want the same syscall
    surface everywhere, and io_uring interacts poorly with some of the
-   subprocess / signal paths we rely on. *)
+   subprocess / signal paths we rely on.
+
+   The outer switch [sw] also owns the process-wide HTTP session created
+   in {!bootstrap}, so its connection pool spans the entire CLI run. *)
 let with_eio_root f =
   Eio_posix.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   Oi.Signals.install ~sw;
-  f env
+  f ~sw env
 
 let run f = with_error_handling @@ fun () -> with_eio_root f
 
-let bootstrap (env : Eio_unix.Stdenv.base) cache_dir =
+let bootstrap ~sw (env : Eio_unix.Stdenv.base) cache_dir =
   let proc_mgr = Eio.Stdenv.process_mgr env in
   let fs = Eio.Stdenv.fs env in
   let clock = Eio.Stdenv.clock env in
@@ -59,4 +63,8 @@ let bootstrap (env : Eio_unix.Stdenv.base) cache_dir =
   let platform = Osrel.detect ~proc_mgr ~fs in
   let os_key = D10.Os_key.(to_string (of_platform platform)) in
   let cache = Oi.Cache.create ~root:cache_dir fs in
-  { proc_mgr; fs; clock; sys; platform; os_key; cache }
+  (* Create the session under the outer Harness switch so its connection
+     pool lives for the whole CLI invocation — every command body that
+     fetches from a registry shares it, no per-command setup cost. *)
+  let http_session = D10.Sysops.Http.with_session ~sw sys (fun s -> s) in
+  { proc_mgr; fs; clock; sys; platform; os_key; cache; http_session }

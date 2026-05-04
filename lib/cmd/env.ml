@@ -5,9 +5,18 @@ let ( / ) = Filename.concat
 let cmd =
   let run () data_dir cache_dir refresh skip_local with_repos with_deps jobs
       toolchain =
-    Harness.run @@ fun env ->
-    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-      Harness.bootstrap env cache_dir
+    Harness.run @@ fun ~sw env ->
+    let {
+      Harness.proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform;
+      os_key;
+      cache;
+      http_session;
+    } =
+      Harness.bootstrap ~sw env cache_dir
     in
     let dune_cache_root = Oi.Cache.dune_root cache in
     (* Detect _oi/ project directory. A pre-existing _oi/prefix is
@@ -65,9 +74,10 @@ let cmd =
         in
         let layer_hashes =
           Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-            ~os_key ~refresh ~extra_repos:extras ~pins:url_project.pins ?jobs
-            ?toolchain:tc_info ~constraints:extra_constraints
-            ~project_root:cwd_s ?local_packages_dir:url_project.packages_dir
+            ~os_key ~session:http_session ~refresh ~extra_repos:extras
+            ~pins:url_project.pins ?jobs ?toolchain:tc_info
+            ~constraints:extra_constraints ~project_root:cwd_s
+            ?local_packages_dir:url_project.packages_dir
             (OpamPackage.Name.of_string "ocaml" :: extra_names)
         in
         Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes

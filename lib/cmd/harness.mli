@@ -4,9 +4,9 @@
     Idiom every command uses:
     {[
       let run () data_dir cache_dir … =
-        Harness.run @@ fun env ->
-        let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-          Harness.bootstrap env cache_dir
+        Harness.run @@ fun ~sw env ->
+        let { Harness.proc_mgr; fs; clock; sys; http_session; … } =
+          Harness.bootstrap ~sw env cache_dir
         in
         … command-specific work …
     ]} *)
@@ -19,18 +19,26 @@ type env = {
   platform : Osrel.t;
   os_key : string;
   cache : Oi.Cache.t;
+  http_session : D10.Sysops.Http.session;
+      (** Process-wide HTTP session, scoped to the {!run} switch. Every registry
+          fetch the command pipeline performs — index probe, layer pulls, source
+          archive downloads — shares this connection pool, so we do one TLS
+          handshake per host across the whole CLI invocation regardless of how
+          many solve groups or sub-commands run. *)
 }
 (** What every command body needs after Eio + cache setup. Returned by
     {!bootstrap}. *)
 
-val run : (Eio_unix.Stdenv.base -> 'a) -> 'a
+val run : (sw:Eio.Switch.t -> Eio_unix.Stdenv.base -> 'a) -> 'a
 (** [run f] sets up the Eio root, installs the SIGINT/SIGTERM handler under a
-    fresh switch, and calls [f env]. Any exception that escapes [f] is caught:
-    signal-style exits print "Interrupted." and exit 130; structured
-    {!Oi.Error.E} or [Failure] exceptions print a single coloured line and exit
-    1; everything else prints a generic error and exits 1. *)
+    fresh switch, and calls [f ~sw env]. The switch owns long-lived resources
+    like the {!env.http_session} created in {!bootstrap}. Any exception that
+    escapes [f] is caught: signal-style exits print "Interrupted." and exit 130;
+    structured {!Oi.Error.E} or [Failure] exceptions print a single coloured
+    line and exit 1; everything else prints a generic error and exits 1. *)
 
-val bootstrap : Eio_unix.Stdenv.base -> string -> env
-(** [bootstrap env cache_dir] reads the proc-mgr / fs / clock / stdio
-    capabilities off [env], creates the [Sysops], detects the platform, and
-    builds the cache rooted at [cache_dir]. *)
+val bootstrap : sw:Eio.Switch.t -> Eio_unix.Stdenv.base -> string -> env
+(** [bootstrap ~sw env cache_dir] reads the proc-mgr / fs / clock / stdio
+    capabilities off [env], creates the [Sysops], detects the platform, builds
+    the cache rooted at [cache_dir], and opens the process-wide HTTP session
+    under [sw]. *)

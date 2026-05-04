@@ -22,6 +22,7 @@ val run :
   data_dir:string ->
   registry:string ->
   use_registry:Oi.Use_registry.t ->
+  session:D10.Sysops.Http.session ->
   ?refresh:bool ->
   ?with_repos:string list ->
   ?with_deps:string list ->

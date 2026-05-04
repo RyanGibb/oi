@@ -4,9 +4,18 @@ let ( / ) = Filename.concat
 
 let run_impl () data_dir cache_dir refresh skip_local dry_run registry
     use_registry toolchain_override target with_deps with_repos jobs args =
-  Harness.run @@ fun env ->
-  let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-    Harness.bootstrap env cache_dir
+  Harness.run @@ fun ~sw env ->
+  let {
+    Harness.proc_mgr;
+    fs;
+    clock;
+    sys;
+    platform;
+    os_key;
+    cache;
+    http_session;
+  } =
+    Harness.bootstrap ~sw env cache_dir
   in
   let dune_cache_root = Oi.Cache.dune_root cache in
   let cache_root = Oi.Cache.root_s cache in
@@ -310,9 +319,9 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
     let layer_hashes =
       with_preflight_bar @@ fun ~on_phase ~preflight_done ->
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-        ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
-        ?layer_remote ?source_remote ?jobs ?toolchain
-        ~constraints:extra_constraints ?local_packages_dir ~on_phase
+        ~session:http_session ~dry_run ~extra_repos:all_extras
+        ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
+        ?toolchain ~constraints:extra_constraints ?local_packages_dir ~on_phase
         ~preflight_done names
     in
     Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
@@ -417,9 +426,10 @@ let run_impl () data_dir cache_dir refresh skip_local dry_run registry
       else
         with_preflight_bar @@ fun ~on_phase ~preflight_done ->
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-          ~os_key ~dry_run ~extra_repos:all_extras ~pins:project_pins ~refresh
-          ?layer_remote ?source_remote ?jobs ?toolchain ~constraints
-          ?local_packages_dir ~on_phase ~preflight_done dep_opam_names
+          ~os_key ~session:http_session ~dry_run ~extra_repos:all_extras
+          ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
+          ?toolchain ~constraints ?local_packages_dir ~on_phase ~preflight_done
+          dep_opam_names
     in
     if dry_run && dep_opam_names = [] then
       (* No deps to solve, but still in dry-run mode — just exit *)

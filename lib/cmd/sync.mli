@@ -58,6 +58,7 @@ val do_sync :
   data_dir:string ->
   registry:string ->
   use_registry:Oi.Use_registry.t ->
+  session:D10.Sysops.Http.session ->
   cwd:string ->
   unit ->
   string * Oi.Toolchain.info option

@@ -235,7 +235,7 @@ let base_handles_of_toolchain = function
 module Ls = struct
   let cmd =
     let run () reporepo reporepo_url no_check =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
@@ -374,7 +374,7 @@ end
 module Show = struct
   let cmd =
     let run () reporepo reporepo_url handle =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
@@ -459,7 +459,7 @@ module Add = struct
   let cmd =
     let run () reporepo reporepo_url handle url ref_ toolchain depend_specs
         force =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
@@ -637,7 +637,7 @@ module Bump = struct
   let cmd =
     let run () reporepo reporepo_url handle_opt all url ref_ toolchain
         depend_specs default =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
@@ -790,7 +790,7 @@ module Set_roots = struct
       |> List.filter (fun s -> s <> "")
     in
     let run () reporepo reporepo_url handle pkgs =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
@@ -873,7 +873,7 @@ end
 module Remove = struct
   let cmd =
     let run () reporepo reporepo_url handle_spec =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
@@ -930,7 +930,7 @@ end
 module Push = struct
   let cmd =
     let run () reporepo reporepo_url push_url =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
@@ -1130,7 +1130,7 @@ module Lint = struct
 
   let cmd =
     let run () reporepo reporepo_url =
-      Harness.run @@ fun env ->
+      Harness.run @@ fun ~sw:_ env ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =

@@ -195,26 +195,40 @@ let write_index ~dst os_key =
     Eio.Path.(os_dir / "OINDEX.txt")
     content
 
-let fetch_remote_index (c : Config.t) ~remote =
+(* Process-wide memo for [OINDEX.txt] keyed by [(os_key, remote_url)].
+   The registry index doesn't change inside one CLI invocation, so an
+   [oi build --all] run that calls {!fetch_remote_index} once per
+   solve group can return the first result for every subsequent call —
+   no second HTTP round-trip per group. The first miss populates;
+   later hits skip the [Sysops.Http.fetch_session] entirely. Bounded
+   by the (usually-1) number of distinct registry URLs an oi run
+   targets. *)
+let index_cache : (string, remote_index) Hashtbl.t = Hashtbl.create 4
+
+let fetch_remote_index (c : Config.t) ~session ~remote =
   let url =
     match remote with
     | `Http_remote base -> Fmt.str "%s/%s/OINDEX.txt" base c.os_key
   in
-  let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
-  let tmp = Eio.Path.(os_layer_dir / "OINDEX.txt.tmp") in
-  let idx = Hashtbl.create 64 in
-  if Sysops.Http.fetch c.sys ~url ~dst:tmp then begin
-    let contents = Eio.Path.load tmp in
-    let parsed = parse_index contents in
-    Hashtbl.iter (Hashtbl.replace idx) parsed;
-    try Eio.Path.unlink tmp with _ -> ()
-  end;
-  idx
+  match Hashtbl.find_opt index_cache url with
+  | Some cached -> cached
+  | None ->
+      let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
+      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
+      let tmp = Eio.Path.(os_layer_dir / "OINDEX.txt.tmp") in
+      let idx = Hashtbl.create 64 in
+      if Sysops.Http.fetch_session session ~url ~dst:tmp then begin
+        let contents = Eio.Path.load tmp in
+        let parsed = parse_index contents in
+        Hashtbl.iter (Hashtbl.replace idx) parsed;
+        try Eio.Path.unlink tmp with _ -> ()
+      end;
+      Hashtbl.replace index_cache url idx;
+      idx
 
 (* -- Remote pull --------------------------------------------------------- *)
 
-let pull_remote (c : Config.t) ~remote ~hash ?on_progress ?sha256 () =
+let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?sha256 () =
   if succeeded c ~hash then true
   else begin
     let url =
@@ -226,7 +240,9 @@ let pull_remote (c : Config.t) ~remote ~hash ?on_progress ?sha256 () =
     let layer_dir = dir c ~hash in
     let tmp_file = Eio.Path.(os_layer_dir / (hash ^ ".tar.zst.tmp")) in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
-    let ok = Sysops.Http.fetch ?on_progress c.sys ~url ~dst:tmp_file in
+    let ok =
+      Sysops.Http.fetch_session ?on_progress session ~url ~dst:tmp_file
+    in
     let cleanup_tmp () = try Eio.Path.unlink tmp_file with _ -> () in
     if ok then begin
       (* Verify sha256 if provided *)

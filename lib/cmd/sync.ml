@@ -35,8 +35,8 @@ let leaf_hash_for ~fs ~cache ~os_key ~want_name hashes =
    skipped; other tools still install. Returns the assembled path if
    at least one tool made it in, or [None] if nothing to install. *)
 let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
-    ~cache ~data_dir ~conf ~os_key ~extra_repos ~pins ?toolchain ?layer_remote
-    ?source_remote ~cwd () =
+    ~cache ~data_dir ~conf ~os_key ~session ~extra_repos ~pins ?toolchain
+    ?layer_remote ?source_remote ~cwd () =
   let say_step fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
@@ -53,8 +53,9 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
     try
       let hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-          ~os_key ~extra_repos ~pins ?refresh ?layer_remote ?source_remote ?jobs
-          ?toolchain ~constraints ~project_root:cwd [ name ]
+          ~os_key ~session ~extra_repos ~pins ?refresh ?layer_remote
+          ?source_remote ?jobs ?toolchain ~constraints ~project_root:cwd
+          [ name ]
       in
       match leaf_hash_for ~fs ~cache ~os_key ~want_name:tool_name hashes with
       | None ->
@@ -184,7 +185,7 @@ let envrc_should_write = function
 let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     ?(with_repos = []) ?(with_deps = []) ?jobs ?(toolchain : string option)
     ?(envrc_mode = `Detect) ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
-    ~data_dir ~registry ~use_registry ~cwd () =
+    ~data_dir ~registry ~use_registry ~session ~cwd () =
   let toolchain_override = toolchain in
   let say_step fmt =
     if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
@@ -283,7 +284,7 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     in
     let on_progress msg = if not quiet then Oi.Say.progress msg in
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-      ~extra_repos:all_extras
+      ~session ~extra_repos:all_extras
       ~pins:(project.pins @ url_project.pins)
       ~refresh ~constraints:extra_constraints ~project_root:cwd ?layer_remote
       ?source_remote ?jobs ?toolchain ?local_packages_dir ~on_phase ~on_progress
@@ -297,8 +298,8 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   D10.Prefix.assemble d10 ~layer_hashes ~dst:Eio.Path.(fs / prefix);
   let tools =
     install_tools ~quiet ?refresh:(Some refresh) ?jobs ~proc_mgr ~fs ~clock ~sys
-      ~cache ~data_dir ~conf ~os_key ~extra_repos:all_extras ~pins:project.pins
-      ?toolchain ?layer_remote ?source_remote ~cwd ()
+      ~cache ~data_dir ~conf ~os_key ~session ~extra_repos:all_extras
+      ~pins:project.pins ?toolchain ?layer_remote ?source_remote ~cwd ()
   in
   if envrc_should_write envrc_mode then begin
     let envrc_path = Eio.Path.(fs / cwd / ".envrc") in

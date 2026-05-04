@@ -173,7 +173,7 @@ let action_label = function
   | `Deps_only -> "Sync"
 
 let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
-    ~registry ~use_registry ?(refresh = false) ?(with_repos = [])
+    ~registry ~use_registry ~session ?(refresh = false) ?(with_repos = [])
     ?(with_deps = []) ?jobs ?toolchain ?envrc_mode ?(dry_run = false) ~cwd () =
   let label = action_label action in
   let label_lc = String.lowercase_ascii label in
@@ -202,7 +202,7 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
     let prefix, tc =
       Sync.do_sync ~quiet:false ~refresh ~with_repos ~with_deps ?jobs ?toolchain
         ?envrc_mode ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
-        ~registry ~use_registry ~cwd ()
+        ~registry ~use_registry ~session ~cwd ()
     in
     match dune_target action with
     | None -> 0

@@ -119,25 +119,35 @@ type remote = [ `Http_remote of string ]
 type index_entry = { sha256 : string; size : int64 }
 type remote_index = (string, index_entry) Hashtbl.t
 
-val fetch_remote_index : Config.t -> remote:remote -> remote_index
-(** [fetch_remote_index c ~remote] downloads [OINDEX.txt] from [remote] for the
-    current [os_key] and returns a map from layer hash to its SHA-256 checksum
-    and size. Returns an empty table on failure. *)
+val fetch_remote_index :
+  Config.t -> session:Sysops.Http.session -> remote:remote -> remote_index
+(** [fetch_remote_index c ~session ~remote] downloads [OINDEX.txt] from [remote]
+    for the current [os_key] and returns a map from layer hash to its SHA-256
+    checksum and size. Returns an empty table on failure.
+
+    The fetch goes through [session]'s connection pool so it shares connections
+    with subsequent {!pull_remote} calls in the same batch. *)
 
 val pull_remote :
   Config.t ->
+  session:Sysops.Http.session ->
   remote:remote ->
   hash:string ->
   ?on_progress:(received:int64 -> total:int64 option -> unit) ->
   ?sha256:string ->
   unit ->
   bool
-(** [pull_remote c ~remote ?sha256 ~hash] downloads layer [hash] from [remote],
-    optionally verifying the SHA-256 checksum of the downloaded archive. Returns
-    [true] if the layer is now available with [exit_status = 0]. No-op (returns
-    [true]) if the layer already exists locally.
+(** [pull_remote c ~session ~remote ?sha256 ~hash] downloads layer [hash] from
+    [remote] through [session]'s connection pool, optionally verifying the
+    SHA-256 checksum of the downloaded archive. Returns [true] if the layer is
+    now available with [exit_status = 0]. No-op (returns [true]) if the layer
+    already exists locally.
 
-    [on_progress] forwards through to {!Sysops.Http.fetch} for download
+    Concurrent fibers sharing a [session] multiplex over the same HTTP/2
+    connection (one handshake per host regardless of how many layers are
+    pulled).
+
+    [on_progress] forwards through to {!Sysops.Http.fetch_session} for download
     progress; see that function's docs. *)
 
 (** {1 Export} *)

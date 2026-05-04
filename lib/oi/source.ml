@@ -2036,6 +2036,31 @@ module Mirror = struct
         Sys.file_exists (List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)))
       checksums
 
+  type origin = Local_mirror of string | Other
+
+  (* Probe each [file://] [cache_url] for any of [checksums]. Returns
+     [Local_mirror path] on the first hit, [Other] otherwise. We
+     deliberately don't probe HTTP(S) cache URLs: opam's [pull_tree]
+     will consult them itself, and a per-package HEAD probe just to
+     refine a log line is a wasted round-trip. The [Other] case
+     therefore means "either the registry or upstream — opam will
+     decide" and the actual fetch goes through [cache_urls] as usual. *)
+  let classify_source ~cache_urls ~checksums =
+    if checksums = [] then Other
+    else
+      let probe (cu : OpamUrl.t) =
+        let s = OpamUrl.to_string cu in
+        if String.starts_with ~prefix:"file://" s then
+          let base = String.sub s 7 (String.length s - 7) in
+          List.find_map
+            (fun ck ->
+              let path = List.fold_left ( / ) base (OpamHash.to_path ck) in
+              if Sys.file_exists path then Some (Local_mirror path) else None)
+            checksums
+        else None
+      in
+      match List.find_map probe cache_urls with Some o -> o | None -> Other
+
   let fetch_one ~fs ~mirror_dir ~cache_root ~cache_dir ~tmp_dir a =
     let tmp = tmp_dir / Fmt.str "%d.%d.bin" (Unix.getpid ()) (Random.bits ()) in
     (try Unix.unlink tmp with Unix.Unix_error _ -> ());

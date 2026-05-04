@@ -114,6 +114,7 @@ val fetch_remote_layers :
   ?on_phase:(string -> unit) ->
   ?on_progress:(string -> unit) ->
   ?jobs:int ->
+  session:D10.Sysops.Http.session ->
   layer_remote:D10.Layer.remote option ->
   d10:D10.Config.t ->
   packages_dirs:string list ->
@@ -124,6 +125,11 @@ val fetch_remote_layers :
 (** Try fetching uncached [Source] layers from [layer_remote]. Returns a new
     plan graph with downloaded layers promoted to [Binary]. No-op when
     [layer_remote = None] or every layer is already cached.
+
+    [session] is the shared connection pool for the index probe and every layer
+    pull — typically created once per CLI invocation by the caller via
+    {!D10.Sysops.Http.with_session}, so an [oi build --all] over [N] solve
+    groups does one TLS handshake and one [OINDEX.txt] fetch instead of [N].
 
     Progress reporting is split:
     - [on_phase] receives one-shot milestones (e.g. the final "Fetched N/M
@@ -143,6 +149,7 @@ val build :
   data_dir:string ->
   conf:Solver.Ctx.conf ->
   os_key:string ->
+  session:D10.Sysops.Http.session ->
   ?dry_run:bool ->
   ?extra_repos:Project.extra_repo list ->
   ?pins:Project.pin list ->

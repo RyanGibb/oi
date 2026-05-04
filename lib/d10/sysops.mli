@@ -74,6 +74,30 @@ module Http : sig
       [Content-Length] header, [None] for chunked-transfer responses where the
       size isn't known up front. The final invocation always fires with the
       final byte count so a UI bar can settle at 100%. *)
+
+  (** {2 Pooled HTTP sessions}
+
+      [Requests.One] opens a fresh connection per call. A [session] keeps a
+      connection pool across requests so concurrent fibers can multiplex on a
+      single HTTP/2 connection — turning N parallel layer fetches from N
+      handshakes into one. Use {!with_session} to scope a session to a switch,
+      and {!fetch_session} to issue requests against it. *)
+
+  type session
+  (** A pooled HTTP session. Carries connection pools for HTTP and HTTPS that
+      are shared across all calls made on the same session. *)
+
+  val with_session : sw:Eio.Switch.t -> t -> (session -> 'a) -> 'a
+  (** [with_session ~sw t f] creates a session bound to [sw] and runs
+      [f session]. Connection pools live for [sw]'s lifetime. *)
+
+  val fetch_session :
+    ?on_progress:(received:int64 -> total:int64 option -> unit) ->
+    session ->
+    url:string ->
+    dst:_ Eio.Path.t ->
+    bool
+  (** Same contract as {!fetch} but reuses [session]'s connection pool. *)
 end
 
 (** {1 Low-level command execution} *)

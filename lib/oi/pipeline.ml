@@ -175,7 +175,7 @@ let fmt_mb n =
     Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
   else Fmt.str "%LdB" n
 
-let fetch_remote_layers ?on_phase ?on_progress ?jobs ~layer_remote ~d10
+let fetch_remote_layers ?on_phase ?on_progress ?jobs ~session ~layer_remote ~d10
     ~packages_dirs ~ctx ~pkgs build_plan =
   match layer_remote with
   | None -> build_plan
@@ -189,8 +189,8 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ~layer_remote ~d10
           (Plan.nodes build_plan)
       in
       if source_hashes = [] then build_plan
-      else begin
-        let index = D10.Layer.fetch_remote_index d10 ~remote:r in
+      else
+        let index = D10.Layer.fetch_remote_index d10 ~session ~remote:r in
         let available =
           List.filter (fun h -> Hashtbl.mem index h) source_hashes
         in
@@ -260,8 +260,8 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ~layer_remote ~d10
               let received_ref = ref 0L in
               let on_progress = fiber_progress received_ref in
               if
-                D10.Layer.pull_remote d10 ~remote:r ~hash ~on_progress ?sha256
-                  ()
+                D10.Layer.pull_remote d10 ~remote:r ~hash ~session ~on_progress
+                  ?sha256 ()
               then begin
                 incr done_count;
                 emit_progress ();
@@ -283,11 +283,10 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ~layer_remote ~d10
           | None -> ());
           Plan.build ctx ~d10 ~packages_dirs pkgs
         end
-      end
 
 (* -- Central build pipeline (was main.ml's solve_and_ensure_layers) ----- *)
 
-let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
+let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
     ?layer_remote ?source_remote ?jobs ?toolchain
     ?(constraints = OpamPackage.Name.Map.empty) ?project_root
@@ -396,7 +395,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         let remote_has =
           match layer_remote with
           | Some r ->
-              let idx = D10.Layer.fetch_remote_index d10 ~remote:r in
+              let idx = D10.Layer.fetch_remote_index d10 ~session ~remote:r in
               fun h -> Hashtbl.mem idx h
           | None -> fun _ -> false
         in
@@ -408,8 +407,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         | None -> build_plan
         | Some _ ->
             on_phase "Checking registry for prebuilt layers";
-            fetch_remote_layers ~on_phase ?on_progress ?jobs ~layer_remote ~d10
-              ~packages_dirs ~ctx ~pkgs build_plan
+            fetch_remote_layers ~on_phase ?on_progress ?jobs ~session
+              ~layer_remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
       in
       let hashes = Plan.layer_hashes build_plan in
       (* Every layer in the plan must be cached (Binary method) to skip

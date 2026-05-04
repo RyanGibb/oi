@@ -13,8 +13,10 @@ let human_bytes b =
 
 let cmd =
   let run () cache_dir data_dir skip_local =
-    Harness.run @@ fun env ->
-    let { Harness.fs; os_key; cache; _ } = Harness.bootstrap env cache_dir in
+    Harness.run @@ fun ~sw env ->
+    let { Harness.fs; os_key; cache; _ } =
+      Harness.bootstrap ~sw env cache_dir
+    in
     Fmt.pr "@[<v>%a@," Oi.Style.header_string "Platform";
     Fmt.pr "  os-key:     %s@," os_key;
     Fmt.pr "  ocaml:      %s (relocatable)@," Workspace.ocaml_version;

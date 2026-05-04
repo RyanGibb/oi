@@ -5,9 +5,18 @@ let ( / ) = Filename.concat
 let cmd =
   let run () data_dir cache_dir refresh skip_local registry use_registry
       with_repos with_deps jobs toolchain cmd args =
-    Harness.run @@ fun env ->
-    let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache } =
-      Harness.bootstrap env cache_dir
+    Harness.run @@ fun ~sw env ->
+    let {
+      Harness.proc_mgr;
+      fs;
+      clock;
+      sys;
+      platform;
+      os_key;
+      cache;
+      http_session;
+    } =
+      Harness.bootstrap ~sw env cache_dir
     in
     let cwd, _ = Workspace.resolved_cwd fs in
     let prefix = cwd / "_oi" / "prefix" in
@@ -30,7 +39,7 @@ let cmd =
         let _, tc =
           Sync.do_sync ~quiet:true ~refresh ~skip_local ~with_repos ~with_deps
             ?jobs ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
-            ~data_dir ~registry ~use_registry ~cwd ()
+            ~data_dir ~registry ~use_registry ~session:http_session ~cwd ()
         in
         tc
       end

@@ -609,7 +609,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
 let cmd =
   let run () data_dir cache_dir refresh skip_local registry toolchain_override
       targets with_repos with_deps tree only_depexts os_override show_all =
-    Harness.run @@ fun env ->
+    Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr = _proc_mgr;
       fs;
@@ -618,8 +618,9 @@ let cmd =
       platform;
       os_key;
       cache;
+      _;
     } =
-      Harness.bootstrap env cache_dir
+      Harness.bootstrap ~sw env cache_dir
     in
     let _ = registry in
     (* Cache-listing modes: [oi show --all] and [oi show @h] (bare
