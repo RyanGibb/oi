@@ -200,8 +200,8 @@ module Cache : sig
       {!lookup} and {!store}). [git rev-parse HEAD] results are memoised
       process-wide.
 
-      [test] / [doc] enter the digest so a [+test/+doc] solve and a base
-      solve don't collide in the cache — the closures differ. *)
+      [test] / [doc] enter the digest so a [+test/+doc] solve and a base solve
+      don't collide in the cache — the closures differ. *)
 
   val lookup : cache_root:string -> key:string -> OpamPackage.t list option
 
@@ -239,9 +239,10 @@ val solve :
     identical input is presented again.
 
     [test] / [doc] enable [{with-test}] / [{with-doc}] dependency filters for
-    the named packages — typically the solve roots, so [opam install
-    --with-test foo] semantics. Empty by default. Both feed into the solve
-    cache key, so [+test/+doc] and base solves coexist without colliding.
+    the named packages — typically the solve roots, so
+    [opam install --with-test foo] semantics. Empty by default. Both feed into
+    the solve cache key, so [+test/+doc] and base solves coexist without
+    colliding.
 
     The compiler pin always comes from the toolchain set on {!Ctx.t} (consumer
     solves go through {!Pipeline.resolve_toolchain}, which returns the

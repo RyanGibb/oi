@@ -498,10 +498,9 @@ let mirror_archives ~fs ~cache ~label archives =
 (* -- oi build dispatcher ------------------------------------------------ *)
 
 let cmd =
-  let run () data_dir cache_dir refresh skip_local dry_run all only skip
-      registry use_registry with_repos with_deps jobs toolchain_override
-      depext_only export envrc_mode deps_only archives_only every_version
-      targets =
+  let run (c : Terms.common) refresh skip_local dry_run all only skip registry
+      use_registry with_repos with_deps jobs toolchain_override depext_only
+      export envrc_mode deps_only archives_only every_version targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -512,9 +511,11 @@ let cmd =
       os_key;
       cache;
       http_session;
+      _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     (* Project mode: no positional, no --all, *.opam present in cwd.
        [--skip-local] forces non-project mode regardless. *)
     let cwd_s, _ = Workspace.resolved_cwd fs in
@@ -1891,17 +1892,17 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.skip_local $ dry_run $ all $ only $ skip $ Terms.registry
-      $ Terms.use_registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
-      $ Terms.toolchain $ depext_only $ export $ Sync.envrc_mode_arg $ deps_only
-      $ archives_only $ every_version $ targets)
+      const run $ Terms.common $ Terms.refresh $ Terms.skip_local $ dry_run
+      $ all $ only $ skip $ Terms.registry $ Terms.use_registry
+      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
+      $ depext_only $ export $ Sync.envrc_mode_arg $ deps_only $ archives_only
+      $ every_version $ targets)
 
 (* -- oi test ------------------------------------------------------------ *)
 
 let test_cmd =
-  let run () data_dir cache_dir refresh skip_local registry use_registry
-      with_repos with_deps jobs toolchain_override envrc_mode dry_run targets =
+  let run (c : Terms.common) refresh skip_local registry use_registry with_repos
+      with_deps jobs toolchain_override envrc_mode dry_run targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -1912,9 +1913,11 @@ let test_cmd =
       os_key;
       cache;
       http_session;
+      _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     let cwd_s, _ = Workspace.resolved_cwd fs in
     let project_mode =
       (not skip_local) && targets = []
@@ -1985,7 +1988,6 @@ let test_cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.skip_local $ Terms.registry $ Terms.use_registry
-      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
-      $ Sync.envrc_mode_arg $ dry_run $ targets)
+      const run $ Terms.common $ Terms.refresh $ Terms.skip_local
+      $ Terms.registry $ Terms.use_registry $ Terms.with_repos $ Terms.with_deps
+      $ Terms.jobs $ Terms.toolchain $ Sync.envrc_mode_arg $ dry_run $ targets)

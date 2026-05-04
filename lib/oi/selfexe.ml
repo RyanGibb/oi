@@ -31,8 +31,7 @@ let home () =
   match Sys.getenv_opt "HOME" with
   | Some h when h <> "" -> h
   | _ -> (
-      try (Unix.getpwuid (Unix.getuid ())).Unix.pw_dir
-      with Not_found -> "/")
+      try (Unix.getpwuid (Unix.getuid ())).Unix.pw_dir with Not_found -> "/")
 
 let local_bin () = home () / ".local" / "bin"
 

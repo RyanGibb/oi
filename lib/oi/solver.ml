@@ -744,7 +744,7 @@ module Cache = struct
      .git] existed, which is false for reporepo overlays nested under
      [<repo>/v1/<handle>/packages/]. Those entries fell back to a
      path-only signature that never changed across [oi repo bump]. *)
-  let schema_version = "v8"
+  let schema_version = Stamp.solver_cache_schema
   let signature_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
 
   let read_process_output cmd =

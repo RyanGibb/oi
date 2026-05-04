@@ -148,8 +148,7 @@ type search_row = {
 }
 
 let cmd =
-  let run () data_dir cache_dir registry all_versions overlay_filter long
-      pattern =
+  let run (c : Terms.common) registry all_versions overlay_filter long pattern =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr = _proc_mgr;
@@ -161,8 +160,9 @@ let cmd =
       cache;
       _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     (* Accept [@handle/PATTERN] as shorthand for [--overlay=handle PATTERN],
        and bare [@handle] as "everything in this overlay" (pattern = [*]).
        Combines with any [--overlay] flags the user already passed. *)
@@ -475,5 +475,5 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.registry
-      $ all_versions $ overlay $ long $ pattern)
+      const run $ Terms.common $ Terms.registry $ all_versions $ overlay $ long
+      $ pattern)

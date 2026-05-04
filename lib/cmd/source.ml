@@ -104,14 +104,14 @@ let rec copy_tree src dst =
                   end
                 in
                 loop ()))
-      | Unix.S_LNK ->
+      | Unix.S_LNK -> (
           let target = Unix.readlink s in
-          (try Unix.symlink target d
-           with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+          try Unix.symlink target d
+          with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
       | _ -> ())
 
-let copy_reporepo_subset ~packages_dirs ~bundle_repo
-    (pkgs : OpamPackage.t list) =
+let copy_reporepo_subset ~packages_dirs ~bundle_repo (pkgs : OpamPackage.t list)
+    =
   let n = ref 0 in
   List.iter
     (fun pkg ->
@@ -139,8 +139,8 @@ let copy_reporepo_subset ~packages_dirs ~bundle_repo
    read from disk; git URLs are cloned + checked out at the pinned
    commit. opam's [pull_tree] handles tarball strip-1, git
    clone-and-checkout, and patch application uniformly. *)
-let extract_main_source ~cache_urls ~dst (pkg : OpamPackage.t)
-    (url : OpamUrl.t) (checksums : OpamHash.t list) =
+let extract_main_source ~cache_urls ~dst (pkg : OpamPackage.t) (url : OpamUrl.t)
+    (checksums : OpamHash.t list) =
   let cache_dir =
     OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
   in
@@ -157,11 +157,10 @@ let extract_main_source ~cache_urls ~dst (pkg : OpamPackage.t)
   | OpamTypes.Not_available (_, msg) -> Error msg
 
 type install = {
-  extracted : OpamPackage.t list;
-      (** Got their own [vendor/<pkg>/]. *)
+  extracted : OpamPackage.t list;  (** Got their own [vendor/<pkg>/]. *)
   duplicates : (OpamPackage.t * string) list;
-      (** Share an archive with an [extracted] package; second arg is
-          the basename of the directory hosting both opam files. *)
+      (** Share an archive with an [extracted] package; second arg is the
+          basename of the directory hosting both opam files. *)
   virtuals : OpamPackage.t list;
       (** No main [url:] in the opam file (sourceless package). *)
   failures : (string * string) list;
@@ -172,13 +171,10 @@ type install = {
 let dir_of_pkg install =
   let m = Hashtbl.create 64 in
   let bind pkg dir =
-    Hashtbl.replace m
-      (OpamPackage.Name.to_string (OpamPackage.name pkg))
-      dir
+    Hashtbl.replace m (OpamPackage.Name.to_string (OpamPackage.name pkg)) dir
   in
   List.iter
-    (fun pkg ->
-      bind pkg (OpamPackage.Name.to_string (OpamPackage.name pkg)))
+    (fun pkg -> bind pkg (OpamPackage.Name.to_string (OpamPackage.name pkg)))
     install.extracted;
   List.iter (fun (pkg, dir) -> bind pkg dir) install.duplicates;
   m
@@ -204,8 +200,10 @@ let install_sources ~cache_urls ~vendor_dir ~packages_dirs pkgs =
           let key = archive_key url checksums in
           match Hashtbl.find_opt by_key key with
           | Some dir -> duplicates := (pkg, dir) :: !duplicates
-          | None ->
-              let pkg_name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
+          | None -> (
+              let pkg_name =
+                OpamPackage.Name.to_string (OpamPackage.name pkg)
+              in
               let dst = vendor_dir / pkg_name in
               let record_extracted () =
                 Hashtbl.add by_key key pkg_name;
@@ -213,11 +211,11 @@ let install_sources ~cache_urls ~vendor_dir ~packages_dirs pkgs =
               in
               if Sys.file_exists dst then record_extracted ()
               else
-                match extract_main_source ~cache_urls ~dst pkg url checksums
+                match
+                  extract_main_source ~cache_urls ~dst pkg url checksums
                 with
                 | Ok () -> record_extracted ()
-                | Error msg ->
-                    failures := (pkg_name, msg) :: !failures))
+                | Error msg -> failures := (pkg_name, msg) :: !failures)))
     pkgs;
   {
     extracted = List.rev !extracted;
@@ -264,8 +262,8 @@ let render_root_opam ~target_label ~packages ~repos ~reporepo_hash =
     reporepo_hash;
   Buffer.contents buf
 
-let write_workspace_files ~output ~target_label ~packages ~repos
-    ~reporepo_hash =
+let write_workspace_files ~output ~target_label ~packages ~repos ~reporepo_hash
+    =
   let write path content =
     Out_channel.with_open_bin path (fun oc ->
         Out_channel.output_string oc content)
@@ -322,19 +320,21 @@ let split_handle_targets ~with_repos ~with_deps targets =
             ( OpamPackage.Name.to_string pkg :: ts,
               repos @ [ h ],
               deps @ [ pkg_spec ] ))
-      ([], with_repos, with_deps) targets
+      ([], with_repos, with_deps)
+      targets
   in
   (List.rev targets, with_repos, with_deps)
 
 (* -- Main flow ---------------------------------------------------------- *)
 
 let cmd =
-  let run () data_dir cache_dir refresh registry use_registry with_repos
-      with_deps _jobs toolchain_override targets output =
+  let run (c : Terms.common) refresh registry use_registry with_repos with_deps
+      _jobs toolchain_override targets output =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; sys; platform; cache; _ } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     if output = "" then Oi.Error.config_error "oi source: -o DIR is required";
     if targets = [] then
       Oi.Error.config_error "oi source: at least one TARGET is required";
@@ -342,8 +342,7 @@ let cmd =
        is the empty string (it ends up calling [mkdirat] with [""]).
        Resolve to absolute against cwd before any filesystem op. *)
     let output =
-      if Filename.is_relative output then
-        Filename.concat (Sys.getcwd ()) output
+      if Filename.is_relative output then Filename.concat (Sys.getcwd ()) output
       else output
     in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / output);
@@ -387,9 +386,10 @@ let cmd =
       Stdlib.Option.to_list
         (Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh url_project.pins)
       @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
-      @ (match toolchain with
-        | Some (info : Oi.Toolchain.info) -> info.packages_dirs
-        | None -> Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ())
+      @
+      match toolchain with
+      | Some (info : Oi.Toolchain.info) -> info.packages_dirs
+      | None -> Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ()
     in
     let cache_root = Oi.Cache.root_s cache in
     let ctx =
@@ -414,8 +414,7 @@ let cmd =
       packages_dirs
       |> List.concat_map (fun d ->
           try
-            Sys.readdir d
-            |> Array.to_list
+            Sys.readdir d |> Array.to_list
             |> List.filter (fun n -> n <> "" && n.[0] <> '.')
           with Sys_error _ -> [])
       |> List.filter_map (fun n ->
@@ -430,11 +429,10 @@ let cmd =
       | Ok pkgs -> pkgs
       | Error msg -> Oi.Error.no_solution msg
     in
-    let consumer_pkgs, toolchain_pkgs =
-      partition_toolchain ~toolchain pkgs
-    in
+    let consumer_pkgs, toolchain_pkgs = partition_toolchain ~toolchain pkgs in
     Oi.Say.info "%d package(s) in solve closure (%d toolchain)"
-      (List.length consumer_pkgs) (List.length toolchain_pkgs);
+      (List.length consumer_pkgs)
+      (List.length toolchain_pkgs);
     (match warm_local_mirror ~fs ~cache ~packages_dirs consumer_pkgs with
     | None -> ()
     | Some s ->
@@ -503,7 +501,8 @@ let cmd =
     in
     Oi.Say.field "workspace"
       "%d external dep(s) (of %d in solve), %d x-repos, reporepo-hash %s"
-      (List.length packages) (List.length consumer_pkgs)
+      (List.length packages)
+      (List.length consumer_pkgs)
       (List.length repos) (short_sha reporepo_hash);
     Oi.Say.ok "wrote source bundle to %s" output;
     if install.failures <> [] then exit 1
@@ -513,15 +512,14 @@ let cmd =
       value & opt string ""
       & info ~docv:"DIR"
           ~doc:
-            "Output directory (required). Created if missing; existing \
-             entries are kept."
+            "Output directory (required). Created if missing; existing entries \
+             are kept."
           [ "o"; "output" ])
   in
   let targets =
     Arg.(
       value & pos_all string []
-      & info ~docv:"TARGET"
-          ~doc:"Package name or $(b,@HANDLE/PKG). Repeatable."
+      & info ~docv:"TARGET" ~doc:"Package name or $(b,@HANDLE/PKG). Repeatable."
           [])
   in
   let info =
@@ -532,35 +530,34 @@ let cmd =
           `P
             "Solve $(b,TARGET)'s dep closure (including \
              $(b,with-test)/$(b,with-doc)) and write a self-contained source \
-             bundle to $(b,DIR). Hand off to $(b,oi build), $(b,dune pkg lock), \
-             or $(b,opam install --deps-only).";
+             bundle to $(b,DIR). Hand off to $(b,oi build), $(b,dune pkg \
+             lock), or $(b,opam install --deps-only).";
           `S "OUTPUT LAYOUT";
           `I
             ( "$(b,DIR/vendor/<pkg>/)",
               "Each consumer package's main source. Tarballs unpacked, \
-               $(b,git+) URLs cloned at the pinned commit. Packages \
-               sharing an archive share a directory." );
+               $(b,git+) URLs cloned at the pinned commit. Packages sharing an \
+               archive share a directory." );
           `I
             ( "$(b,DIR/reporepo/)",
               "Snapshot of the opam metadata the solve consulted." );
           `I
             ( "$(b,DIR/root.opam)",
               "Bundle manifest. $(b,depends:) pins externally-resolved \
-               packages (non-dune sources and virtuals); \
-               dune-buildable in-tree packages are built from \
-               $(b,vendor/) and not listed. $(b,x-repos:) and \
-               $(b,x-reporepo-hash:) stamp the reporepo for \
+               packages (non-dune sources and virtuals); dune-buildable \
+               in-tree packages are built from $(b,vendor/) and not listed. \
+               $(b,x-repos:) and $(b,x-reporepo-hash:) stamp the reporepo for \
                reproducible re-solves." );
           `I
             ( "$(b,DIR/dune-project), $(b,DIR/dune)",
-              "Workspace marker plus $(b,(vendored_dirs vendor)) so \
-               dune relaxes warnings-as-errors and strict checks for \
-               $(b,vendor/)." );
+              "Workspace marker plus $(b,(vendored_dirs vendor)) so dune \
+               relaxes warnings-as-errors and strict checks for $(b,vendor/)."
+            );
           `S "NOTES";
           `P
-            "$(b,{with-test}) / $(b,{with-doc}) deps of every package \
-             in the closure are included so $(b,dune build) over the \
-             bundle compiles tests and docs.";
+            "$(b,{with-test}) / $(b,{with-doc}) deps of every package in the \
+             closure are included so $(b,dune build) over the bundle compiles \
+             tests and docs.";
           `P
             "Toolchain packages are pinned via $(b,--toolchain), not \
              $(b,depends:).";
@@ -574,6 +571,6 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.use_registry $ Terms.with_repos
-      $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ targets $ output)
+      const run $ Terms.common $ Terms.refresh $ Terms.registry
+      $ Terms.use_registry $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
+      $ Terms.toolchain $ targets $ output)

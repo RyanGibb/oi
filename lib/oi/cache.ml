@@ -85,10 +85,14 @@ type item = {
   description : string;
 }
 
-let cleanable_items t ~data_dir =
+(* Item groups mirror the three on-disk roots a {!Stamp} bump invalidates.
+   The reporepo at [<data>/reporepo] is user-authored data and is
+   deliberately absent from every group. *)
+
+let item label path description = { label; path; description }
+
+let cache_items t =
   let p sub = Eio.Path.(t.fs / t.root / sub) in
-  let d sub = Eio.Path.(t.fs / data_dir / sub) in
-  let item label path description = { label; path; description } in
   [
     item "sources" (p "sources") "Downloaded source tarballs";
     item "mirror" (p "mirror") "Content-addressed source mirror";
@@ -101,16 +105,29 @@ let cleanable_items t ~data_dir =
     item "runs" (p "runs") "Cached script builds";
     item "run-cache" (p "run-cache") "Fast-exec cache for [oi run]";
     item "dune" (p "dune") "Dune shared build cache";
+  ]
+
+let data_items t ~data_dir =
+  let d sub = Eio.Path.(t.fs / data_dir / sub) in
+  [
     item "repos" (d "repos") "Cloned repositories";
     item "opam-root" (d "opam-root") "Opam scaffolding (regenerated on demand)";
-    (* The toolchain path is XDG-derived independently of [OI_CACHE_DIR],
-       so we resolve it via [toolchains_root] rather than [p "toolchains"]
-       — clean should nuke what's actually on disk regardless of any env
-       mismatch. *)
+  ]
+
+(* XDG-derived path independent of [OI_CACHE_DIR]; resolve from env so a
+   clean nukes what's actually on disk. *)
+let toolchain_items t =
+  [
     item "toolchains"
       Eio.Path.(t.fs / toolchains_root ())
       "Built compiler toolchains (oxcaml, etc.)";
   ]
+
+let cleanable_items t ~data_dir =
+  cache_items t @ data_items t ~data_dir @ toolchain_items t
+
+let purge_items items =
+  List.iter (fun { path; _ } -> Eio.Path.rmtree ~missing_ok:true path) items
 
 let size ~sys path =
   let path_s = Eio.Path.native_exn path in

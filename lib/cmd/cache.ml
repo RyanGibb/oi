@@ -56,9 +56,9 @@ let count_files dir =
 (* -- list ---------------------------------------------------------------- *)
 
 let list_cmd =
-  let run () cache_dir =
+  let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw env cache_dir in
+    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
     with_d10 h @@ fun d10 ->
     let layers_dir = layers_root_s d10 in
     Fmt.pr "%a %s@.@." Oi.Style.header_string "Layers" d10.os_key;
@@ -108,7 +108,7 @@ let list_cmd =
     end
   in
   let info = Cmd.info "list" ~doc:"List every cached layer for the host" in
-  Cmd.v info Term.(const run $ Terms.log $ Terms.cache_dir)
+  Cmd.v info Term.(const run $ Terms.common)
 
 (* -- show ---------------------------------------------------------------- *)
 
@@ -214,9 +214,9 @@ let print_callers events =
   end
 
 let show_cmd =
-  let run () cache_dir package =
+  let run (c : Terms.common) package =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw env cache_dir in
+    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
     with_d10 h @@ fun d10 ->
     let layers_dir = layers_root_s d10 in
     if not (Sys.file_exists layers_dir) then begin
@@ -296,14 +296,14 @@ let show_cmd =
       & info ~docv:"PACKAGE" ~doc:"Package name (prefix match)." [])
   in
   let info = Cmd.info "show" ~doc:"Show details for a package's layers" in
-  Cmd.v info Term.(const run $ Terms.log $ Terms.cache_dir $ package)
+  Cmd.v info Term.(const run $ Terms.common $ package)
 
 (* -- binaries ------------------------------------------------------------ *)
 
 let binaries_cmd =
-  let run () cache_dir =
+  let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw env cache_dir in
+    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
     with_d10 h @@ fun d10 ->
     let index_path = index_path_s d10 in
     if not (Sys.file_exists index_path) then begin
@@ -342,14 +342,14 @@ let binaries_cmd =
   let info =
     Cmd.info "binaries" ~doc:"List binaries known to the layer index"
   in
-  Cmd.v info Term.(const run $ Terms.log $ Terms.cache_dir)
+  Cmd.v info Term.(const run $ Terms.common)
 
 (* -- index --------------------------------------------------------------- *)
 
 let index_cmd =
-  let run () cache_dir =
+  let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw env cache_dir in
+    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
     with_d10 h @@ fun d10 ->
     let layers_root = Eio.Path.native_exn d10.root / "layers" in
     let index_path = layers_root / "index.db" in
@@ -410,14 +410,14 @@ let index_cmd =
     Fmt.pr "Index: %s@." index_path
   in
   let info = Cmd.info "index" ~doc:"Rebuild the SQLite layer index" in
-  Cmd.v info Term.(const run $ Terms.log $ Terms.cache_dir)
+  Cmd.v info Term.(const run $ Terms.common)
 
 (* -- stats --------------------------------------------------------------- *)
 
 let stats_cmd =
-  let run () cache_dir =
+  let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw env cache_dir in
+    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
     with_d10 h @@ fun d10 ->
     let index_path = index_path_s d10 in
     if not (Sys.file_exists index_path) then begin
@@ -434,7 +434,117 @@ let stats_cmd =
     D10.Index.close db
   in
   let info = Cmd.info "stats" ~doc:"Summarise the layer cache for this host" in
-  Cmd.v info Term.(const run $ Terms.log $ Terms.cache_dir)
+  Cmd.v info Term.(const run $ Terms.common)
+
+(* -- explain ------------------------------------------------------------- *)
+
+(* Tree projection of {!Oi.Provenance.t}. Used as the JSON shape emitted by
+   [oi cache explain] — pulls the full transitive dependency closure into
+   one document so an agent can ask "why does this layer behave this way?"
+   without re-walking [provenance.json] sidecars itself. *)
+
+type explain_node = {
+  layer_hash : string;
+  provenance : Oi.Provenance.t;
+  depends_on : explain_node list;
+}
+
+let rec explain_node_codec =
+  lazy
+    (let open Jsont in
+     Object.map ~kind:"layer_explanation"
+       (fun layer_hash provenance depends_on ->
+         { layer_hash; provenance; depends_on })
+     |> Object.mem "layer_hash" string ~enc:(fun n -> n.layer_hash)
+     |> Object.mem "provenance" Oi.Provenance.codec ~enc:(fun n -> n.provenance)
+     |> Object.mem "depends_on"
+          (list (Jsont.rec' explain_node_codec))
+          ~dec_absent:[]
+          ~enc:(fun n -> n.depends_on)
+          ~enc_omit:(( = ) [])
+     |> Object.finish)
+
+let explain_cmd =
+  let run (c : Terms.common) hash format =
+    Harness.run @@ fun ~sw env ->
+    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
+    with_d10 h @@ fun d10 ->
+    let cache_root = Eio.Path.native_exn d10.root in
+    let memo : (string, explain_node) Hashtbl.t = Hashtbl.create 64 in
+    let rec walk hash =
+      match Hashtbl.find_opt memo hash with
+      | Some n -> n
+      | None ->
+          let prov =
+            match
+              Oi.Provenance.load ~fs:h.fs ~cache_root ~os_key:d10.os_key ~hash
+            with
+            | Some p -> p
+            | None ->
+                Oi.Error.config_error
+                  "no provenance.json for layer %s under os %s — layer may be \
+                   absent, failed, or pre-provenance"
+                  hash d10.os_key
+          in
+          let depends_on =
+            List.map (fun (d : Oi.Identity.dep) -> walk d.hash) prov.deps
+          in
+          let n = { layer_hash = hash; provenance = prov; depends_on } in
+          Hashtbl.add memo hash n;
+          n
+    in
+    let tree = walk hash in
+    match (format : Terms.format) with
+    | Json -> (
+        match
+          Jsont_bytesrw.encode_string ~format:Jsont.Indent
+            (Lazy.force explain_node_codec)
+            tree
+        with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+    | Text ->
+        let rec pp ~depth (n : explain_node) =
+          let indent = String.make (depth * 2) ' ' in
+          let pkg = Oi.Identity.to_string n.provenance.pkg in
+          Fmt.pr "%s%s %a@." indent pkg Oi.Style.dim_string
+            (short_hash n.layer_hash);
+          List.iter (pp ~depth:(depth + 1)) n.depends_on
+        in
+        pp ~depth:0 tree
+  in
+  let hash =
+    Arg.(
+      required
+      & pos 0 (some string) None
+      & info ~docv:"HASH" ~doc:"Full layer hash (e.g. from $(b,oi cache list))."
+          [])
+  in
+  let info =
+    Cmd.info "explain"
+      ~doc:"Trace a layer's provenance and dependencies as a tree"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Walk the dependency closure of $(b,HASH), reading each layer's \
+             $(b,provenance.json) sidecar. Default output is a compact tree of \
+             $(b,package layer-hash) lines.";
+          `P
+            "$(b,--format=json) emits the closure as one JSON document. Every \
+             node carries the full provenance shape (opam origin, source URL + \
+             checksums, depexts, build_env) plus a $(b,depends_on) array of \
+             child nodes with the same shape.";
+          `P
+            "Use this to answer 'what exactly went into this build?' without \
+             re-walking $(b,provenance.json) sidecars by hand. Failed layers \
+             have no provenance and are not explainable here — see $(b,oi \
+             cache show) for those.";
+        ]
+  in
+  Cmd.v info Term.(const run $ Terms.common $ hash $ Terms.format)
 
 (* -- group --------------------------------------------------------------- *)
 
@@ -453,10 +563,15 @@ let cmd =
           `P
             "$(b,oi cache index) rebuilds the index from disk; the other \
              subcommands query it (or read $(b,layer.json) sidecars directly).";
+          `P
+            "$(b,oi cache explain HASH) walks a layer's full dependency \
+             closure with provenance — pair with $(b,--format=json) for \
+             scripted analysis.";
           `S "SEE ALSO";
           `P
             "$(b,oi clean)(1) drops layers; $(b,oi build --export)(1) \
              publishes them to a registry tree.";
         ]
   in
-  Cmd.group info [ list_cmd; show_cmd; binaries_cmd; index_cmd; stats_cmd ]
+  Cmd.group info
+    [ list_cmd; show_cmd; binaries_cmd; index_cmd; stats_cmd; explain_cmd ]

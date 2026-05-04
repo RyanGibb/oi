@@ -1,3 +1,5 @@
+let ( / ) = Filename.concat
+
 type env = {
   proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
   fs : Eio.Fs.dir_ty Eio.Path.t;
@@ -6,8 +8,28 @@ type env = {
   platform : Osrel.t;
   os_key : string;
   cache : Oi.Cache.t;
+  data_dir : string;
   http_session : D10.Sysops.Http.session;
 }
+
+(* Mirror of [Terms.data_dir]'s env resolution for callers that don't
+   thread a [--data-dir] flag (e.g. [oi cache *]). *)
+let resolve_data_dir ?override () =
+  let env k =
+    match Sys.getenv_opt k with Some v when v <> "" -> Some v | _ -> None
+  in
+  match override with
+  | Some v when v <> "" -> v
+  | _ -> (
+      match env "OI_DATA_DIR" with
+      | Some v -> v
+      | None -> (
+          match env "XDG_DATA_HOME" with
+          | Some v -> v / "oi"
+          | None -> (
+              match env "HOME" with
+              | Some h -> h / ".local" / "share" / "oi"
+              | None -> "/tmp/oi")))
 
 let pp_one_exn fmt = function
   | Oi.Error.E e -> Oi.Error.pp fmt e
@@ -52,7 +74,7 @@ let with_eio_root f =
 
 let run f = with_error_handling @@ fun () -> with_eio_root f
 
-let bootstrap ~sw (env : Eio_unix.Stdenv.base) cache_dir =
+let bootstrap ~sw ?data_dir (env : Eio_unix.Stdenv.base) cache_dir =
   let proc_mgr = Eio.Stdenv.process_mgr env in
   let fs = Eio.Stdenv.fs env in
   let clock = Eio.Stdenv.clock env in
@@ -63,8 +85,14 @@ let bootstrap ~sw (env : Eio_unix.Stdenv.base) cache_dir =
   let platform = Osrel.detect ~proc_mgr ~fs in
   let os_key = D10.Os_key.(to_string (of_platform platform)) in
   let cache = Oi.Cache.create ~root:cache_dir fs in
+  let data_dir = resolve_data_dir ?override:data_dir () in
+  (* Validate on-disk schema stamps before any command body runs. A
+     mismatch means the user upgraded [oi] across an incompatible
+     format change; stale caches get cleared automatically so the
+     command itself can assume current-shape state. *)
+  Oi.Stamp.ensure ~fs ~cache ~data_dir;
   (* Create the session under the outer Harness switch so its connection
      pool lives for the whole CLI invocation — every command body that
      fetches from a registry shares it, no per-command setup cost. *)
   let http_session = D10.Sysops.Http.with_session ~sw sys (fun s -> s) in
-  { proc_mgr; fs; clock; sys; platform; os_key; cache; http_session }
+  { proc_mgr; fs; clock; sys; platform; os_key; cache; data_dir; http_session }

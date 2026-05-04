@@ -6,8 +6,8 @@ let constr_to_op_ver (op, ver) =
   (OpamFormula.string_of_relop op, OpamPackage.Version.to_string ver)
 
 let cmd =
-  let run () data_dir cache_dir refresh registry use_registry with_repos
-      toolchain package pkg_spec =
+  let run (c : Terms.common) refresh registry use_registry with_repos toolchain
+      package pkg_spec =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -18,9 +18,11 @@ let cmd =
       os_key;
       cache;
       http_session;
+      _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     let cwd, _ = Workspace.resolved_cwd fs in
     (* Fail fast before the sync's 10-second repo refresh. *)
     let dp = Oi.Project.Dune.load ~fs ~cwd in
@@ -138,8 +140,8 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.use_registry $ Terms.with_repos $ Terms.toolchain
-      $ package $ pkg_spec)
+      const run $ Terms.common $ Terms.refresh $ Terms.registry
+      $ Terms.use_registry $ Terms.with_repos $ Terms.toolchain $ package
+      $ pkg_spec)
 
 (* -- exec ---------------------------------------------------------------- *)

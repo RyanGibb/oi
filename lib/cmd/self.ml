@@ -74,7 +74,7 @@ let where_cmd =
   Cmd.v info Term.(const run $ Terms.log)
 
 let update_cmd =
-  let run () data_dir cache_dir refresh registry use_registry jobs dev =
+  let run (c : Terms.common) refresh registry use_registry jobs dev =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -85,9 +85,11 @@ let update_cmd =
       os_key;
       cache;
       http_session;
+      _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     let target = Oi.Selfexe.resolve_target () in
     let oi_dst, oix_dst =
       match target with
@@ -174,8 +176,7 @@ let update_cmd =
       install_binary ~fs ~src:new_oix ~dst:oix_dst;
       Oi.Say.ok "installed oix → %s" oix_dst
     end
-    else
-      Oi.Say.warn "oix not found in built prefix (%s); skipping" new_oix
+    else Oi.Say.warn "oix not found in built prefix (%s); skipping" new_oix
   in
   let dev =
     Arg.(
@@ -195,9 +196,8 @@ let update_cmd =
           `P
             "Use $(b,oi) to build $(b,oi) from source, then install the \
              resulting binary over the currently-running executable. The \
-             update is atomic — the running process keeps executing on the \
-             old image; the next $(b,oi) invocation picks up the new \
-             binary.";
+             update is atomic — the running process keeps executing on the old \
+             image; the next $(b,oi) invocation picks up the new binary.";
           `P
             "If the current binary's path is not writable (system install, \
              read-only mount), $(b,oi self update) installs into \
@@ -209,8 +209,8 @@ let update_cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.registry $ Terms.use_registry $ Terms.jobs $ dev)
+      const run $ Terms.common $ Terms.refresh $ Terms.registry
+      $ Terms.use_registry $ Terms.jobs $ dev)
 
 let cmd =
   let info =

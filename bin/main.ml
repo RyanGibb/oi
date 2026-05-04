@@ -82,6 +82,43 @@ let info =
            sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
            in as preprocessors automatically. $(b,oi run -vv SCRIPT.ml) prints \
            the generated dune project.";
+        `S "AUTOMATION";
+        `P
+          "Non-interactive by default. Idempotent: repeat invocations hit \
+           caches. Non-zero exit on failure (see $(b,EXIT STATUS)).";
+        `I
+          ( "$(b,Discover)",
+            "$(b,oi CMD --help=plain), $(b,oi config), $(b,oi search PATTERN), \
+             $(b,oi show TARGET)." );
+        `I
+          ( "$(b,Plan)",
+            "$(b,-n) on $(b,oi run) / $(b,oi build) prints the plan and exits. \
+             $(b,oi show --only-depexts TARGET) emits a depext list for \
+             $(b,apt)/$(b,dnf)." );
+        `I
+          ( "$(b,JSON)",
+            "$(b,--format=json) on $(b,oi config) and $(b,oi cache explain \
+             HASH). snake_case keys; optional fields omitted; stable across \
+             patch releases." );
+        `I
+          ( "$(b,Quiet)",
+            "$(b,--color=never), $(b,-q), \
+             $(b,--verbosity=quiet|error|warning|info|debug)." );
+        `I
+          ( "$(b,Reproduce)",
+            "Pin the build with $(b,--toolchain), $(b,--with-repo), \
+             $(b,--registry), $(b,--use-registry). $(b,oi source TARGET -o \
+             DIR) writes a self-contained bundle stamped with the reporepo \
+             sha." );
+        `I
+          ( "$(b,Sandbox)",
+            "$(b,--cache-dir) / $(b,--data-dir) confine state to a per-task \
+             dir. $(b,--use-registry=never) goes offline. $(b,--skip-local) \
+             ignores the cwd project." );
+        `I
+          ( "$(b,Upgrades)",
+            "Stale caches are cleared automatically when on-disk schemas \
+             change. No defensive $(b,oi clean) needed." );
         `S Manpage.s_environment;
         `P
           "$(b,oi) uses two directories. The data directory holds long-lived \

@@ -86,6 +86,24 @@ type item = {
   description : string;
 }
 
+val cache_items : t -> item list
+(** Subdirs under [<cache>/]. Swept by {!Stamp.cache_schema} bumps. *)
+
+val data_items : t -> data_dir:string -> item list
+(** Subdirs under [<data>/] that are rebuildable cache (repos, opam-root). Swept
+    by {!Stamp.data_schema} bumps. The reporepo is user-authored data and is NOT
+    included. *)
+
+val toolchain_items : t -> item list
+(** [$XDG_CACHE_HOME/oi/toolchains/]. Swept by {!Stamp.toolchains_schema} bumps.
+*)
+
 val cleanable_items : t -> data_dir:string -> item list
+(** Concatenation of {!cache_items}, {!data_items}, {!toolchain_items}. The
+    [oi clean] CLI iterates this. *)
+
+val purge_items : item list -> unit
+(** [rmtree ~missing_ok:true] each item; no logging. *)
+
 val size : sys:D10.Sysops.t -> Eio.Fs.dir_ty Eio.Path.t -> int64
 val pp_size : int64 Fmt.t

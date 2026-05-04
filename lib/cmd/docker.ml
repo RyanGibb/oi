@@ -100,12 +100,12 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
     "# writes ./registry/<os_key>/"
 
 let cmd =
-  let run () data_dir cache_dir refresh test_mode all distro src_context output
-      =
+  let run (c : Terms.common) refresh test_mode all distro src_context output =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; sys; platform; cache; _ } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     if test_mode && all then
       Oi.Error.config_error "oi docker: --test and --all are mutually exclusive";
     let cwd_s, _ = Workspace.resolved_cwd fs in
@@ -203,5 +203,5 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ test_mode $ all $ distro $ src_context $ output)
+      const run $ Terms.common $ Terms.refresh $ test_mode $ all $ distro
+      $ src_context $ output)

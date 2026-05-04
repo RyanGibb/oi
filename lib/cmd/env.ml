@@ -3,7 +3,7 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let cmd =
-  let run () data_dir cache_dir refresh skip_local with_repos with_deps jobs
+  let run (c : Terms.common) refresh skip_local with_repos with_deps jobs
       toolchain =
     Harness.run @@ fun ~sw env ->
     let {
@@ -15,9 +15,11 @@ let cmd =
       os_key;
       cache;
       http_session;
+      _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     let dune_cache_root = Oi.Cache.dune_root cache in
     (* Detect _oi/ project directory. A pre-existing _oi/prefix is
        reused as-is UNLESS the user passes --with-repo or --with, which
@@ -132,6 +134,5 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.skip_local $ Terms.with_repos $ Terms.with_deps $ Terms.jobs
-      $ Terms.toolchain)
+      const run $ Terms.common $ Terms.refresh $ Terms.skip_local
+      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain)

@@ -971,8 +971,7 @@ module Reporepo = struct
      not produced for reporepo URLs — those still hard-error
      downstream — but [try_resolve_url] short-circuits it as a
      [Keep] since a local-dir pin doesn't need URL resolution. *)
-  let classify_url ~where (u : OpamUrl.t) :
-      [ `Git | `Tarball | `Local ] =
+  let classify_url ~where (u : OpamUrl.t) : [ `Git | `Tarball | `Local ] =
     match u.OpamUrl.backend with
     | `git -> `Git
     | `http -> `Tarball

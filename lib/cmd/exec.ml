@@ -3,8 +3,8 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let cmd =
-  let run () data_dir cache_dir refresh skip_local registry use_registry
-      with_repos with_deps jobs toolchain cmd args =
+  let run (c : Terms.common) refresh skip_local registry use_registry with_repos
+      with_deps jobs toolchain cmd args =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -15,9 +15,11 @@ let cmd =
       os_key;
       cache;
       http_session;
+      _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     let cwd, _ = Workspace.resolved_cwd fs in
     let prefix = cwd / "_oi" / "prefix" in
     let conf =
@@ -103,9 +105,8 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.skip_local $ Terms.registry $ Terms.use_registry
-      $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain $ cmd
-      $ args)
+      const run $ Terms.common $ Terms.refresh $ Terms.skip_local
+      $ Terms.registry $ Terms.use_registry $ Terms.with_repos $ Terms.with_deps
+      $ Terms.jobs $ Terms.toolchain $ cmd $ args)
 
 (* -- config -------------------------------------------------------------- *)

@@ -607,7 +607,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
   end
 
 let cmd =
-  let run () data_dir cache_dir refresh skip_local registry toolchain_override
+  let run (c : Terms.common) refresh skip_local registry toolchain_override
       targets with_repos with_deps tree only_depexts os_override show_all =
     Harness.run @@ fun ~sw env ->
     let {
@@ -620,8 +620,9 @@ let cmd =
       cache;
       _;
     } =
-      Harness.bootstrap ~sw env cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
     in
+    let data_dir = c.data_dir in
     let _ = registry in
     (* Cache-listing modes: [oi show --all] and [oi show @h] (bare
        handle, no /pkg) bypass the solver and just walk
@@ -994,10 +995,9 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.log $ Terms.data_dir $ Terms.cache_dir $ Terms.refresh
-      $ Terms.skip_local $ Terms.registry $ Terms.toolchain $ targets
-      $ Terms.with_repos $ Terms.with_deps $ tree $ only_depexts $ os_override
-      $ show_all)
+      const run $ Terms.common $ Terms.refresh $ Terms.skip_local
+      $ Terms.registry $ Terms.toolchain $ targets $ Terms.with_repos
+      $ Terms.with_deps $ tree $ only_depexts $ os_override $ show_all)
 
 (* -- env ----------------------------------------------------------------- *)
 

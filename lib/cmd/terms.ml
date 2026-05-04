@@ -61,6 +61,42 @@ let data_dir =
 
 let cache_dir = Xdg_eio.Cmd.cache_term Workspace.app_name
 
+(* -- Shared "global" options ------------------------------------------- *)
+
+(* Cmdliner subcommand groups don't have real top-level flags: every flag
+   is per-command. [common] is the workaround — one bundle every harness-
+   using command consumes, so [--cache-dir], [--data-dir], [--verbosity],
+   [--color], and [--verbose-http] always appear together with the same
+   semantics. Adding a new "should be global" flag means adding it here
+   once; the type-checker fans the change out across every command. *)
+
+type common = { cache_dir : string; data_dir : string }
+
+let common =
+  Term.(
+    const (fun () cache_dir data_dir -> { cache_dir; data_dir })
+    $ log $ cache_dir $ data_dir)
+
+type format = Text | Json
+
+let format_conv =
+  let parser = function
+    | "text" -> Ok Text
+    | "json" -> Ok Json
+    | s -> Error (`Msg (Fmt.str "expected 'text' or 'json', got %S" s))
+  in
+  let printer fmt = function
+    | Text -> Fmt.string fmt "text"
+    | Json -> Fmt.string fmt "json"
+  in
+  Arg.conv ~docv:"FORMAT" (parser, printer)
+
+let format =
+  Arg.(
+    value & opt format_conv Text
+    & info ~docv:"FORMAT" ~doc:"Output format ($(b,text) or $(b,json))."
+        [ "format" ])
+
 let refresh =
   Arg.(
     value & flag
