@@ -35,6 +35,16 @@ val solver_cache_schema : string
     the package universe shape). Stored as a string for backwards compatibility
     with prior ["v7"]/["v8"] keys on disk. *)
 
+val json_schema_version : string
+(** Wire-format version string for every [--format=json] document [oi] emits
+    (commands' structured outputs and the JSON error envelope). Bump on any
+    backwards-incompatible JSON change: field rename, field removal, type
+    change. Add-only changes (new optional fields) don't need a bump.
+
+    Embedded as the [schema_version] field at the top of every JSON document so
+    agents can fail fast on a mismatch. Decoupled from the on-disk schemas above
+    — wire format and on-disk format evolve independently. *)
+
 val ensure :
   fs:Eio.Fs.dir_ty Eio.Path.t -> cache:Cache.t -> data_dir:string -> unit
 (** Read each store's [.oi-stamp]; for any whose recorded schema is below the

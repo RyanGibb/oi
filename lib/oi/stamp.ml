@@ -7,6 +7,7 @@ let cache_schema = 1
 let data_schema = 1
 let toolchains_schema = 1
 let solver_cache_schema = "v8"
+let json_schema_version = "1.0"
 let stamp_filename = ".oi-stamp"
 
 (* On-disk format is a tiny [key value] text file:

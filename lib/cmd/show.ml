@@ -620,7 +620,8 @@ let cmd =
       cache;
       _;
     } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let data_dir = c.data_dir in
     let _ = registry in
@@ -857,6 +858,95 @@ let cmd =
         ~cache ~os_key
     in
     let action_plan = Oi.Plan.build ctx ~d10 ~packages_dirs pkgs in
+    let json_plan_node (n : Oi.Plan.node) =
+      let name = OpamPackage.Name.to_string (OpamPackage.name n.pkg) in
+      let version = OpamPackage.Version.to_string (OpamPackage.version n.pkg) in
+      let method_ = Oi.Identity.method_to_string n.method_ in
+      let deps = List.map OpamPackage.Name.to_string n.deps in
+      (name, version, method_, n.layer_hash, deps)
+    in
+    let json_node_codec =
+      let open Jsont in
+      Object.map ~kind:"plan_node" (fun name version method_ layer_hash deps ->
+          (name, version, method_, layer_hash, deps))
+      |> Object.mem "name" string ~enc:(fun (n, _, _, _, _) -> n)
+      |> Object.mem "version" string ~enc:(fun (_, v, _, _, _) -> v)
+      |> Object.mem "method" string ~enc:(fun (_, _, m, _, _) -> m)
+      |> Object.mem "layer_hash" string ~enc:(fun (_, _, _, h, _) -> h)
+      |> Object.mem "deps" (list string) ~dec_absent:[]
+           ~enc:(fun (_, _, _, _, d) -> d)
+           ~enc_omit:(( = ) [])
+      |> Object.finish
+    in
+    let render_json_plan () =
+      let all_depexts, _ =
+        show_depexts ~ctx ~packages_dirs ~action_plan ~os_override
+      in
+      let depexts =
+        OpamSysPkg.Set.fold
+          (fun p acc -> OpamSysPkg.to_string p :: acc)
+          all_depexts []
+        |> List.sort String.compare
+      in
+      let nodes = List.map json_plan_node (Oi.Plan.nodes action_plan) in
+      let target_label =
+        match targets with
+        | [] -> (
+            match project_local_packages with
+            | [ p ] -> p
+            | _ :: _ :: _ -> "(project)"
+            | [] -> "(project)")
+        | _ -> String.concat " " targets
+      in
+      let toolchain_handle =
+        match toolchain with
+        | None -> None
+        | Some (info : Oi.Toolchain.info) -> Some info.handle
+      in
+      let envelope_codec =
+        let open Jsont in
+        Object.map ~kind:"oi_show"
+          (fun
+            _schema_version
+            target
+            os_key
+            ocaml_version
+            toolchain
+            packages
+            depexts
+          -> (target, os_key, ocaml_version, toolchain, packages, depexts))
+        |> Object.mem "schema_version" string ~enc:(fun _ ->
+            Oi.Stamp.json_schema_version)
+        |> Object.mem "target" string ~enc:(fun (t, _, _, _, _, _) -> t)
+        |> Object.mem "os_key" string ~enc:(fun (_, o, _, _, _, _) -> o)
+        |> Object.mem "ocaml_version" string ~enc:(fun (_, _, v, _, _, _) -> v)
+        |> Object.opt_mem "toolchain" string ~enc:(fun (_, _, _, t, _, _) -> t)
+        |> Object.mem "packages" (list json_node_codec)
+             ~enc:(fun (_, _, _, _, p, _) -> p)
+        |> Object.mem "depexts" (list string) ~dec_absent:[]
+             ~enc:(fun (_, _, _, _, _, d) -> d)
+             ~enc_omit:(( = ) [])
+        |> Object.finish
+      in
+      match
+        Jsont_bytesrw.encode_string ~format:Jsont.Indent envelope_codec
+          ( target_label,
+            os_key,
+            conf.ocaml_version,
+            toolchain_handle,
+            nodes,
+            depexts )
+      with
+      | Ok s ->
+          print_string s;
+          print_newline ()
+      | Error e -> Oi.Error.config_error "json encode failed: %s" e
+    in
+    (match c.format with
+    | Json ->
+        render_json_plan ();
+        exit 0
+    | Text -> ());
     if tree then begin
       let plan =
         Oi.Plan.resolve ctx ~packages_dirs ~cache_root ~os_key

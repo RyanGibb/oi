@@ -55,57 +55,103 @@ let count_files dir =
 
 (* -- list ---------------------------------------------------------------- *)
 
+type layer_summary = {
+  layer_hash : string;
+  package : string option;
+  exit_status : int option;
+}
+
+let layer_summary_codec =
+  let open Jsont in
+  Object.map ~kind:"layer_summary" (fun layer_hash package exit_status ->
+      { layer_hash; package; exit_status })
+  |> Object.mem "layer_hash" string ~enc:(fun l -> l.layer_hash)
+  |> Object.opt_mem "package" string ~enc:(fun l -> l.package)
+  |> Object.opt_mem "exit_status" int ~enc:(fun l -> l.exit_status)
+  |> Object.finish
+
+let list_envelope_codec =
+  let open Jsont in
+  Object.map ~kind:"oi_cache_list" (fun _schema_version os_key layers ->
+      (os_key, layers))
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
+  |> Object.mem "os_key" string ~enc:(fun (k, _) -> k)
+  |> Object.mem "layers" (list layer_summary_codec) ~enc:(fun (_, ls) -> ls)
+  |> Object.finish
+
+let read_layer_summaries ~layers_dir ~root ~os_key =
+  if not (Sys.file_exists layers_dir) then []
+  else
+    Sys.readdir layers_dir |> Array.to_list |> List.sort String.compare
+    |> List.map (fun hash ->
+        let json = Eio.Path.(root / "layers" / os_key / hash / "layer.json") in
+        match D10.Layer.load_meta json with
+        | Some m ->
+            {
+              layer_hash = hash;
+              package = Some m.package;
+              exit_status = Some m.exit_status;
+            }
+        | None -> { layer_hash = hash; package = None; exit_status = None })
+
 let list_cmd =
   let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
+    let h =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
     with_d10 h @@ fun d10 ->
     let layers_dir = layers_root_s d10 in
-    Fmt.pr "%a %s@.@." Oi.Style.header_string "Layers" d10.os_key;
-    if not (Sys.file_exists layers_dir) then Fmt.pr "  (empty)@."
-    else begin
-      let entries =
-        Sys.readdir layers_dir |> Array.to_list |> List.sort String.compare
-      in
-      let rows, total =
-        List.fold_left
-          (fun (rows, total) hash ->
-            let json =
-              Eio.Path.(d10.root / "layers" / d10.os_key / hash / "layer.json")
-            in
-            match D10.Layer.load_meta json with
-            | Some m ->
-                let row =
-                  [
-                    Tty.Span.styled Oi.Style.dim (short_hash hash);
-                    status_span m.exit_status;
-                    Tty.Span.text m.package;
-                  ]
-                in
-                (row :: rows, total + 1)
-            | None ->
-                let row =
-                  [
-                    Tty.Span.styled Oi.Style.dim (short_hash hash);
-                    Tty.Span.styled Oi.Style.warn "no metadata";
-                    Tty.Span.text "—";
-                  ]
-                in
-                (row :: rows, total))
-          ([], 0) entries
-      in
-      let table =
-        Tty.Table.of_rows ~header_style:Oi.Style.header
-          [
-            Tty.Table.column "HASH";
-            Tty.Table.column "STATUS";
-            Tty.Table.column "PACKAGE";
-          ]
-          (List.rev rows)
-      in
-      Tty.Table.pp Fmt.stdout table;
-      Fmt.pr "@.%a %d layer(s)@." Oi.Style.header_string "Total:" total
-    end
+    let summaries =
+      read_layer_summaries ~layers_dir ~root:d10.root ~os_key:d10.os_key
+    in
+    match c.format with
+    | Json -> (
+        match
+          Jsont_bytesrw.encode_string ~format:Jsont.Indent list_envelope_codec
+            (d10.os_key, summaries)
+        with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+    | Text ->
+        Fmt.pr "%a %s@.@." Oi.Style.header_string "Layers" d10.os_key;
+        if summaries = [] then Fmt.pr "  (empty)@."
+        else begin
+          let total = List.length summaries in
+          let rows =
+            List.map
+              (fun l ->
+                match (l.package, l.exit_status) with
+                | Some pkg, Some st ->
+                    [
+                      Tty.Span.styled Oi.Style.dim (short_hash l.layer_hash);
+                      status_span st;
+                      Tty.Span.text pkg;
+                    ]
+                | _ ->
+                    [
+                      Tty.Span.styled Oi.Style.dim (short_hash l.layer_hash);
+                      Tty.Span.styled Oi.Style.warn "no metadata";
+                      Tty.Span.text "—";
+                    ])
+              summaries
+          in
+          let table =
+            Tty.Table.of_rows ~header_style:Oi.Style.header
+              [
+                Tty.Table.column "HASH";
+                Tty.Table.column "STATUS";
+                Tty.Table.column "PACKAGE";
+              ]
+              rows
+          in
+          Tty.Table.pp Fmt.stdout table;
+          Fmt.pr "@.%a %d layer(s)@." Oi.Style.header_string "Total:" total
+        end
   in
   let info = Cmd.info "list" ~doc:"List every cached layer for the host" in
   Cmd.v info Term.(const run $ Terms.common)
@@ -213,36 +259,70 @@ let print_callers events =
       rows
   end
 
+type show_match = {
+  layer_hash : string;
+  meta : D10.Layer.meta;
+  files_count : int;
+  provenance : Oi.Provenance.t option;
+  callers : Oi.Audit.event list;
+}
+
+let show_match_codec =
+  let open Jsont in
+  Object.map ~kind:"cache_show_layer"
+    (fun layer_hash meta files_count provenance callers ->
+      { layer_hash; meta; files_count; provenance; callers })
+  |> Object.mem "layer_hash" string ~enc:(fun m -> m.layer_hash)
+  |> Object.mem "meta" D10.Layer.meta_codec ~enc:(fun m -> m.meta)
+  |> Object.mem "files_count" int ~enc:(fun m -> m.files_count)
+  |> Object.opt_mem "provenance" Oi.Provenance.codec ~enc:(fun m ->
+      m.provenance)
+  |> Object.mem "callers"
+       (list Oi.Audit.event_codec)
+       ~dec_absent:[]
+       ~enc:(fun m -> m.callers)
+       ~enc_omit:(( = ) [])
+  |> Object.finish
+
+let show_envelope_codec =
+  let open Jsont in
+  Object.map ~kind:"oi_cache_show"
+    (fun _schema_version os_key package_pattern matches ->
+      (os_key, package_pattern, matches))
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
+  |> Object.mem "os_key" string ~enc:(fun (k, _, _) -> k)
+  |> Object.mem "package_pattern" string ~enc:(fun (_, p, _) -> p)
+  |> Object.mem "matches" (list show_match_codec) ~enc:(fun (_, _, m) -> m)
+  |> Object.finish
+
 let show_cmd =
   let run (c : Terms.common) package =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
+    let h =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
     with_d10 h @@ fun d10 ->
     let layers_dir = layers_root_s d10 in
-    if not (Sys.file_exists layers_dir) then begin
-      Fmt.pr "No layers found.@.";
-      exit 0
-    end;
     let cache_root = Eio.Path.native_exn d10.root in
-    (* Pull the entire per-os audit slice once and bucket it by layer
-       hash; cheaper than re-scanning the jsonl per matched layer.
-       [Solve_key]-tagged events have no real layer to point at and are
-       skipped here — they only show up in the registry manifest. *)
     let events_by_hash : (string, Oi.Audit.event list) Hashtbl.t =
       let tbl = Hashtbl.create 256 in
-      let all = Oi.Audit.read_all ~fs:h.fs ~cache_root ~os_key:d10.os_key in
-      List.iter
-        (fun (e : Oi.Audit.event) ->
-          match e.target with
-          | Solve_key _ -> ()
-          | Layer hash ->
-              let prev =
-                match Hashtbl.find_opt tbl hash with
-                | Some xs -> xs
-                | None -> []
-              in
-              Hashtbl.replace tbl hash (e :: prev))
-        all;
+      if Sys.file_exists layers_dir then begin
+        let all = Oi.Audit.read_all ~fs:h.fs ~cache_root ~os_key:d10.os_key in
+        List.iter
+          (fun (e : Oi.Audit.event) ->
+            match e.target with
+            | Solve_key _ -> ()
+            | Layer hash ->
+                let prev =
+                  match Hashtbl.find_opt tbl hash with
+                  | Some xs -> xs
+                  | None -> []
+                in
+                Hashtbl.replace tbl hash (e :: prev))
+          all
+      end;
       tbl
     in
     let events_for hash =
@@ -250,44 +330,73 @@ let show_cmd =
       | Some xs -> xs
       | None -> []
     in
-    let entries = Sys.readdir layers_dir |> Array.to_list in
-    let matched = ref 0 in
-    List.iter
-      (fun hash ->
-        let json =
-          Eio.Path.(d10.root / "layers" / d10.os_key / hash / "layer.json")
-        in
-        match D10.Layer.load_meta json with
-        | Some m
-          when String.length m.package >= String.length package
-               && String.sub m.package 0 (String.length package) = package ->
-            incr matched;
-            let status =
-              if m.exit_status = 0 then Fmt.str "%a" Oi.Style.ok_string "ok"
-              else
-                Fmt.str "%a (exit %d)" Oi.Style.error_string "failed"
-                  m.exit_status
+    let matches =
+      if not (Sys.file_exists layers_dir) then []
+      else
+        Sys.readdir layers_dir |> Array.to_list
+        |> List.filter_map (fun hash ->
+            let json =
+              Eio.Path.(d10.root / "layers" / d10.os_key / hash / "layer.json")
             in
-            let files = count_files (layers_dir / hash / "fs") in
-            let prov =
-              Oi.Provenance.load ~fs:h.fs ~cache_root ~os_key:d10.os_key ~hash
-            in
-            Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Layer" hash;
-            Fmt.pr "  package:  %s@," m.package;
-            Fmt.pr "  status:   %s@," status;
-            Fmt.pr "  created:  %s@," (pp_time m.created);
-            Fmt.pr "  deps:     %s@,"
-              (if m.deps = [] then "(none)" else String.concat ", " m.deps);
-            Fmt.pr "  hashes:   %s@,"
-              (if m.hashes = [] then "(none)"
-               else String.concat ", " (List.map short_hash m.hashes));
-            Fmt.pr "  files:    %d@," files;
-            (match prov with None -> () | Some p -> print_provenance p);
-            print_callers (events_for hash);
-            Fmt.pr "@,@]@."
-        | _ -> ())
-      entries;
-    if !matched = 0 then Fmt.pr "No layers found matching %S@." package
+            match D10.Layer.load_meta json with
+            | Some m
+              when String.length m.package >= String.length package
+                   && String.sub m.package 0 (String.length package) = package
+              ->
+                let files_count = count_files (layers_dir / hash / "fs") in
+                let provenance =
+                  Oi.Provenance.load ~fs:h.fs ~cache_root ~os_key:d10.os_key
+                    ~hash
+                in
+                Some
+                  {
+                    layer_hash = hash;
+                    meta = m;
+                    files_count;
+                    provenance;
+                    callers = events_for hash;
+                  }
+            | _ -> None)
+    in
+    match c.format with
+    | Json -> (
+        match
+          Jsont_bytesrw.encode_string ~format:Jsont.Indent show_envelope_codec
+            (d10.os_key, package, matches)
+        with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+    | Text ->
+        if matches = [] then Fmt.pr "No layers found matching %S@." package
+        else
+          List.iter
+            (fun (m : show_match) ->
+              let status =
+                if m.meta.exit_status = 0 then
+                  Fmt.str "%a" Oi.Style.ok_string "ok"
+                else
+                  Fmt.str "%a (exit %d)" Oi.Style.error_string "failed"
+                    m.meta.exit_status
+              in
+              Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Layer" m.layer_hash;
+              Fmt.pr "  package:  %s@," m.meta.package;
+              Fmt.pr "  status:   %s@," status;
+              Fmt.pr "  created:  %s@," (pp_time m.meta.created);
+              Fmt.pr "  deps:     %s@,"
+                (if m.meta.deps = [] then "(none)"
+                 else String.concat ", " m.meta.deps);
+              Fmt.pr "  hashes:   %s@,"
+                (if m.meta.hashes = [] then "(none)"
+                 else String.concat ", " (List.map short_hash m.meta.hashes));
+              Fmt.pr "  files:    %d@," m.files_count;
+              (match m.provenance with
+              | None -> ()
+              | Some p -> print_provenance p);
+              print_callers m.callers;
+              Fmt.pr "@,@]@.")
+            matches
   in
   let package =
     Arg.(
@@ -300,44 +409,92 @@ let show_cmd =
 
 (* -- binaries ------------------------------------------------------------ *)
 
+type binary_entry = { binary : string; pkg_name : string; pkg_version : string }
+
+let binary_entry_codec =
+  let open Jsont in
+  Object.map ~kind:"binary" (fun binary pkg_name pkg_version ->
+      { binary; pkg_name; pkg_version })
+  |> Object.mem "binary" string ~enc:(fun e -> e.binary)
+  |> Object.mem "package" string ~enc:(fun e -> e.pkg_name)
+  |> Object.mem "version" string ~enc:(fun e -> e.pkg_version)
+  |> Object.finish
+
+let binaries_envelope_codec =
+  let open Jsont in
+  Object.map ~kind:"oi_cache_binaries"
+    (fun _schema_version os_key index_present binaries ->
+      (os_key, index_present, binaries))
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
+  |> Object.mem "os_key" string ~enc:(fun (k, _, _) -> k)
+  |> Object.mem "index_present" bool ~enc:(fun (_, p, _) -> p)
+  |> Object.mem "binaries" (list binary_entry_codec) ~enc:(fun (_, _, b) -> b)
+  |> Object.finish
+
 let binaries_cmd =
   let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
+    let h =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
     with_d10 h @@ fun d10 ->
     let index_path = index_path_s d10 in
-    if not (Sys.file_exists index_path) then begin
-      Fmt.pr "No index found. Run %a first.@." Oi.Style.accent_string
-        "oi cache index";
-      exit 0
-    end;
-    let db = D10.Index.open_ ~path:index_path in
-    let bins = D10.Index.all_binaries db ~os_key:d10.os_key in
-    Fmt.pr "%a %s@.@." Oi.Style.header_string "Binaries" d10.os_key;
-    let rows =
-      List.map
-        (fun (binary, pkg_name, pkg_ver) ->
-          [
-            Tty.Span.text binary;
-            Tty.Span.text pkg_name;
-            Tty.Span.styled Oi.Style.dim pkg_ver;
-          ])
-        bins
+    let index_present = Sys.file_exists index_path in
+    let bins =
+      if index_present then begin
+        let db = D10.Index.open_ ~path:index_path in
+        let raw = D10.Index.all_binaries db ~os_key:d10.os_key in
+        D10.Index.close db;
+        List.map
+          (fun (binary, pkg_name, pkg_version) ->
+            { binary; pkg_name; pkg_version })
+          raw
+      end
+      else []
     in
-    let table =
-      Tty.Table.of_rows ~header_style:Oi.Style.header
-        [
-          Tty.Table.column "BINARY";
-          Tty.Table.column "PACKAGE";
-          Tty.Table.column "VERSION";
-        ]
-        rows
-    in
-    Tty.Table.pp Fmt.stdout table;
-    Fmt.pr "@.%a %d binar%s@." Oi.Style.header_string "Total:"
-      (List.length bins)
-      (if List.length bins = 1 then "y" else "ies");
-    D10.Index.close db
+    match c.format with
+    | Json -> (
+        match
+          Jsont_bytesrw.encode_string ~format:Jsont.Indent
+            binaries_envelope_codec
+            (d10.os_key, index_present, bins)
+        with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+    | Text ->
+        if not index_present then
+          Fmt.pr "No index found. Run %a first.@." Oi.Style.accent_string
+            "oi cache index"
+        else begin
+          Fmt.pr "%a %s@.@." Oi.Style.header_string "Binaries" d10.os_key;
+          let rows =
+            List.map
+              (fun b ->
+                [
+                  Tty.Span.text b.binary;
+                  Tty.Span.text b.pkg_name;
+                  Tty.Span.styled Oi.Style.dim b.pkg_version;
+                ])
+              bins
+          in
+          let table =
+            Tty.Table.of_rows ~header_style:Oi.Style.header
+              [
+                Tty.Table.column "BINARY";
+                Tty.Table.column "PACKAGE";
+                Tty.Table.column "VERSION";
+              ]
+              rows
+          in
+          Tty.Table.pp Fmt.stdout table;
+          Fmt.pr "@.%a %d binar%s@." Oi.Style.header_string "Total:"
+            (List.length bins)
+            (if List.length bins = 1 then "y" else "ies")
+        end
   in
   let info =
     Cmd.info "binaries" ~doc:"List binaries known to the layer index"
@@ -349,7 +506,10 @@ let binaries_cmd =
 let index_cmd =
   let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
+    let h =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
     with_d10 h @@ fun d10 ->
     let layers_root = Eio.Path.native_exn d10.root / "layers" in
     let index_path = layers_root / "index.db" in
@@ -414,24 +574,59 @@ let index_cmd =
 
 (* -- stats --------------------------------------------------------------- *)
 
+let stats_envelope_codec =
+  let open Jsont in
+  Object.map ~kind:"oi_cache_stats"
+    (fun _schema_version os_key index_present layers binaries files ->
+      (os_key, index_present, layers, binaries, files))
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
+  |> Object.mem "os_key" string ~enc:(fun (k, _, _, _, _) -> k)
+  |> Object.mem "index_present" bool ~enc:(fun (_, p, _, _, _) -> p)
+  |> Object.mem "layers" int ~enc:(fun (_, _, l, _, _) -> l)
+  |> Object.mem "binaries" int ~enc:(fun (_, _, _, b, _) -> b)
+  |> Object.mem "files" int ~enc:(fun (_, _, _, _, f) -> f)
+  |> Object.finish
+
 let stats_cmd =
   let run (c : Terms.common) =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
+    let h =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
     with_d10 h @@ fun d10 ->
     let index_path = index_path_s d10 in
-    if not (Sys.file_exists index_path) then begin
-      Fmt.pr "No index found. Run %a first.@." Oi.Style.accent_string
-        "oi cache index";
-      exit 0
-    end;
-    let db = D10.Index.open_ ~path:index_path in
-    let nl, nb, nf = D10.Index.stats db ~os_key:d10.os_key in
-    Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Stats" d10.os_key;
-    Fmt.pr "  layers:   %d@," nl;
-    Fmt.pr "  binaries: %d@," nb;
-    Fmt.pr "  files:    %d@,@]@." nf;
-    D10.Index.close db
+    let index_present = Sys.file_exists index_path in
+    let nl, nb, nf =
+      if index_present then begin
+        let db = D10.Index.open_ ~path:index_path in
+        let s = D10.Index.stats db ~os_key:d10.os_key in
+        D10.Index.close db;
+        s
+      end
+      else (0, 0, 0)
+    in
+    match c.format with
+    | Json -> (
+        match
+          Jsont_bytesrw.encode_string ~format:Jsont.Indent stats_envelope_codec
+            (d10.os_key, index_present, nl, nb, nf)
+        with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+    | Text ->
+        if not index_present then
+          Fmt.pr "No index found. Run %a first.@." Oi.Style.accent_string
+            "oi cache index"
+        else begin
+          Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Stats" d10.os_key;
+          Fmt.pr "  layers:   %d@," nl;
+          Fmt.pr "  binaries: %d@," nb;
+          Fmt.pr "  files:    %d@,@]@." nf
+        end
   in
   let info = Cmd.info "stats" ~doc:"Summarise the layer cache for this host" in
   Cmd.v info Term.(const run $ Terms.common)
@@ -464,10 +659,21 @@ let rec explain_node_codec =
           ~enc_omit:(( = ) [])
      |> Object.finish)
 
+let explain_envelope_codec =
+  let open Jsont in
+  Object.map ~kind:"oi_cache_explain" (fun _schema_version root -> root)
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
+  |> Object.mem "root" (Lazy.force explain_node_codec) ~enc:(fun n -> n)
+  |> Object.finish
+
 let explain_cmd =
-  let run (c : Terms.common) hash format =
+  let run (c : Terms.common) hash =
     Harness.run @@ fun ~sw env ->
-    let h = Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir in
+    let h =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
     with_d10 h @@ fun d10 ->
     let cache_root = Eio.Path.native_exn d10.root in
     let memo : (string, explain_node) Hashtbl.t = Hashtbl.create 64 in
@@ -494,12 +700,11 @@ let explain_cmd =
           n
     in
     let tree = walk hash in
-    match (format : Terms.format) with
+    match c.format with
     | Json -> (
         match
           Jsont_bytesrw.encode_string ~format:Jsont.Indent
-            (Lazy.force explain_node_codec)
-            tree
+            explain_envelope_codec tree
         with
         | Ok s ->
             print_string s;
@@ -544,7 +749,7 @@ let explain_cmd =
              cache show) for those.";
         ]
   in
-  Cmd.v info Term.(const run $ Terms.common $ hash $ Terms.format)
+  Cmd.v info Term.(const run $ Terms.common $ hash)
 
 (* -- group --------------------------------------------------------------- *)
 

@@ -22,6 +22,10 @@ type env = {
   data_dir : string;
       (** Resolved data directory — the [--data-dir] override if any, otherwise
           [$OI_DATA_DIR], [$XDG_DATA_HOME/oi], or [$HOME/.local/share/oi]. *)
+  format : Terms.format;
+      (** Output format requested by [--format]. Commands with structured output
+          dispatch on this; the harness itself uses it to switch {!Oi.Error}'s
+          envelope between human text and JSON. *)
   http_session : D10.Sysops.Http.session;
       (** Process-wide HTTP session, scoped to the {!run} switch. Every registry
           fetch the command pipeline performs — index probe, layer pulls, source
@@ -41,12 +45,20 @@ val run : (sw:Eio.Switch.t -> Eio_unix.Stdenv.base -> 'a) -> 'a
     line and exit 1; everything else prints a generic error and exits 1. *)
 
 val bootstrap :
-  sw:Eio.Switch.t -> ?data_dir:string -> Eio_unix.Stdenv.base -> string -> env
-(** [bootstrap ~sw ?data_dir env cache_dir] reads the proc-mgr / fs / clock /
-    stdio capabilities off [env], creates the [Sysops], detects the platform,
-    builds the cache rooted at [cache_dir], and opens the process-wide HTTP
-    session under [sw]. Validates {!Oi.Stamp} stamps on the cache, data, and
-    toolchain dirs and clears any whose schema is below the current build's
-    expectation. [data_dir] defaults to [$OI_DATA_DIR] / [$XDG_DATA_HOME/oi] /
-    [$HOME/.local/share/oi] when omitted; pass it from a [Terms.data_dir]
-    cmdliner term to honour [--data-dir]. *)
+  sw:Eio.Switch.t ->
+  ?data_dir:string ->
+  ?format:Terms.format ->
+  Eio_unix.Stdenv.base ->
+  string ->
+  env
+(** [bootstrap ~sw ?data_dir ?format env cache_dir] reads the proc-mgr / fs /
+    clock / stdio capabilities off [env], creates the [Sysops], detects the
+    platform, builds the cache rooted at [cache_dir], and opens the process-wide
+    HTTP session under [sw]. Validates {!Oi.Stamp} stamps on the cache, data,
+    and toolchain dirs and clears any whose schema is below the current build's
+    expectation.
+
+    [data_dir] defaults to [$OI_DATA_DIR] / [$XDG_DATA_HOME/oi] /
+    [$HOME/.local/share/oi]. [format] (default [Text]) selects how {!run}'s
+    exception handler renders failures: [Text] prints a coloured line on stderr,
+    [Json] emits an {!Oi.Error.codec} envelope on stdout. *)

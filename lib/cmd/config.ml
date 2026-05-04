@@ -232,6 +232,7 @@ let codec =
   let open Jsont in
   Object.map ~kind:"oi_config"
     (fun
+      _schema_version
       platform
       directories
       registry
@@ -249,6 +250,8 @@ let codec =
         base_overlays;
         project;
       })
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
   |> Object.mem "platform" platform_codec ~enc:(fun c -> c.platform)
   |> Object.mem "directories" directories_codec ~enc:(fun c -> c.directories)
   |> Object.mem "registry" registry_codec ~enc:(fun c -> c.registry)
@@ -490,18 +493,17 @@ let render_json c =
   | Error e -> Oi.Error.config_error "json encode failed: %s" e
 
 let cmd =
-  let run (c : Terms.common) skip_local format =
+  let run (c : Terms.common) skip_local =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; os_key; cache; _ } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let view =
       gather ~fs ~cache ~os_key ~data_dir:c.data_dir ~cache_dir:c.cache_dir
         ~skip_local
     in
-    match (format : Terms.format) with
-    | Text -> render_text view
-    | Json -> render_json view
+    match c.format with Text -> render_text view | Json -> render_json view
   in
   let info =
     Cmd.info "config" ~doc:"Show oi's view of this machine and project"
@@ -552,4 +554,4 @@ let cmd =
                above and install unconditionally." );
         ]
   in
-  Cmd.v info Term.(const run $ Terms.common $ Terms.skip_local $ Terms.format)
+  Cmd.v info Term.(const run $ Terms.common $ Terms.skip_local)

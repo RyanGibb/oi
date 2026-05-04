@@ -16,28 +16,31 @@ val data_dir : string Cmdliner.Term.t
 val cache_dir : string Cmdliner.Term.t
 (** [--cache-dir DIR]. Honours [$OI_CACHE_DIR] / [$XDG_CACHE_HOME]. *)
 
+type format =
+  | Text
+  | Json  (** Output formats supported by every harness-using command. *)
+
 (** {1 Shared "global" options} *)
 
-type common = { cache_dir : string; data_dir : string }
+type common = { cache_dir : string; data_dir : string; format : format }
 (** Resolved values of the option set every harness-using command shares:
-    [--cache-dir], [--data-dir], plus the log-setup side effects ([--verbosity],
-    [--color], [--verbose-http]). Apply via {!common}. *)
+    [--cache-dir], [--data-dir], [--format], plus the log-setup side effects
+    ([--verbosity], [--color], [--verbose-http]). Apply via {!common}. *)
 
 val common : common Cmdliner.Term.t
 (** Single Cmdliner term commands plug in once instead of stacking
-    [Terms.log $ Terms.cache_dir $ Terms.data_dir]. New genuinely-global options
-    should be added here so every command picks them up uniformly. *)
-
-type format =
-  | Text
-  | Json  (** Output formats supported by commands that emit structured data. *)
-
-val format : format Cmdliner.Term.t
-(** [--format=text|json] (default [text]). Adopt this on any command whose
-    output an agent might want to parse mechanically. *)
+    [Terms.log $ Terms.cache_dir $ Terms.data_dir $ Terms.format_term]. New
+    genuinely-global options should be added here so every command picks them up
+    uniformly. *)
 
 val refresh : bool Cmdliner.Term.t
 (** [--refresh] flag: force re-fetch even within the 24h freshness window. *)
+
+val locked : bool Cmdliner.Term.t
+(** [--locked] flag: best-effort offline mode. Implies [--use-registry=never]
+    and clears [--refresh]. Intended for agents and CI jobs that pre-warmed the
+    cache (typically via a [oi source]-produced bundle) and want any cache miss
+    to fail fast rather than silently fetch. *)
 
 val skip_local : bool Cmdliner.Term.t
 (** [--skip-local] flag: do not probe the cwd for project files ($(b,*.opam),

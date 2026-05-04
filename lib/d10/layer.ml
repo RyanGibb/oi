@@ -59,6 +59,8 @@ let meta_jsont : meta Jsont.t =
   |> Object.mem "created" number ~enc:(fun i -> i.created)
   |> Object.finish
 
+let meta_codec = meta_jsont
+
 let save_meta path meta =
   let dir = Eio.Path.split path |> Option.map fst in
   Option.iter (Eio.Path.mkdirs ~exists_ok:true ~perm:0o755) dir;

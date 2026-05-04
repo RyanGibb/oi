@@ -17,8 +17,28 @@ let version =
   | Some v -> Build_info.V1.Version.to_string v
   | None -> "n/a"
 
+(* Stable exit code surface, mirroring opam where the meaning matches.
+   Kept in sync with [Oi.Error.code]; the kind names come from
+   [Oi.Error.kind_string] for the "kind" field of the JSON envelope. *)
+let exits =
+  let i ~doc code = Cmd.Exit.info ~doc code in
+  [
+    i ~doc:"on success." 0;
+    i ~doc:"on a generic / unspecified failure." 1;
+    i ~doc:"on a system error (out of disk, permission, ...)." 5;
+    i ~doc:"on a configuration error (bad arguments, missing project, ...)." 10;
+    i ~doc:"when the solver could not find a satisfying solution." 20;
+    i ~doc:"on a fetch / sync failure (network, unavailable archive)." 30;
+    i ~doc:"when a package's build commands failed." 31;
+    i ~doc:"when one or more system depexts are not installed." 50;
+    i ~doc:"when a package, binary, or layer was not found." 65;
+    i ~doc:"on an internal error (bug); please report." 99;
+    i ~doc:"on argument parsing errors." 124;
+    i ~doc:"when interrupted (SIGINT/SIGTERM)." 130;
+  ]
+
 let info =
-  Cmd.info "oi" ~version ~doc:"A fast, stateless OCaml package manager"
+  Cmd.info "oi" ~version ~exits ~doc:"A fast, stateless OCaml package manager"
     ~man:
       [
         `S Manpage.s_description;
@@ -82,43 +102,36 @@ let info =
            sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
            in as preprocessors automatically. $(b,oi run -vv SCRIPT.ml) prints \
            the generated dune project.";
+        `S "PROJECT LAYOUT";
+        `P
+          "$(b,oi build) installs the project's deps and dev tools into \
+           $(b,_oi/) under the project root. Activate the env per shell:";
+        `Pre
+          "  eval \"\\$(oi env)\"          # one shell\n\
+          \  oi exec -- CMD              # one command\n\
+          \  direnv allow                # auto-activate (if direnv installed)";
+        `P
+          "$(b,_oi/) is rebuildable. Add it to $(b,.gitignore). Delete it to \
+           force a fresh sync.";
         `S "AUTOMATION";
         `P
-          "Non-interactive by default. Idempotent: repeat invocations hit \
-           caches. Non-zero exit on failure (see $(b,EXIT STATUS)).";
-        `I
-          ( "$(b,Discover)",
-            "$(b,oi CMD --help=plain), $(b,oi config), $(b,oi search PATTERN), \
-             $(b,oi show TARGET)." );
-        `I
-          ( "$(b,Plan)",
-            "$(b,-n) on $(b,oi run) / $(b,oi build) prints the plan and exits. \
-             $(b,oi show --only-depexts TARGET) emits a depext list for \
-             $(b,apt)/$(b,dnf)." );
-        `I
-          ( "$(b,JSON)",
-            "$(b,--format=json) on $(b,oi config) and $(b,oi cache explain \
-             HASH). snake_case keys; optional fields omitted; stable across \
-             patch releases." );
-        `I
-          ( "$(b,Quiet)",
-            "$(b,--color=never), $(b,-q), \
-             $(b,--verbosity=quiet|error|warning|info|debug)." );
-        `I
-          ( "$(b,Reproduce)",
-            "Pin the build with $(b,--toolchain), $(b,--with-repo), \
-             $(b,--registry), $(b,--use-registry). $(b,oi source TARGET -o \
-             DIR) writes a self-contained bundle stamped with the reporepo \
-             sha." );
-        `I
-          ( "$(b,Sandbox)",
-            "$(b,--cache-dir) / $(b,--data-dir) confine state to a per-task \
-             dir. $(b,--use-registry=never) goes offline. $(b,--skip-local) \
-             ignores the cwd project." );
-        `I
-          ( "$(b,Upgrades)",
-            "Stale caches are cleared automatically when on-disk schemas \
-             change. No defensive $(b,oi clean) needed." );
+          "Non-interactive and idempotent with a non-zero exit on failure (see \
+           $(b,EXIT STATUS)). $(b,oi self version --format=json) reports the \
+           schemas a script can parse.";
+        `Pre
+          "  $(b,Discover)   oi CMD --help=plain, oi config, oi search \
+           PATTERN, oi show TARGET\n\
+          \  $(b,Plan)       -n on run/build; oi show --only-depexts TARGET\n\
+          \  $(b,JSON)       --format=json on every command (stable \
+           schema_version envelope, structured errors)\n\
+          \  $(b,Quiet)      --color=never, -q, \
+           --verbosity=quiet|error|warning|info|debug\n\
+          \  $(b,Reproduce)  --toolchain, --with-repo, --registry, \
+           --use-registry; oi source TARGET -o DIR\n\
+          \  $(b,Sandbox)    --cache-dir, --data-dir, --use-registry=never, \
+           --skip-local, --locked\n\
+          \  $(b,Upgrades)   schema-mismatched caches self-clear; no defensive \
+           oi clean";
         `S Manpage.s_environment;
         `P
           "$(b,oi) uses two directories. The data directory holds long-lived \

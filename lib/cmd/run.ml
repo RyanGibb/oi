@@ -2,8 +2,8 @@ open Cmdliner
 
 let ( / ) = Filename.concat
 
-let run_impl (c : Terms.common) refresh skip_local dry_run registry use_registry
-    toolchain_override target with_deps with_repos jobs args =
+let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
+    use_registry toolchain_override target with_deps with_repos jobs args =
   Harness.run @@ fun ~sw env ->
   let {
     Harness.proc_mgr;
@@ -16,9 +16,13 @@ let run_impl (c : Terms.common) refresh skip_local dry_run registry use_registry
     http_session;
     _;
   } =
-    Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env c.cache_dir
   in
   let data_dir = c.data_dir in
+  (* [--locked] forces offline-friendly defaults so an agent that
+     pre-warmed the cache fails fast on any cache miss. *)
+  let refresh = refresh && not locked in
+  let use_registry = if locked then Oi.Use_registry.Never else use_registry in
   let dune_cache_root = Oi.Cache.dune_root cache in
   let cache_root = Oi.Cache.root_s cache in
   (* [TARGET] and every [--with] token accept the
@@ -805,8 +809,8 @@ let info_oix =
 
 let term ~skip_local =
   Term.(
-    const run_impl $ Terms.common $ Terms.refresh $ skip_local $ dry_run
-    $ Terms.registry $ Terms.use_registry $ Terms.toolchain $ target
+    const run_impl $ Terms.common $ Terms.refresh $ Terms.locked $ skip_local
+    $ dry_run $ Terms.registry $ Terms.use_registry $ Terms.toolchain $ target
     $ Terms.with_deps $ Terms.with_repos $ Terms.jobs $ args)
 
 let cmd = Cmd.v info_run (term ~skip_local:Terms.skip_local)

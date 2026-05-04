@@ -103,7 +103,8 @@ let cmd =
   let run (c : Terms.common) refresh test_mode all distro src_context output =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; sys; platform; cache; _ } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let data_dir = c.data_dir in
     if test_mode && all then

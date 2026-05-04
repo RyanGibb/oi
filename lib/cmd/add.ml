@@ -20,7 +20,8 @@ let cmd =
       http_session;
       _;
     } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let data_dir = c.data_dir in
     let cwd, _ = Workspace.resolved_cwd fs in

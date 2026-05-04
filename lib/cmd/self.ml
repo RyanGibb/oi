@@ -44,6 +44,123 @@ let install_binary ~fs ~src ~dst =
   Unix.chmod tmp 0o755;
   Unix.rename tmp dst
 
+(* -- version ------------------------------------------------------------ *)
+
+(* What an agent needs to know about the binary it just invoked: the
+   release/git version, the platform it was built for and runs against,
+   and the schema versions it can read/write. Wiring all of those into
+   one document makes [oi self version --format=json] sufficient as a
+   compatibility probe — no follow-up calls to figure out what to expect
+   from the rest of the JSON surface. *)
+
+type version_info = {
+  oi_version : string;
+  os_key : string;
+  schema_json : string;
+  schema_cache : int;
+  schema_data : int;
+  schema_toolchains : int;
+  schema_solver_cache : string;
+}
+
+let oi_version () =
+  match Build_info.V1.version () with
+  | Some v -> Build_info.V1.Version.to_string v
+  | None -> "n/a"
+
+let schemas_codec =
+  let open Jsont in
+  Object.map ~kind:"schemas" (fun json cache data toolchains solver_cache ->
+      (json, cache, data, toolchains, solver_cache))
+  |> Object.mem "json" string ~enc:(fun (j, _, _, _, _) -> j)
+  |> Object.mem "cache" int ~enc:(fun (_, c, _, _, _) -> c)
+  |> Object.mem "data" int ~enc:(fun (_, _, d, _, _) -> d)
+  |> Object.mem "toolchains" int ~enc:(fun (_, _, _, t, _) -> t)
+  |> Object.mem "solver_cache" string ~enc:(fun (_, _, _, _, s) -> s)
+  |> Object.finish
+
+let version_codec =
+  let open Jsont in
+  Object.map ~kind:"oi_self_version"
+    (fun _schema_version oi_version os_key schemas ->
+      let ( schema_json,
+            schema_cache,
+            schema_data,
+            schema_toolchains,
+            schema_solver_cache ) =
+        schemas
+      in
+      {
+        oi_version;
+        os_key;
+        schema_json;
+        schema_cache;
+        schema_data;
+        schema_toolchains;
+        schema_solver_cache;
+      })
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
+  |> Object.mem "oi_version" string ~enc:(fun v -> v.oi_version)
+  |> Object.mem "os_key" string ~enc:(fun v -> v.os_key)
+  |> Object.mem "schemas" schemas_codec ~enc:(fun v ->
+      ( v.schema_json,
+        v.schema_cache,
+        v.schema_data,
+        v.schema_toolchains,
+        v.schema_solver_cache ))
+  |> Object.finish
+
+let version_cmd =
+  let run (c : Terms.common) =
+    Harness.run @@ fun ~sw env ->
+    let { Harness.os_key; _ } =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
+    let info =
+      {
+        oi_version = oi_version ();
+        os_key;
+        schema_json = Oi.Stamp.json_schema_version;
+        schema_cache = Oi.Stamp.cache_schema;
+        schema_data = Oi.Stamp.data_schema;
+        schema_toolchains = Oi.Stamp.toolchains_schema;
+        schema_solver_cache = Oi.Stamp.solver_cache_schema;
+      }
+    in
+    match c.format with
+    | Json -> (
+        match
+          Jsont_bytesrw.encode_string ~format:Jsont.Indent version_codec info
+        with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+    | Text ->
+        Fmt.pr "oi %s (%s)@." info.oi_version info.os_key;
+        Fmt.pr
+          "schemas: json=%s cache=%d data=%d toolchains=%d solver_cache=%s@."
+          info.schema_json info.schema_cache info.schema_data
+          info.schema_toolchains info.schema_solver_cache
+  in
+  let info =
+    Cmd.info "version" ~doc:"Print oi version, platform, and JSON schemas"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Identify the running $(b,oi) and what it can read/write. With \
+             $(b,--format=json), emits the version, host $(b,os_key), and \
+             every schema constant ([oi]'s wire-format JSON, plus on-disk \
+             cache/data/toolchain/solver-cache schemas). Agents should call \
+             this first to verify compatibility before parsing other \
+             $(b,--format=json) output.";
+        ]
+  in
+  Cmd.v info Term.(const run $ Terms.common)
+
 let where_cmd =
   let run () =
     let exe = Oi.Selfexe.current () in
@@ -87,7 +204,8 @@ let update_cmd =
       http_session;
       _;
     } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let data_dir = c.data_dir in
     let target = Oi.Selfexe.resolve_target () in
@@ -223,4 +341,4 @@ let cmd =
              ($(b,oi self update)) the currently-running $(b,oi) install.";
         ]
   in
-  Cmd.group info [ where_cmd; update_cmd ]
+  Cmd.group info [ version_cmd; where_cmd; update_cmd ]

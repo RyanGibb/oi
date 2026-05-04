@@ -332,7 +332,8 @@ let cmd =
       _jobs toolchain_override targets output =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; sys; platform; cache; _ } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let data_dir = c.data_dir in
     if output = "" then Oi.Error.config_error "oi source: -o DIR is required";

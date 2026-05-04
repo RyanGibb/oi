@@ -5,6 +5,7 @@
   d10
   osrel
   cmdliner
+  dune-build-info
   fmt
   fmt.tty
   fmt.cli

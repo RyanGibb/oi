@@ -81,7 +81,8 @@ let cmd =
       opam_root pins dry_run target =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; clock; sys; os_key; cache; _ } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let data_dir = c.data_dir in
     let bulk_flags =

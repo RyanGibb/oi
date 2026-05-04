@@ -160,7 +160,8 @@ let cmd =
       cache;
       _;
     } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir env c.cache_dir
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
     in
     let data_dir = c.data_dir in
     (* Accept [@handle/PATTERN] as shorthand for [--overlay=handle PATTERN],
@@ -314,12 +315,63 @@ let cmd =
                   (OpamPackage.Version.of_string a.pkg_version))
         displayed
     in
+    let short_hash = function
+      | None -> ""
+      | Some h -> String.sub h 0 (min 12 (String.length h))
+    in
+    (match c.format with
+    | Json ->
+        let kind_string = function `Bin -> "bin" | `Pkg -> "pkg" in
+        let row_codec =
+          let open Jsont in
+          Object.map ~kind:"search_row"
+            (fun kind overlay binary pkg_name pkg_version state hash ->
+              (kind, overlay, binary, pkg_name, pkg_version, state, hash))
+          |> Object.mem "kind" string ~enc:(fun (k, _, _, _, _, _, _) -> k)
+          |> Object.mem "overlay" string ~enc:(fun (_, o, _, _, _, _, _) -> o)
+          |> Object.opt_mem "binary" string ~enc:(fun (_, _, b, _, _, _, _) ->
+              b)
+          |> Object.mem "package" string ~enc:(fun (_, _, _, p, _, _, _) -> p)
+          |> Object.mem "version" string ~enc:(fun (_, _, _, _, v, _, _) -> v)
+          |> Object.mem "state" string ~enc:(fun (_, _, _, _, _, s, _) -> s)
+          |> Object.opt_mem "hash" string ~enc:(fun (_, _, _, _, _, _, h) -> h)
+          |> Object.finish
+        in
+        let envelope_codec =
+          let open Jsont in
+          Object.map ~kind:"oi_search" (fun _schema_version pattern matches ->
+              (pattern, matches))
+          |> Object.mem "schema_version" string ~enc:(fun _ ->
+              Oi.Stamp.json_schema_version)
+          |> Object.mem "pattern" string ~enc:(fun (p, _) -> p)
+          |> Object.mem "matches" (list row_codec) ~enc:(fun (_, m) -> m)
+          |> Object.finish
+        in
+        let rows =
+          List.map
+            (fun r ->
+              ( kind_string r.kind,
+                r.overlay,
+                r.binary,
+                r.pkg_name,
+                r.pkg_version,
+                state_label r.state,
+                r.hash ))
+            sorted
+        in
+        (match
+           Jsont_bytesrw.encode_string ~format:Jsont.Indent envelope_codec
+             (pattern, rows)
+         with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e);
+        D10.Index.close db;
+        exit 0
+    | Text -> ());
     if sorted = [] then Fmt.pr "No matches for %s@." pattern
     else begin
-      let short_hash = function
-        | None -> ""
-        | Some h -> String.sub h 0 (min 12 (String.length h))
-      in
       let row_spans r =
         let kind_s = match r.kind with `Bin -> "bin" | `Pkg -> "pkg" in
         let nv =

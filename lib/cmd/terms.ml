@@ -61,22 +61,6 @@ let data_dir =
 
 let cache_dir = Xdg_eio.Cmd.cache_term Workspace.app_name
 
-(* -- Shared "global" options ------------------------------------------- *)
-
-(* Cmdliner subcommand groups don't have real top-level flags: every flag
-   is per-command. [common] is the workaround — one bundle every harness-
-   using command consumes, so [--cache-dir], [--data-dir], [--verbosity],
-   [--color], and [--verbose-http] always appear together with the same
-   semantics. Adding a new "should be global" flag means adding it here
-   once; the type-checker fans the change out across every command. *)
-
-type common = { cache_dir : string; data_dir : string }
-
-let common =
-  Term.(
-    const (fun () cache_dir data_dir -> { cache_dir; data_dir })
-    $ log $ cache_dir $ data_dir)
-
 type format = Text | Json
 
 let format_conv =
@@ -91,11 +75,33 @@ let format_conv =
   in
   Arg.conv ~docv:"FORMAT" (parser, printer)
 
-let format =
+let format_term =
   Arg.(
     value & opt format_conv Text
-    & info ~docv:"FORMAT" ~doc:"Output format ($(b,text) or $(b,json))."
+    & info ~docv:"FORMAT"
+        ~doc:
+          "Output format. $(b,text) (default) is human-friendly. $(b,json) \
+           switches both successful structured output (where supported) and \
+           any error to a stable JSON envelope — see $(b,oi --help) AUTOMATION \
+           and EXIT STATUS sections."
         [ "format" ])
+
+(* -- Shared "global" options ------------------------------------------- *)
+
+(* Cmdliner subcommand groups don't have real top-level flags: every flag
+   is per-command. [common] is the workaround — one bundle every harness-
+   using command consumes, so [--cache-dir], [--data-dir], [--format],
+   [--verbosity], [--color], and [--verbose-http] always appear together
+   with the same semantics. Adding a new "should be global" flag means
+   adding it here once; the type-checker fans the change out across
+   every command. *)
+
+type common = { cache_dir : string; data_dir : string; format : format }
+
+let common =
+  Term.(
+    const (fun () cache_dir data_dir format -> { cache_dir; data_dir; format })
+    $ log $ cache_dir $ data_dir $ format_term)
 
 let refresh =
   Arg.(
@@ -105,6 +111,19 @@ let refresh =
           "Re-fetch repos, pinned sources, and git URLs even if fresh. Caches \
            refresh on their own after 24h."
         [ "refresh" ])
+
+let locked =
+  Arg.(
+    value & flag
+    & info
+        ~doc:
+          "Refuse anything that would require fetching from the registry or \
+           refreshing the reporepo. Pairs with $(b,oi source TARGET -o DIR) \
+           bundles: agents and CI jobs that pre-warmed the cache should run \
+           with $(b,--locked) so a missing layer fails fast instead of \
+           silently downloading. Implies $(b,--use-registry=never) and \
+           overrides $(b,--refresh)."
+        [ "locked" ])
 
 let skip_local =
   Arg.(

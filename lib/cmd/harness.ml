@@ -9,8 +9,15 @@ type env = {
   os_key : string;
   cache : Oi.Cache.t;
   data_dir : string;
+  format : Terms.format;
   http_session : D10.Sysops.Http.session;
 }
+
+(* Set by {!bootstrap} from [c.format] before the command body runs;
+   read by {!with_error_handling} when an exception bubbles out. The
+   ref defaults to [Text] so cmdliner-time errors (before bootstrap)
+   still print human text. *)
+let error_format : Terms.format ref = ref Terms.Text
 
 (* Mirror of [Terms.data_dir]'s env resolution for callers that don't
    thread a [--data-dir] flag (e.g. [oi cache *]). *)
@@ -43,6 +50,26 @@ let rec is_interrupt = function
   | Eio.Exn.Io _ -> false
   | _ -> false
 
+(* Lift any non-interrupt exception into an [Oi.Error.t] so the same
+   {!Oi.Error.code} / {!Oi.Error.to_json} pipeline handles every exit
+   path. [Failure] becomes a generic Msg; everything else (an
+   unexpected internal exception) becomes a generic Msg too — the
+   shape we want is "an error occurred", with the printed text
+   already covered by [pp_one_exn]. *)
+let error_of_exn = function
+  | Oi.Error.E e -> e
+  | Failure msg -> Oi.Error.Msg msg
+  | exn -> Oi.Error.Msg (Printexc.to_string exn)
+
+let exit_for_exn exn =
+  match !error_format with
+  | Json ->
+      print_string (Oi.Error.to_json (error_of_exn exn));
+      exit (Oi.Error.code (error_of_exn exn))
+  | Text ->
+      Fmt.epr "%a@." pp_one_exn exn;
+      exit (Oi.Error.code (error_of_exn exn))
+
 let with_error_handling f =
   try f () with
   | exn when is_interrupt exn ->
@@ -52,12 +79,21 @@ let with_error_handling f =
     ->
       Fmt.epr "Interrupted.@.";
       exit 130
-  | (Oi.Error.E _ | Failure _) as exn ->
-      Fmt.epr "%a@." pp_one_exn exn;
-      exit 1
-  | Eio.Exn.Multiple exns ->
-      List.iter (fun (e, _bt) -> Fmt.epr "%a@." pp_one_exn e) exns;
-      exit 1
+  | (Oi.Error.E _ | Failure _) as exn -> exit_for_exn exn
+  | Eio.Exn.Multiple exns -> (
+      match !error_format with
+      | Json ->
+          (* Pick the first non-interrupt as the representative error
+             for the JSON envelope; the others would each need their
+             own envelope, which an agent doesn't expect. *)
+          let exn =
+            try fst (List.find (fun (e, _) -> not (is_interrupt e)) exns)
+            with Not_found -> Failure "multiple errors"
+          in
+          exit_for_exn exn
+      | Text ->
+          List.iter (fun (e, _bt) -> Fmt.epr "%a@." pp_one_exn e) exns;
+          exit 1)
 
 (* Forced to the POSIX backend rather than [Eio_main.run] so builds under
    Linux don't pick up [eio_linux] / io_uring — we want the same syscall
@@ -74,7 +110,12 @@ let with_eio_root f =
 
 let run f = with_error_handling @@ fun () -> with_eio_root f
 
-let bootstrap ~sw ?data_dir (env : Eio_unix.Stdenv.base) cache_dir =
+let bootstrap ~sw ?data_dir ?(format = Terms.Text) (env : Eio_unix.Stdenv.base)
+    cache_dir =
+  (* Capture format first so any later step in this function (stamp
+     ensure, opam init, …) raising an exception is reported in the
+     requested form. *)
+  error_format := format;
   let proc_mgr = Eio.Stdenv.process_mgr env in
   let fs = Eio.Stdenv.fs env in
   let clock = Eio.Stdenv.clock env in
@@ -95,4 +136,15 @@ let bootstrap ~sw ?data_dir (env : Eio_unix.Stdenv.base) cache_dir =
      pool lives for the whole CLI invocation — every command body that
      fetches from a registry shares it, no per-command setup cost. *)
   let http_session = D10.Sysops.Http.with_session ~sw sys (fun s -> s) in
-  { proc_mgr; fs; clock; sys; platform; os_key; cache; data_dir; http_session }
+  {
+    proc_mgr;
+    fs;
+    clock;
+    sys;
+    platform;
+    os_key;
+    cache;
+    data_dir;
+    format;
+    http_session;
+  }
