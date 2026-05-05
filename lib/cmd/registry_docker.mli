@@ -18,11 +18,13 @@ val dockerfile_one_distro :
   ?overlay_depexts:string list -> Distro.t -> Dockerfile.t
 (** Per-distro build image. Installs the generic build toolchain (compilers,
     headers, [curl]) together with [overlay_depexts] (the union of [depexts:]
-    declared by every overlay's [x-root-packages] evaluated for this distro). It
-    then fetches the latest statically linked [oi-linux-<arch>] and
-    [oix-linux-<arch>] from the [oi] GitHub releases page and sets [/work] as
-    the working directory. No [CMD] is set: the compose file drives the
-    build+export steps. *)
+    declared across every reporepo handle: solved root closures for handles with
+    [x-root-packages] / [x-oi-toolchain-roots], and every package in the
+    overlay's clone for handles that declare neither — see
+    {!Build.compute_overlay_depexts_per_distro}). It then fetches the latest
+    statically linked [oi-linux-<arch>] and [oix-linux-<arch>] from the [oi]
+    GitHub releases page and sets [/work] as the working directory. No [CMD] is
+    set: the compose file drives the build+export steps. *)
 
 val dockerfile_project :
   ?overlay_depexts:string list ->

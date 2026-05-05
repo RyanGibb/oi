@@ -140,12 +140,34 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
 
 (* -- Overlay-wide depext helpers ---------------------------------------- *)
 
-(* Walk the reporepo and return the list of [(handle, root_groups)]
-   pairs that should drive depext computation for [oi docker --all].
-   Excludes the [default] handle (the full opam-repository), toolchain
-   definitions ([x-oi-toolchain-name] set — they're metadata views,
-   not buildable), and any overlay without [x-root-packages]. *)
-let overlay_root_targets reporepo_entries =
+(* Driver for [oi docker --all]'s depext pre-pass. One per reporepo
+   handle, in priority order:
+
+   - [Solve_groups]: the entry declares [x-root-packages] (overlay roots)
+     or [x-oi-toolchain-roots] (toolchain definition). Each group is
+     fed to the solver under the toolchain attached to the handle, and
+     the solved closure drives depext computation. Toolchain handles
+     contribute compiler-stack depexts (libgmp-dev for [zarith.+ox],
+     etc.) that the host overlay's roots transitively depend on but
+     don't always pull in directly.
+
+   - [Walk_clone]: a non-toolchain overlay with neither declaration but
+     a non-empty clone (i.e. [url <> ""]). [oi build --all] handles this
+     case by fanning out to "every package in the overlay's clone"
+     ([build.ml:691-703]); we mirror that here by treating every package
+     in [v1/<handle>/packages/] as its own depext source — no solve.
+     Without this, an overlay like [@oxcaml] (no [x-root-packages] set)
+     contributes zero depexts to the docker pre-install, and the only
+     thing covering the gap is [registry_docker.ml]'s hardcoded
+     [extra_depexts]. *)
+type overlay_input =
+  | Solve_groups of { handle : string; groups : string list list }
+  | Walk_clone of { handle : string }
+
+let overlay_input_handle = function
+  | Solve_groups { handle; _ } | Walk_clone { handle } -> handle
+
+let overlay_inputs reporepo_entries =
   reporepo_entries
   |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
   |> List.sort_uniq String.compare
@@ -153,9 +175,33 @@ let overlay_root_targets reporepo_entries =
       if h = "default" then None
       else
         match Oi.Source.Reporepo.latest reporepo_entries ~handle:h with
-        | Some e when e.toolchain_name = None && e.root_packages <> [] ->
-            Some (h, e.root_packages)
+        | None -> None
+        | Some e when e.root_packages <> [] ->
+            Some (Solve_groups { handle = h; groups = e.root_packages })
+        | Some e when e.toolchain_roots <> [] ->
+            Some (Solve_groups { handle = h; groups = e.toolchain_roots })
+        | Some e when e.toolchain_name = None && e.url <> "" ->
+            Some (Walk_clone { handle = h })
         | _ -> None)
+
+(* Enumerate every [name/name.version/opam] under [pkgs_dir] as
+   [OpamPackage.t]. Used by the [Walk_clone] arm of {!overlay_inputs}:
+   no solving, just "anything the overlay ships could land in the
+   container, so its depexts must be installed up front". *)
+let all_packages_in_dir pkgs_dir =
+  if not (Sys.file_exists pkgs_dir) then []
+  else
+    Sys.readdir pkgs_dir |> Array.to_list
+    |> List.concat_map (fun name ->
+        let name_dir = pkgs_dir / name in
+        if (not (Sys.file_exists name_dir)) || not (Sys.is_directory name_dir)
+        then []
+        else
+          Sys.readdir name_dir |> Array.to_list
+          |> List.filter_map (fun pv ->
+              let opam_path = name_dir / pv / "opam" in
+              if not (Sys.file_exists opam_path) then None
+              else try Some (OpamPackage.of_string pv) with _ -> None))
 
 (* Resolve the effective [packages_dirs] for a single overlay handle:
    its own materialised v1/ tree plus every overlay it depends on (via
@@ -191,12 +237,21 @@ let packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle =
   in
   dedup (overlay_dirs @ base_packages_dirs)
 
-(* Solve every overlay's [x-root-packages] under [host_conf] and return
-   the resulting [(pkg_dirs, solved)] pairs. Solves happen once and are
-   shared across every per-platform depext evaluation, since every
-   target only differs in opam filter variables (os, os-family, …) —
-   those don't influence the solver picks here. *)
-let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
+(* Gather the [(pkg_dirs, packages)] pairs that drive depext
+   computation. Each pair is a closure over which {!Oi.Depexts.compute_for_conf}
+   is later evaluated under each distro's filter context.
+
+   - [Solve_groups]: each declared root group is fed to the solver
+     under the handle's toolchain. Solves run once under [host_conf]
+     and are reused across every per-distro depext evaluation, since
+     opam filter variables (os, os-family, …) don't influence the
+     solver picks here.
+   - [Walk_clone]: every [opam] file in [v1/<handle>/packages/] is
+     listed verbatim — no solve. The overlay's [packages_dirs] is still
+     the toolchain-aware closure from {!packages_dirs_for_overlay} so
+     {!Oi.Solver.load_opam} resolves each version against the right
+     tree (overlay first, then base). *)
+let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
     ?override ?handle_filter () =
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   let base_packages_dirs =
@@ -206,52 +261,105 @@ let solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
   Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
     ~url:(Terms.reporepo_url ());
   let reporepo_entries = try Oi.Source.Reporepo.load ~path with _ -> [] in
-  let targets =
-    let all = overlay_root_targets reporepo_entries in
+  let inputs =
+    let all = overlay_inputs reporepo_entries in
     match handle_filter with
     | None -> all
-    | Some h -> List.filter (fun (handle, _) -> handle = h) all
+    | Some h -> List.filter (fun i -> overlay_input_handle i = h) all
   in
   let cache_root = Oi.Cache.root_s cache in
   let build_prefix = cache_root / "build" / "prefix" in
+  (* For toolchain-defining handles ([toolchain-oxcaml],
+     [toolchain-ocaml-5-3], …) the entry carries its own
+     [x-oi-toolchain-name], but [Pipeline.toolchain_names_of_handle]
+     only consults [x-oi-toolchain] (use-site) and the
+     [Toolchain.depends_of] reverse map (where the lookup key is the
+     CLI name, not the reporepo handle). Without this fallback, those
+     handles resolve to the default toolchain and the solve fails with
+     compiler-version conflicts. *)
   let toolchain_for handle =
+    let auto_override =
+      match override with
+      | Some _ -> override
+      | None -> (
+          match Oi.Source.Reporepo.latest reporepo_entries ~handle with
+          | Some e when e.toolchain_name <> None -> e.toolchain_name
+          | _ -> None)
+    in
     Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf:host_conf
-      ~install:false ~override ~handles:[ handle ] ()
+      ~install:false ~override:auto_override ~handles:[ handle ] ()
+  in
+  let pkg_dirs_for handle =
+    packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle
   in
   List.concat_map
-    (fun (handle, groups) ->
-      let pkg_dirs =
-        packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle
-      in
-      let toolchain = toolchain_for handle in
-      let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain host_conf in
-      List.filter_map
-        (fun group ->
-          let ctx =
-            Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
-              ~conf ?toolchain:tc_ctx ()
-          in
-          let items = List.map Target.parse_pkg_target group in
-          let names = List.map fst items in
-          let constraints =
-            List.fold_left
-              (fun acc (name, c) ->
-                match c with
-                | None -> acc
-                | Some c -> OpamPackage.Name.Map.add name c acc)
-              OpamPackage.Name.Map.empty items
-          in
-          match
-            Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs:pkg_dirs
-              ~constraints names
-          with
-          | Ok solved -> Some (pkg_dirs, solved)
-          | Error msg ->
+    (function
+      | Solve_groups { handle; groups } -> (
+          let toolchain =
+            try toolchain_for handle
+            with Oi.Error.E _ ->
               Log.warn (fun m ->
-                  m "overlay depexts: %s group failed to solve: %s" handle msg);
-              None)
-        groups)
-    targets
+                  m
+                    "overlay depexts: %s toolchain resolution failed — \
+                     skipping handle"
+                    handle);
+              None
+          in
+          match toolchain with
+          | None -> []
+          | Some _ ->
+              let pkg_dirs = pkg_dirs_for handle in
+              let conf, tc_ctx =
+                Oi.Pipeline.toolchain_views toolchain host_conf
+              in
+              List.filter_map
+                (fun group ->
+                  let ctx =
+                    Oi.Solver.Ctx.create ~prefix:build_prefix
+                      ~packages_dirs:pkg_dirs ~conf ?toolchain:tc_ctx ()
+                  in
+                  let items = List.map Target.parse_pkg_target group in
+                  let names = List.map fst items in
+                  let constraints =
+                    List.fold_left
+                      (fun acc (name, c) ->
+                        match c with
+                        | None -> acc
+                        | Some c -> OpamPackage.Name.Map.add name c acc)
+                      OpamPackage.Name.Map.empty items
+                  in
+                  match
+                    Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs:pkg_dirs
+                      ~constraints names
+                  with
+                  | Ok solved -> Some (pkg_dirs, solved)
+                  | Error msg ->
+                      Log.warn (fun m ->
+                          m "overlay depexts: %s group failed to solve: %s"
+                            handle msg);
+                      None)
+                groups)
+      | Walk_clone { handle } ->
+          let pkg_dirs = pkg_dirs_for handle in
+          let overlay_pkgs_dir =
+            try Some (Oi.Source.Reporepo.assert_overlay_dir ~path ~handle)
+            with Oi.Error.E _ -> None
+          in
+          let pkgs =
+            match overlay_pkgs_dir with
+            | None -> []
+            | Some d -> all_packages_in_dir d
+          in
+          if pkgs = [] then []
+          else begin
+            Log.info (fun m ->
+                m
+                  "overlay depexts: %s walking %d packages (no x-root-packages \
+                   declared)"
+                  handle (List.length pkgs));
+            [ (pkg_dirs, pkgs) ]
+          end)
+    inputs
 
 let depexts_union ~conf solves =
   let all =
@@ -270,7 +378,7 @@ let depexts_union ~conf solves =
 let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf
     ?override ?handle () =
   let solves =
-    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf:conf
+    gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf:conf
       ?override ?handle_filter:handle ()
   in
   depexts_union ~conf solves
@@ -281,7 +389,7 @@ let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let solves =
-    solve_overlay_root_groups ~fs ~sys ~cache ~data_dir ~refresh ~host_conf ()
+    gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf ()
   in
   List.map
     (fun distro ->

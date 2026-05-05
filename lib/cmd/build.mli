@@ -12,10 +12,22 @@ val compute_overlay_depexts_for_conf :
   ?handle:string ->
   unit ->
   string list
-(** Solve overlays' [x-root-packages] and return the union of depexts under
-    [conf]'s opam filter variables. [?handle] restricts to a single overlay
-    (default: every overlay). [?override] forces a [--toolchain=NAME] across the
-    board. *)
+(** Compute the union of depexts under [conf]'s opam filter variables for every
+    reporepo handle (other than [default]). For each handle:
+
+    - if it declares [x-root-packages], solve each group and union the depexts
+      of the closure;
+    - else if it declares [x-oi-toolchain-roots] (toolchain definition), solve
+      those roots under the entry's own [x-oi-toolchain-name] and union the
+      closure's depexts — picks up compiler-stack depexts (libgmp-dev for
+      [zarith.+ox], etc.);
+    - else if it has its own clone (non-toolchain overlay with a [url{}]), walk
+      every [opam] in [v1/<handle>/packages/] and union their depexts directly —
+      mirrors [oi build --all]'s "fan out to every package" fallback for
+      overlays without explicit roots.
+
+    [?handle] restricts to a single handle. [?override] forces a
+    [--toolchain=NAME] across the board. *)
 
 val compute_overlay_depexts_per_distro :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -26,9 +38,12 @@ val compute_overlay_depexts_per_distro :
   platform:Osrel.t ->
   distros:Registry_docker.Distro.t list ->
   (Registry_docker.Distro.t * string list) list
-(** Solve every overlay's root packages on each [distros] entry and return the
-    per-distro union of declared depexts. Shared with [oi docker --all] which
-    needs the same data to parametrise the generated Dockerfiles. *)
+(** Same expansion as {!compute_overlay_depexts_for_conf} but evaluated on each
+    [distros] entry's filter context (os, os-distribution, os-family,
+    os-version). Solves and overlay-tree walks happen once under the host conf
+    and are reused across distros — only the per-distro depext filter is
+    re-evaluated. Shared with [oi docker --all] which uses the result to
+    parametrise the generated Dockerfiles. *)
 
 val cmd : unit Cmdliner.Cmd.t
 (** $(b,oi build). *)
