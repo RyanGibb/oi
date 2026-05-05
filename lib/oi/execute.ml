@@ -519,11 +519,7 @@ let agg_build_line ~total =
 let pkg_build_line ~pkg =
   let open Progress.Line in
   list ~sep:(const " ")
-    [
-      const (Ui.fit_label Ui.row_label_width pkg);
-      Ui.Theme.spinner ();
-      string;
-    ]
+    [ const (Ui.fit_label Ui.row_label_width pkg); Ui.Theme.spinner (); string ]
 
 (* Default reporter: aggregate "Build M/N" bar plus one row per
    in-flight package, with inline FAIL prints when builds bail. Used
@@ -581,7 +577,7 @@ let with_default_reporter ?shared_display ~clock ~total_packages f =
     let render_pkg pkg =
       match Hashtbl.find_opt pkg_handles pkg with
       | None -> ()
-      | Some r ->
+      | Some r -> (
           let phase =
             Hashtbl.find_opt pkg_phase pkg |> Stdlib.Option.value ~default:""
           in
@@ -590,9 +586,8 @@ let with_default_reporter ?shared_display ~clock ~total_packages f =
             | Some t0 -> now () -. t0
             | None -> 0.0
           in
-          (try
-             Progress.Reporter.report r (Fmt.str "%s (%.0fs)" phase elapsed)
-           with _ -> ())
+          try Progress.Reporter.report r (Fmt.str "%s (%.0fs)" phase elapsed)
+          with _ -> ())
     in
     (* Heartbeat at 100ms: animates spinner ([Display.tick]) when we
        own the display, plus refreshes per-package row text every 10
@@ -605,8 +600,8 @@ let with_default_reporter ?shared_display ~clock ~total_packages f =
           Eio.Time.sleep clock 0.1;
           if !stopped then `Stop_daemon
           else begin
-            if owns_display then
-              (try Progress.Display.tick display with _ -> ());
+            (if owns_display then
+               try Progress.Display.tick display with _ -> ());
             incr n;
             if !n mod 10 = 0 then
               with_lock (fun () ->
@@ -638,23 +633,23 @@ let with_default_reporter ?shared_display ~clock ~total_packages f =
     in
     let report_event = function
       | Started { pkg; phase } -> on_started pkg phase
-      | Cached { pkg } ->
+      | Cached { pkg } -> (
           on_done pkg;
-          (try Progress.Reporter.report agg_handle 1 with _ -> ())
-      | Built { pkg } ->
+          try Progress.Reporter.report agg_handle 1 with _ -> ())
+      | Built { pkg } -> (
           on_done pkg;
-          (try Progress.Reporter.report agg_handle 1 with _ -> ())
+          try Progress.Reporter.report agg_handle 1 with _ -> ())
       | Dep_failed { pkg; _ } -> on_done pkg
-      | Build_failed { pkg; log } ->
+      | Build_failed { pkg; log } -> (
           on_done pkg;
           (try Progress.Display.pause display with _ -> ());
           Fmt.epr "  %a %s → %s@." Style.error_string "FAIL" pkg log;
-          (try Progress.Display.resume display with _ -> ())
-      | Install_failed { pkg; log } ->
+          try Progress.Display.resume display with _ -> ())
+      | Install_failed { pkg; log } -> (
           on_done pkg;
           (try Progress.Display.pause display with _ -> ());
           Fmt.epr "  %a %s (install) → %s@." Style.error_string "FAIL" pkg log;
-          (try Progress.Display.resume display with _ -> ())
+          try Progress.Display.resume display with _ -> ())
     in
     Fun.protect
       ~finally:(fun () ->

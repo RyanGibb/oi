@@ -35,9 +35,9 @@ let leaf_hash_for ~fs ~cache ~os_key ~want_name hashes =
    skipped; other tools still install. Returns the assembled path if
    at least one tool made it in, or [None] if nothing to install. *)
 let install_tools ?(quiet = false) ?refresh ?jobs ?bar_on_phase ?bar_on_text
-    ?bar_display ~proc_mgr ~fs ~clock ~sys ~cache
-    ~data_dir ~conf ~os_key ~session ~extra_repos ~pins ?toolchain ?layer_remote
-    ?source_remote ~cwd () =
+    ?bar_display ~proc_mgr ~fs ~clock ~sys ~cache ~data_dir ~conf ~os_key
+    ~session ~extra_repos ~pins ?toolchain ?layer_remote ?source_remote ~cwd ()
+    =
   let say_step fmt =
     match bar_on_phase with
     | Some f -> Fmt.kstr f fmt
@@ -352,9 +352,9 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   say_step "Installing dev tools";
   let tools =
     install_tools ~quiet ?refresh:(Some refresh) ?jobs ?bar_on_phase
-      ?bar_on_text ?bar_display ~proc_mgr ~fs ~clock ~sys ~cache ~data_dir
-      ~conf ~os_key ~session ~extra_repos:all_extras ~pins:project.pins
-      ?toolchain ?layer_remote ?source_remote ~cwd ()
+      ?bar_on_text ?bar_display ~proc_mgr ~fs ~clock ~sys ~cache ~data_dir ~conf
+      ~os_key ~session ~extra_repos:all_extras ~pins:project.pins ?toolchain
+      ?layer_remote ?source_remote ~cwd ()
   in
   if envrc_should_write envrc_mode then begin
     let envrc_path = Eio.Path.(fs / cwd / ".envrc") in
@@ -370,9 +370,9 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     (* Spinner mode swallows this hint — it's already in the .envrc
        output if the user is reading the docs. The persistent-output
        path keeps it for first-time-direnv users. *)
-    (match bar_on_phase with
+    match bar_on_phase with
     | Some _ -> ()
-    | None -> say_info "run 'direnv allow' to activate")
+    | None -> say_info "run 'direnv allow' to activate"
   end
   else
     Logs.info (fun m ->

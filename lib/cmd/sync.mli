@@ -70,9 +70,9 @@ val do_sync :
     env vars without re-resolving). [quiet] (default [false]) routes narration
     to [Logs.info] instead of stdout.
 
-    [bar_on_phase] / [bar_on_text] / [bar_display]: when supplied, narration
-    is routed to the {!Oi.Ui.Preflight} overall progress bar instead of
-    stdout, and [Pipeline.fetch_remote_layers] / [Execute.run] attach their
-    multi-bar lines to [bar_display] via [Progress.Display.add_line]. Pass
-    these straight from [Oi.Ui.Preflight.with_bar] in callers that wrap
-    [do_sync] in the overall progress UI. *)
+    [bar_on_phase] / [bar_on_text] / [bar_display]: when supplied, narration is
+    routed to the {!Oi.Ui.Preflight} overall progress bar instead of stdout, and
+    [Pipeline.fetch_remote_layers] / [Execute.run] attach their multi-bar lines
+    to [bar_display] via [Progress.Display.add_line]. Pass these straight from
+    [Oi.Ui.Preflight.with_bar] in callers that wrap [do_sync] in the overall
+    progress UI. *)

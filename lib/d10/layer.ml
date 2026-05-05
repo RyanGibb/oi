@@ -309,8 +309,7 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
             succeeded c ~hash
           with exn ->
             Logs.warn (fun m ->
-                m "Failed to publish layer %s: %s" hash
-                  (Printexc.to_string exn));
+                m "Failed to publish layer %s: %s" hash (Printexc.to_string exn));
             cleanup_staging ();
             false
         end

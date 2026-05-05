@@ -15,6 +15,7 @@ let dim = Style.faint
 let accent = Style.(bold + fg Color.cyan)
 let strong_ok = Style.(bold + fg Color.green)
 let source = Style.(fg Color.blue)
+
 (* OCaml.org camel orange — used by progress spinners / bars across the
    pipeline so cache preload, registry fetch, and build all look like one
    tool. See {!Ui.Theme.camel} for the matching Progress library colour. *)

@@ -133,8 +133,10 @@ val fetch_remote_index :
     The fetch goes through [session]'s connection pool so it shares connections
     with subsequent {!pull_remote} calls in the same batch. *)
 
-type fetch_phase = Fetching | Verifying | Extracting
-(** Stages [pull_remote] passes through, in order. *)
+type fetch_phase =
+  | Fetching
+  | Verifying
+  | Extracting  (** Stages [pull_remote] passes through, in order. *)
 
 val pull_remote :
   Config.t ->
@@ -159,10 +161,10 @@ val pull_remote :
     [on_progress] forwards through to {!Sysops.Http.fetch_session} for download
     progress; see that function's docs.
 
-    [on_phase] is called once per phase boundary as the fiber transitions
-    from {!Fetching} to {!Verifying} to {!Extracting}. Drives the per-phase
-    counters in the [oi] progress bar so post-fetch CPU work (sha256, zstd-tar
-    extract) is visible instead of looking like a stall. *)
+    [on_phase] is called once per phase boundary as the fiber transitions from
+    {!Fetching} to {!Verifying} to {!Extracting}. Drives the per-phase counters
+    in the [oi] progress bar so post-fetch CPU work (sha256, zstd-tar extract)
+    is visible instead of looking like a stall. *)
 
 (** {1 Export} *)
 

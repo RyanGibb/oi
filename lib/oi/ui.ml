@@ -103,8 +103,7 @@ module Preflight = struct
       let preflight_done () = stopped := true in
       Fun.protect
         ~finally:(fun () -> stopped := true)
-        (fun () ->
-          f ~on_phase ~on_text ~preflight_done ~shared_display:None)
+        (fun () -> f ~on_phase ~on_text ~preflight_done ~shared_display:None)
     end
     else
       let total = match total_steps with Some n when n > 0 -> n | _ -> 12 in
@@ -122,9 +121,7 @@ module Preflight = struct
       let display : (unit, unit) Progress.Display.t =
         Progress.Display.start ~config:cfg Progress.Multi.blank
       in
-      let overall_h =
-        Progress.Display.add_line display (overall_line ~total)
-      in
+      let overall_h = Progress.Display.add_line display (overall_line ~total) in
       let msg = ref "Preparing" in
       let stepped = ref false in
       let push ~advance =
@@ -168,8 +165,7 @@ module Preflight = struct
             try Progress.Display.finalise display with _ -> ()
           end)
         (fun () ->
-          f ~on_phase ~on_text ~preflight_done
-            ~shared_display:(Some display))
+          f ~on_phase ~on_text ~preflight_done ~shared_display:(Some display))
 end
 
 (* -- Legacy single-bar UI (oi build --all) ------------------------------ *)

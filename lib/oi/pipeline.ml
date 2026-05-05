@@ -231,9 +231,7 @@ let fetch_with_display ?jobs ?shared_display ~session ~remote ~d10 ~index
   let n_total = List.length available in
   let bytes_received = ref 0L in
   let done_count = ref 0 in
-  let cfg =
-    Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()
-  in
+  let cfg = Progress.Config.v ~ppf:Format.err_formatter ~persistent:false () in
   let owns_display, display =
     match shared_display with
     | Some d -> (false, d)
@@ -285,8 +283,7 @@ let fetch_with_display ?jobs ?shared_display ~session ~remote ~d10 ~index
         Stdlib.Option.value (Hashtbl.find_opt pkg_of hash) ~default:""
       in
       let r =
-        Progress.Display.add_line ~above display
-          (layer_line ~pkg ~size:my_size)
+        Progress.Display.add_line ~above display (layer_line ~pkg ~size:my_size)
       in
       Hashtbl.add layer_handles hash r
     end
@@ -294,7 +291,7 @@ let fetch_with_display ?jobs ?shared_display ~session ~remote ~d10 ~index
   let report_to_layer hash delta =
     match Hashtbl.find_opt layer_handles hash with
     | None -> ()
-    | Some r -> (try Progress.Reporter.report r delta with _ -> ())
+    | Some r -> ( try Progress.Reporter.report r delta with _ -> ())
   in
   let fiber_progress hash hash_ref ~received ~total:_ =
     with_lock @@ fun () ->
@@ -322,8 +319,7 @@ let fetch_with_display ?jobs ?shared_display ~session ~remote ~d10 ~index
          when we own it. *)
       (try Progress.Reporter.finalise agg_handle with _ -> ());
       (try Progress.Display.remove_line display agg_handle with _ -> ());
-      if owns_display then
-        try Progress.Display.finalise display with _ -> ())
+      if owns_display then try Progress.Display.finalise display with _ -> ())
     (fun () ->
       Eio.Fiber.List.iter
         ~max_fibers:(fetch_parallelism ?jobs ())
@@ -392,21 +388,20 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ?shared_display ~session
           in
           Logs.info (fun m ->
               m "Fetching %d layer(s) from registry (%s, %d needed)..." n_total
-                (fmt_mb total_bytes_known) (List.length source_hashes));
+                (fmt_mb total_bytes_known)
+                (List.length source_hashes));
           (* Build a hash → "pkg.version" lookup for the per-row labels.
              Layers we don't have a node for fall through to "" and the
              row shows blanks. *)
           let pkg_of : (string, string) Hashtbl.t = Hashtbl.create n_total in
           List.iter
             (fun (n : Plan.node) ->
-              Hashtbl.replace pkg_of n.layer_hash
-                (OpamPackage.to_string n.pkg))
+              Hashtbl.replace pkg_of n.layer_hash (OpamPackage.to_string n.pkg))
             (Plan.nodes build_plan);
           let done_count, bytes_received =
             if Tty.is_tty () then
               fetch_with_display ?jobs ?shared_display ~session ~remote:r ~d10
-                ~index ~available ~pkg_of ~total_bytes_known ~clock:d10.clock
-                ()
+                ~index ~available ~pkg_of ~total_bytes_known ~clock:d10.clock ()
             else begin
               (* Non-TTY: single-line text update routed through
                  [on_progress] / [on_phase]. No multi-bar UI to corrupt. *)
@@ -425,8 +420,7 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ?shared_display ~session
               let fiber_progress hash_ref ~received ~total:_ =
                 let prev = !hash_ref in
                 hash_ref := received;
-                bytes_total :=
-                  Int64.add !bytes_total (Int64.sub received prev);
+                bytes_total := Int64.add !bytes_total (Int64.sub received prev);
                 emit ()
               in
               Eio.Fiber.List.iter

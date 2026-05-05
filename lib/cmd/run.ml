@@ -251,7 +251,9 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
      [Pipeline.build]'s phases (no [Sync] / [install_tools] / dune
      subprocess), so ~8 phases on cold cache, fewer when the layer
      cache hit short-circuits the source path. *)
-  let with_preflight_bar f = Oi.Ui.Preflight.with_bar ~clock ~total_steps:10 f in
+  let with_preflight_bar f =
+    Oi.Ui.Preflight.with_bar ~clock ~total_steps:10 f
+  in
   (* Solve [pkg_names], assemble the consumer prefix, exec
        [bin/<binary_name>] if it exists; falls back to looking under a
        non-relocatable toolchain's fixed prefix before giving up.
