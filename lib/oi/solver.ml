@@ -322,6 +322,19 @@ module Ctx = struct
     | None -> no_toolchain_env ()
     | Some { relocatable = true; _ } -> no_toolchain_env ()
     | Some tc ->
+        (* Non-relocatable toolchain (e.g. oxcaml prebuilt): the
+           toolchain's [lib/ocaml/] is read-only, but [ocamlfind
+           install] of a package with stublibs (zarith's [dllzarith.so],
+           gmp, sqlite3, …) tries to register them by appending to
+           [$OCAMLLIB/lib/ocaml/ld.conf]. That path lives inside the
+           toolchain root, so the install step fails with [Permission
+           denied]. opam's [ocaml-system] package handles the same
+           "system compiler with read-only lib" case by exporting
+           [OCAMLFIND_LDCONF=ignore], which tells ocamlfind to skip
+           reading/writing [ld.conf] entirely. Stublibs stay resolvable
+           because [CAML_LD_LIBRARY_PATH] (set just above) already
+           covers [lib/stublibs] and [lib/ocaml/stublibs] in both the
+           prefix and the toolchain. *)
         [
           ("OPAM_SWITCH_PREFIX", prefix);
           ( "CAML_LD_LIBRARY_PATH",
@@ -332,6 +345,7 @@ module Ctx = struct
                 tc.install_prefix / "lib" / "stublibs";
               ] );
           ("OCAMLFIND_DESTDIR", prefix / "lib");
+          ("OCAMLFIND_LDCONF", "ignore");
           ( "OCAMLPATH",
             String.concat ":"
               [
