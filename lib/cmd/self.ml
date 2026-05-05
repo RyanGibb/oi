@@ -190,8 +190,59 @@ let where_cmd =
   in
   Cmd.v info Term.(const run $ Terms.log)
 
+(* List the [oi.<version>] entries published in the [@avsm/oi] overlay
+   of the local (just-refreshed) reporepo. Used by [oi self update] to
+   decide whether a newer release exists before kicking off a build —
+   we don't want to spend minutes resolving + compiling a fresh
+   toolchain just to discover the only available version is the one
+   already running.
+
+   TODO: once [oi] is published to opam-repository (or its own
+   first-class overlay), drop the [@avsm/oi] hardcoding and discover the
+   overlay/handle the way every other command does — via the toolchain
+   chain, project overlays, or [--with-repo]. The "oi" name and the
+   pre-release ergonomic of "look in [@avsm]" are temporary. *)
+let list_oi_versions ~reporepo_path =
+  let pkg_dir =
+    Filename.concat
+      (Filename.concat
+         (Filename.concat
+            (Filename.concat reporepo_path "v1") "avsm")
+         "packages")
+      "oi"
+  in
+  if not (Sys.file_exists pkg_dir) then []
+  else
+    Sys.readdir pkg_dir |> Array.to_list
+    |> List.filter_map (fun entry ->
+        let prefix = "oi." in
+        if String.starts_with ~prefix entry then
+          Some (String.sub entry (String.length prefix)
+                  (String.length entry - String.length prefix))
+        else None)
+
+(* Pick the highest [oi.<version>] in [available] that is strictly
+   greater than [current] and is not the [dev] pin. Returns [None] when
+   no such candidate exists, in which case the caller short-circuits
+   with "already up to date". [current="n/a"] (dev/git build with no
+   release tag) skips the [>] filter so we still pick the highest
+   non-[dev] candidate. *)
+let pick_update ~current available =
+  let cmp = OpamPackage.Version.compare in
+  let v_of = OpamPackage.Version.of_string in
+  let known = current <> "n/a" && current <> "" in
+  let cur = if known then Some (v_of current) else None in
+  available
+  |> List.filter (fun s -> s <> "dev")
+  |> List.filter (fun s ->
+      match cur with
+      | None -> true
+      | Some c -> cmp (v_of s) c > 0)
+  |> List.sort (fun a b -> cmp (v_of b) (v_of a))
+  |> function [] -> None | hd :: _ -> Some hd
+
 let update_cmd =
-  let run (c : Terms.common) refresh registry use_registry jobs dev =
+  let run (c : Terms.common) registry use_registry jobs dev =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -208,6 +259,14 @@ let update_cmd =
         c.cache_dir
     in
     let data_dir = c.data_dir in
+    (* Always refresh on self-update. A bare [oi self update] right
+       after a schema bump (which clears the cache via {!Oi.Stamp})
+       leaves the reporepo's pin set untouched on disk but the
+       cache-side downloads gone — the solver then sees stale pin
+       material and fails with "no solution found". Forcing refresh
+       costs a few seconds of repo pull and matches what every user
+       was already doing manually. *)
+    let refresh = true in
     let target = Oi.Selfexe.resolve_target () in
     let oi_dst, oix_dst =
       match target with
@@ -228,6 +287,26 @@ let update_cmd =
     in
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+    (* In release mode, walk the freshly-refreshed reporepo for oi
+       releases newer than the running binary. If nothing strictly
+       newer (excluding [oi.dev]) is published, exit early — no point
+       solving and compiling just to reinstall the same version. *)
+    let pinned_update =
+      if dev then None
+      else
+        let current = oi_version () in
+        let available =
+          list_oi_versions ~reporepo_path:(Terms.reporepo_path ())
+        in
+        match pick_update ~current available with
+        | None ->
+            Oi.Say.ok "oi %s is up to date (no newer release in @avsm)"
+              current;
+            exit 0
+        | Some v ->
+            Oi.Say.step "Updating oi %s -> %s" current v;
+            Some v
+    in
     (* [--dev] overrides the reporepo's [@avsm/oi] pin with HEAD of
        upstream main, materialised as a [--with=git+URL] dep. The pinned
        URL contributes its own [*.opam] files as solver roots, which is
@@ -236,7 +315,16 @@ let update_cmd =
     let extra_deps, url_project =
       Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
     in
-    let extra_constraints = Oi.Project.Script.constraints extra_deps in
+    let extra_constraints =
+      let base = Oi.Project.Script.constraints extra_deps in
+      match pinned_update with
+      | None -> base
+      | Some v ->
+          OpamPackage.Name.Map.add
+            (OpamPackage.Name.of_string "oi")
+            (`Eq, OpamPackage.Version.of_string v)
+            base
+    in
     let url_overlays =
       Oi.Pipeline.filter_compatible_overlays
         ~reporepo_path:(Terms.reporepo_path ()) ~toolchain:None
@@ -244,8 +332,10 @@ let update_cmd =
     in
     let with_repos =
       if dev then url_overlays
-        (* In non-[--dev] mode, target the [@avsm/oi] overlay where the
-           [oi] package lives. *)
+        (* TODO: drop the hardcoded [@avsm] overlay once [oi] is published
+           to opam-repository or to its own first-class overlay. Until
+           then, [@avsm/oi] is where the release pin lives — see
+           {!list_oi_versions} for the matching enumeration. *)
       else [ "avsm" ]
     in
     let cli_extras =
@@ -327,8 +417,8 @@ let update_cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.common $ Terms.refresh $ Terms.registry
-      $ Terms.use_registry $ Terms.jobs $ dev)
+      const run $ Terms.common $ Terms.registry $ Terms.use_registry
+      $ Terms.jobs $ dev)
 
 let cmd =
   let info =

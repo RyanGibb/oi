@@ -1947,6 +1947,103 @@ module Mirror = struct
                with _ -> ());
             !promoted)
 
+  (* -- Prewarm the local mirror from the registry's sources tree -----------
+
+     Pre-fetch every source archive the resolved plan needs from
+     [<registry>/sources/<algo>/<XX>/<hash>] into the local mirror via
+     the shared HTTP session. Multiplexes over the existing HTTP/2
+     connection (or 32 pooled HTTP/1.1 connections, see {!Sysops.Http})
+     in parallel. Once warm, opam's per-package [pull_tree]/[pull_file]
+     in {!Execute} reads from the local mirror via [cache_urls] and
+     never spawns curl/wget for fetches that we already covered.
+
+     Failures are non-fatal: anything we couldn't fetch falls back to
+     opam's per-package retry chain. *)
+
+  type prewarm_summary = { fetched : int; cached : int; failed : int }
+
+  let prefer_sha256 cks =
+    match List.find_opt (fun ck -> OpamHash.kind ck = `SHA256) cks with
+    | Some ck -> Some ck
+    | None -> List.nth_opt cks 0
+
+  let already_mirrored ~mirror_dir cks =
+    List.exists
+      (fun ck ->
+        Sys.file_exists
+          (List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)))
+      cks
+
+  let trim_trailing_slash s =
+    let n = String.length s in
+    if n > 0 && s.[n - 1] = '/' then String.sub s 0 (n - 1) else s
+
+  let prewarm_remote ~session ~fs ~cache_root ~registry ?(max_fibers = 16)
+      (archive_checksums : OpamHash.t list list) =
+    let mirror_dir = cache_root / "mirror" in
+    mkdir_p ~fs mirror_dir;
+    let registry = trim_trailing_slash registry in
+    let fetched = Atomic.make 0 in
+    let cached = Atomic.make 0 in
+    let failed = Atomic.make 0 in
+    let fetch_one cks =
+      if cks = [] then ()
+      else if already_mirrored ~mirror_dir cks then Atomic.incr cached
+      else
+        match prefer_sha256 cks with
+        | None -> ()
+        | Some ck ->
+            let kind = OpamHash.string_of_kind (OpamHash.kind ck) in
+            let hex = OpamHash.contents ck in
+            let shard =
+              if String.length hex >= 2 then String.sub hex 0 2 else hex
+            in
+            let url = Fmt.str "%s/sources/%s/%s/%s" registry kind shard hex in
+            let dst =
+              List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)
+            in
+            let tmp = unique_tmp dst in
+            mkdir_p ~fs (Filename.dirname dst);
+            if D10.Sysops.Http.fetch_session session ~url
+                 ~dst:Eio.Path.(fs / tmp)
+            then
+              let ok =
+                try
+                  let actual = OpamHash.compute ~kind:(OpamHash.kind ck) tmp in
+                  OpamHash.contents actual = OpamHash.contents ck
+                with _ -> false
+              in
+              if ok then begin
+                (try Sys.rename tmp dst
+                 with _ -> (try Unix.unlink tmp with _ -> ()));
+                Atomic.incr fetched;
+                (* Deposit under any other declared checksums so future
+                   opam lookups against alternate algos hit the mirror. *)
+                List.iter
+                  (fun ck' ->
+                    let dst' =
+                      List.fold_left ( / ) mirror_dir (OpamHash.to_path ck')
+                    in
+                    if not (Sys.file_exists dst') then
+                      link_or_copy ~fs ~src:dst ~dst:dst')
+                  cks
+              end
+              else begin
+                (try Unix.unlink tmp with _ -> ());
+                Atomic.incr failed
+              end
+            else begin
+              (try Unix.unlink tmp with _ -> ());
+              Atomic.incr failed
+            end
+    in
+    Eio.Fiber.List.iter ~max_fibers fetch_one archive_checksums;
+    {
+      fetched = Atomic.get fetched;
+      cached = Atomic.get cached;
+      failed = Atomic.get failed;
+    }
+
   (* -- Bulk fetch into the mirror (used by [oi build --archives-only]) --- *)
 
   type archive = { url : OpamUrl.t; checksums : OpamHash.t list; pkg : string }

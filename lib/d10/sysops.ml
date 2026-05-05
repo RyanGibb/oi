@@ -293,8 +293,20 @@ module Http = struct
       method fs = t.fs
     end
 
+  (* [max_connections_per_host] sized for parallel layer fetches. With
+     HTTP/2 (the default on [oi.ci.dev] etc.) one connection multiplexes
+     many streams and the pool barely matters; on HTTP/1.1 servers, 32
+     parallel connections give us enough headroom that
+     [OI_HTTP_PARALLELISM=32] doesn't queue. The idle/lifetime numbers
+     are deliberately generous so a CLI run that issues fetches in two
+     waves (e.g. layers, then sources) reuses the same connections
+     across the gap. *)
   let with_session ~sw t f =
-    let session = Requests.v ~sw (env_of t) in
+    let session =
+      Requests.v ~sw ~max_connections_per_host:32
+        ~connection_idle_timeout:300.0 ~connection_lifetime:1800.0
+        (env_of t)
+    in
     f session
 
   let fetch_session ?on_progress session ~url ~dst =

@@ -159,14 +159,20 @@ let cache_urls ~cache ~source_remote =
   | Some (`Http_remote r) -> [ local; Source.Mirror.remote_url ~registry:r ]
   | None | Some _ -> [ local ]
 
+(* HTTP fetches are I/O-bound: a fiber spends ~all of its wall-time
+   waiting on the wire, so we want many more concurrent fibers than we
+   have CPUs. Default 16 (clamped to the larger of 16 and the recommended
+   domain count). Override via [OI_HTTP_PARALLELISM]; [?jobs] (which
+   originates from [-j N] and primarily caps build subprocesses) wins
+   when explicitly set. *)
 let fetch_parallelism ?jobs () =
   match jobs with
   | Some n when n > 0 -> n
   | _ -> (
-      match Sys.getenv_opt "OI_BUILD_PARALLELISM" with
+      match Sys.getenv_opt "OI_HTTP_PARALLELISM" with
       | Some s -> (
-          match int_of_string_opt s with Some n when n > 0 -> n | _ -> 4)
-      | None -> min (Domain.recommended_domain_count ()) 4)
+          match int_of_string_opt s with Some n when n > 0 -> n | _ -> 16)
+      | None -> max (Domain.recommended_domain_count ()) 16)
 
 let fmt_mb n =
   if Int64.compare n 1_048_576L >= 0 then
@@ -465,12 +471,12 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
               m "depext check: %d pkg(s) declare matching depexts, union = %d"
                 (List.length entries)
                 (OpamSysPkg.Set.cardinal all));
-          (* Per-layer nudge for source packages that declare no active
-             depexts on this platform. Compute the set of pkgs WITH active
-             depexts and subtract from [source_pkgs] to find the silent
-             ones. The build may still need system libraries (gmp,
-             openssl, pkg-config, …) and we'd rather warn upfront than
-             surface a [./configure] failure mid-build. *)
+          (* Pure-OCaml packages legitimately have no depexts. Listing them
+             here is mostly noise — the actually-actionable case is captured
+             by the [missing] warning below, which names the system packages
+             we know are absent on this host. The full per-package "no
+             depexts declared" list is still available at [--verbosity=debug]
+             for depext maintainers. *)
           let with_depexts =
             List.fold_left
               (fun acc e -> OpamPackage.Set.add e.Depexts.pkg acc)
@@ -484,18 +490,14 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
           (match without_depexts with
           | [] -> ()
           | pkgs ->
-              let names =
-                pkgs
-                |> List.map (fun p ->
-                    OpamPackage.Name.to_string (OpamPackage.name p))
-                |> List.sort_uniq String.compare
-                |> String.concat ", "
-              in
-              Say.warn
-                "no %s depexts declared for source build(s): %s. If the build \
-                 fails with missing headers, install the relevant system \
-                 packages."
-                conf.os names);
+              Log.debug (fun m ->
+                  m "no %s depexts declared for %d source pkg(s): %s" conf.os
+                    (List.length pkgs)
+                    (pkgs
+                    |> List.map (fun p ->
+                        OpamPackage.Name.to_string (OpamPackage.name p))
+                    |> List.sort_uniq String.compare
+                    |> String.concat ", ")));
           if not (OpamSysPkg.Set.is_empty all) then (
             let st = Depexts.status all in
             Log.info (fun m ->
@@ -521,6 +523,44 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
           Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
             ~ocaml_version:conf.ocaml_version build_plan
         in
+        (* Prewarm the local source mirror from the registry's [/sources/]
+           tree via the shared HTTP session. Skips packages already
+           covered by the layer cache (those don't run the source fetch
+           path) and archives already locally mirrored. The remaining
+           fetches multiplex over the existing HTTP/2 connection
+           instead of opam spawning curl/wget per package. *)
+        (match source_remote with
+        | Some (`Http_remote registry) ->
+            let archives =
+              exec_plan.packages
+              |> List.filter_map (fun (p : Plan.package_plan) ->
+                  match p.method_ with
+                  | Identity.Binary -> None
+                  | Source ->
+                      let cks_of (s : Plan.source_info) =
+                        List.filter_map
+                          (fun s ->
+                            try Some (OpamHash.of_string s) with _ -> None)
+                          s.checksums
+                      in
+                      let main =
+                        match p.source with None -> [] | Some s -> [ cks_of s ]
+                      in
+                      let extras = List.map (fun (_, s) -> cks_of s) p.extra_sources in
+                      Some (main @ extras))
+              |> List.concat
+              |> List.filter (fun cks -> cks <> [])
+            in
+            if archives <> [] then begin
+              let s =
+                Source.Mirror.prewarm_remote ~session ~fs ~cache_root ~registry
+                  ~max_fibers:(fetch_parallelism ?jobs ()) archives
+              in
+              Logs.info (fun m ->
+                  m "Mirror prewarm: %d new, %d cached, %d failed" s.fetched
+                    s.cached s.failed)
+            end
+        | _ -> ());
         let urls = cache_urls ~cache ~source_remote in
         Execute.run ~cache_urls:urls ~proc_mgr ~fs ?jobs
           ~clock:(clock :> D10.Config.clk)
