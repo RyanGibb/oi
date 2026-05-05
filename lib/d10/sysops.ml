@@ -303,9 +303,8 @@ module Http = struct
      across the gap. *)
   let with_session ~sw t f =
     let session =
-      Requests.v ~sw ~max_connections_per_host:32
-        ~connection_idle_timeout:300.0 ~connection_lifetime:1800.0
-        (env_of t)
+      Requests.v ~sw ~max_connections_per_host:32 ~connection_idle_timeout:300.0
+        ~connection_lifetime:1800.0 (env_of t)
     in
     f session
 

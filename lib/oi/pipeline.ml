@@ -544,9 +544,13 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
                           s.checksums
                       in
                       let main =
-                        match p.source with None -> [] | Some s -> [ cks_of s ]
+                        match p.source with
+                        | None -> []
+                        | Some s -> [ cks_of s ]
                       in
-                      let extras = List.map (fun (_, s) -> cks_of s) p.extra_sources in
+                      let extras =
+                        List.map (fun (_, s) -> cks_of s) p.extra_sources
+                      in
                       Some (main @ extras))
               |> List.concat
               |> List.filter (fun cks -> cks <> [])
@@ -554,7 +558,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             if archives <> [] then begin
               let s =
                 Source.Mirror.prewarm_remote ~session ~fs ~cache_root ~registry
-                  ~max_fibers:(fetch_parallelism ?jobs ()) archives
+                  ~max_fibers:(fetch_parallelism ?jobs ())
+                  archives
               in
               Logs.info (fun m ->
                   m "Mirror prewarm: %d new, %d cached, %d failed" s.fetched

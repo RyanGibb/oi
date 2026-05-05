@@ -1970,8 +1970,7 @@ module Mirror = struct
   let already_mirrored ~mirror_dir cks =
     List.exists
       (fun ck ->
-        Sys.file_exists
-          (List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)))
+        Sys.file_exists (List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)))
       cks
 
   let trim_trailing_slash s =
@@ -1999,13 +1998,12 @@ module Mirror = struct
               if String.length hex >= 2 then String.sub hex 0 2 else hex
             in
             let url = Fmt.str "%s/sources/%s/%s/%s" registry kind shard hex in
-            let dst =
-              List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)
-            in
+            let dst = List.fold_left ( / ) mirror_dir (OpamHash.to_path ck) in
             let tmp = unique_tmp dst in
             mkdir_p ~fs (Filename.dirname dst);
-            if D10.Sysops.Http.fetch_session session ~url
-                 ~dst:Eio.Path.(fs / tmp)
+            if
+              D10.Sysops.Http.fetch_session session ~url
+                ~dst:Eio.Path.(fs / tmp)
             then
               let ok =
                 try
@@ -2015,7 +2013,7 @@ module Mirror = struct
               in
               if ok then begin
                 (try Sys.rename tmp dst
-                 with _ -> (try Unix.unlink tmp with _ -> ()));
+                 with _ -> ( try Unix.unlink tmp with _ -> ()));
                 Atomic.incr fetched;
                 (* Deposit under any other declared checksums so future
                    opam lookups against alternate algos hit the mirror. *)

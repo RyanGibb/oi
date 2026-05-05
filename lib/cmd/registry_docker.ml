@@ -336,8 +336,8 @@ let service_name d =
    safety. Inside a Linux container with a high [nofile] ulimit (set on
    the service below) we want to use every core on the host. *)
 let build_export_cmd () =
-  "OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all --registry=archives --export \
-   /out"
+  "OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all --registry=archives \
+   --export /out"
 
 let docker_compose_yaml ~distros ~registry_host_path () =
   let buf = Buffer.create 1024 in

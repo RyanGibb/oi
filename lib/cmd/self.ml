@@ -206,8 +206,7 @@ let list_oi_versions ~reporepo_path =
   let pkg_dir =
     Filename.concat
       (Filename.concat
-         (Filename.concat
-            (Filename.concat reporepo_path "v1") "avsm")
+         (Filename.concat (Filename.concat reporepo_path "v1") "avsm")
          "packages")
       "oi"
   in
@@ -217,8 +216,9 @@ let list_oi_versions ~reporepo_path =
     |> List.filter_map (fun entry ->
         let prefix = "oi." in
         if String.starts_with ~prefix entry then
-          Some (String.sub entry (String.length prefix)
-                  (String.length entry - String.length prefix))
+          Some
+            (String.sub entry (String.length prefix)
+               (String.length entry - String.length prefix))
         else None)
 
 (* Pick the highest [oi.<version>] in [available] that is strictly
@@ -235,11 +235,11 @@ let pick_update ~current available =
   available
   |> List.filter (fun s -> s <> "dev")
   |> List.filter (fun s ->
-      match cur with
-      | None -> true
-      | Some c -> cmp (v_of s) c > 0)
+      match cur with None -> true | Some c -> cmp (v_of s) c > 0)
   |> List.sort (fun a b -> cmp (v_of b) (v_of a))
-  |> function [] -> None | hd :: _ -> Some hd
+  |> function
+  | [] -> None
+  | hd :: _ -> Some hd
 
 let update_cmd =
   let run (c : Terms.common) registry use_registry jobs dev =
@@ -300,8 +300,7 @@ let update_cmd =
         in
         match pick_update ~current available with
         | None ->
-            Oi.Say.ok "oi %s is up to date (no newer release in @avsm)"
-              current;
+            Oi.Say.ok "oi %s is up to date (no newer release in @avsm)" current;
             exit 0
         | Some v ->
             Oi.Say.step "Updating oi %s -> %s" current v;
