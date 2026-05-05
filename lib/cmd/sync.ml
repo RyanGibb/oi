@@ -34,16 +34,21 @@ let leaf_hash_for ~fs ~cache ~os_key ~want_name hashes =
    fails to solve (e.g. pinned to an older ocaml) warns and is
    skipped; other tools still install. Returns the assembled path if
    at least one tool made it in, or [None] if nothing to install. *)
-let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
-    ~cache ~data_dir ~conf ~os_key ~session ~extra_repos ~pins ?toolchain
-    ?layer_remote ?source_remote ~cwd () =
+let install_tools ?(quiet = false) ?refresh ?jobs ?bar_on_phase ?bar_on_text
+    ?bar_display ~proc_mgr ~fs ~clock ~sys ~cache
+    ~data_dir ~conf ~os_key ~session ~extra_repos ~pins ?toolchain ?layer_remote
+    ?source_remote ~cwd () =
   let say_step fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
-    else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
+    match bar_on_phase with
+    | Some f -> Fmt.kstr f fmt
+    | None when quiet -> Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    | None -> Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
   in
   let say_info fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
-    else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
+    match bar_on_phase with
+    | Some f -> Fmt.kstr f fmt
+    | None when quiet -> Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    | None -> Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
   in
   let warn_named name fmt =
     Fmt.kstr (fun s -> Oi.Say.warn "tool %s: %s" name s) fmt
@@ -56,16 +61,23 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
        quiet mode the phase narration drops to [Logs.info], matching
        the rest of [install_tools]. *)
     let on_phase msg =
-      if quiet then Logs.info (fun m -> m "%s" msg)
-      else Oi.Say.step "  [%s] %s" tool_name msg
+      match bar_on_phase with
+      | Some f -> f (Fmt.str "[%s] %s" tool_name msg)
+      | None when quiet -> Logs.info (fun m -> m "%s" msg)
+      | None -> Oi.Say.step "  [%s] %s" tool_name msg
     in
-    let on_progress msg = if not quiet then Oi.Say.progress msg in
+    let on_progress msg =
+      match (bar_on_text, bar_on_phase) with
+      | Some f, _ | None, Some f -> f (Fmt.str "[%s] %s" tool_name msg)
+      | None, None when quiet -> ()
+      | None, None -> Oi.Say.progress msg
+    in
     try
       let hashes =
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~session ~extra_repos ~pins ?refresh ?layer_remote
           ?source_remote ?jobs ?toolchain ~constraints ~project_root:cwd
-          ~on_phase ~on_progress [ name ]
+          ?shared_display:bar_display ~on_phase ~on_progress [ name ]
       in
       match leaf_hash_for ~fs ~cache ~os_key ~want_name:tool_name hashes with
       | None ->
@@ -194,16 +206,43 @@ let envrc_should_write = function
 
 let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     ?(with_repos = []) ?(with_deps = []) ?jobs ?(toolchain : string option)
-    ?(envrc_mode = `Detect) ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
-    ~data_dir ~registry ~use_registry ~session ~cwd () =
+    ?(envrc_mode = `Detect) ?bar_on_phase ?bar_on_text ?bar_display ~proc_mgr
+    ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry ~use_registry
+    ~session ~cwd () =
   let toolchain_override = toolchain in
+  (* Three rendering modes:
+     - [bar_on_phase = Some _]: a {!Oi.Ui.Preflight} spinner owns the
+       screen; route all narration through it as transient phase
+       updates. No persistent stdout output.
+     - [quiet = true]: the caller wants narration silenced ([Logs.info]
+       still records it for debugging).
+     - default: persistent [Oi.Say.step] / [Oi.Say.info] lines. *)
   let say_step fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
-    else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
+    match bar_on_phase with
+    | Some f -> Fmt.kstr f fmt
+    | None when quiet -> Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    | None -> Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
   in
   let say_info fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
-    else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
+    match bar_on_phase with
+    | Some f -> Fmt.kstr f fmt
+    | None when quiet -> Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    | None -> Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
+  in
+  (* Field-list narration: under the spinner, dropping these entirely
+     keeps the line short — the deps / overlays / repos all show up in
+     the multi-bars anyway, so spelling them out on the spinner line
+     is just visual noise (and pushes long lists off-screen on narrow
+     terminals). The persistent-output path keeps the full lists for
+     the audit trail. [Logs.info] under [quiet] preserves them in
+     debug logs. *)
+  let say_field_list label items =
+    match bar_on_phase with
+    | Some _ -> ()
+    | None when quiet ->
+        if items <> [] then
+          Logs.info (fun m -> m "%s: %s" label (String.concat ", " items))
+    | None -> Oi.Say.field_list label items
   in
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
@@ -216,15 +255,14 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   let deps = project.deps in
   if deps = [] && extra_cli = [] && url_project.roots = [] then
     Oi.Error.config_error "No .opam files found in %s." cwd;
-  say_step "Sync %s" cwd;
-  if deps <> [] then
-    if quiet then Logs.info (fun m -> m "deps: %s" (String.concat ", " deps))
-    else Oi.Say.field_list "deps" deps;
-  if url_project.roots <> [] then
-    if quiet then
-      Logs.info (fun m ->
-          m "with-deps: %s" (String.concat ", " url_project.roots))
-    else Oi.Say.field_list "with-deps" url_project.roots;
+  (* When the spinner owns the screen, "Sync /path" is just noise — we
+     don't need to remind the user where they're working. The
+     persistent-output path keeps it for the audit trail. *)
+  (match bar_on_phase with
+  | Some _ -> ()
+  | None -> say_step "Sync %s" cwd);
+  say_field_list "deps" deps;
+  say_field_list "with-deps" url_project.roots;
   let conf =
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
@@ -245,27 +283,19 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     Oi.Pipeline.filter_compatible_overlays
       ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
   in
-  if project_overlays <> [] then
-    if quiet then
-      Logs.info (fun m ->
-          m "overlays: %s" (String.concat ", " project_overlays))
-    else Oi.Say.field_list "overlays" project_overlays;
+  say_field_list "overlays" project_overlays;
   let with_repos = project_overlays @ with_repos in
   let all_extras =
     Target.merge_extras
       ~cli:(Target.cli_extra_repos ~fs ~sys ?toolchain with_repos)
       ~project:(project.extra_repos @ url_project.extra_repos)
   in
-  if all_extras <> [] then begin
-    let labels =
-      List.map
-        (fun (e : Oi.Project.extra_repo) -> Fmt.str "%s (%s)" e.name e.url)
-        all_extras
-    in
-    if quiet then
-      Logs.info (fun m -> m "extra-repos: %s" (String.concat ", " labels))
-    else Oi.Say.field_list "extra-repos" labels
-  end;
+  let extra_repo_labels =
+    List.map
+      (fun (e : Oi.Project.extra_repo) -> Fmt.str "%s (%s)" e.name e.url)
+      all_extras
+  in
+  say_field_list "extra-repos" extra_repo_labels;
   let { Terms.layer_remote; source_remote } =
     Terms.remotes_of ~url:registry ~mode:use_registry
   in
@@ -290,26 +320,41 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
       | None -> url_project.packages_dir
     in
     let on_phase msg =
-      if quiet then Logs.info (fun m -> m "%s" msg) else Oi.Say.step "%s" msg
+      match bar_on_phase with
+      | Some f -> f msg
+      | None when quiet -> Logs.info (fun m -> m "%s" msg)
+      | None -> Oi.Say.step "%s" msg
     in
-    let on_progress msg = if not quiet then Oi.Say.progress msg in
+    let on_progress msg =
+      (* Route per-byte / per-package progress strings through
+         [bar_on_text] (text-only, doesn't advance the overall step
+         bar). Falls back to [bar_on_phase] for callers that didn't
+         supply a separate text channel. *)
+      match (bar_on_text, bar_on_phase) with
+      | Some f, _ | None, Some f -> f msg
+      | None, None when quiet -> ()
+      | None, None -> Oi.Say.progress msg
+    in
     Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
       ~session ~extra_repos:all_extras
       ~pins:(project.pins @ url_project.pins)
       ~refresh ~constraints:extra_constraints ~project_root:cwd ?layer_remote
-      ?source_remote ?jobs ?toolchain ?local_packages_dir ~on_phase ~on_progress
-      names
+      ?source_remote ?jobs ?toolchain ?local_packages_dir
+      ?shared_display:bar_display ~on_phase ~on_progress names
   in
   let oi_dir = cwd / "_oi" in
   let prefix = oi_dir / "prefix" in
   Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix);
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / oi_dir);
   let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
+  say_step "Assembling project prefix";
   D10.Prefix.assemble d10 ~layer_hashes ~dst:Eio.Path.(fs / prefix);
+  say_step "Installing dev tools";
   let tools =
-    install_tools ~quiet ?refresh:(Some refresh) ?jobs ~proc_mgr ~fs ~clock ~sys
-      ~cache ~data_dir ~conf ~os_key ~session ~extra_repos:all_extras
-      ~pins:project.pins ?toolchain ?layer_remote ?source_remote ~cwd ()
+    install_tools ~quiet ?refresh:(Some refresh) ?jobs ?bar_on_phase
+      ?bar_on_text ?bar_display ~proc_mgr ~fs ~clock ~sys ~cache ~data_dir
+      ~conf ~os_key ~session ~extra_repos:all_extras ~pins:project.pins
+      ?toolchain ?layer_remote ?source_remote ~cwd ()
   in
   if envrc_should_write envrc_mode then begin
     let envrc_path = Eio.Path.(fs / cwd / ".envrc") in
@@ -321,14 +366,26 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     in
     (try Eio.Path.unlink envrc_path with Eio.Exn.Io _ -> ());
     Eio.Path.save ~create:(`Exclusive 0o644) envrc_path envrc;
-    say_step "Wrote .envrc";
-    say_info "run 'direnv allow' to activate"
+    say_step "Writing .envrc";
+    (* Spinner mode swallows this hint — it's already in the .envrc
+       output if the user is reading the docs. The persistent-output
+       path keeps it for first-time-direnv users. *)
+    (match bar_on_phase with
+    | Some _ -> ()
+    | None -> say_info "run 'direnv allow' to activate")
   end
   else
     Logs.info (fun m ->
         m "Skipping .envrc (--envrc=%a)" pp_envrc_mode envrc_mode);
-  say_step "Prefix assembled at %s (%d packages)" prefix
-    (List.length layer_hashes);
+  (* Final summary line only useful in the persistent-output mode. The
+     spinner is about to be cleared by [preflight_done] anyway, and
+     "Prefix assembled at <long-path>" doesn't tell the user anything
+     they care about during a normal build flow. *)
+  (match bar_on_phase with
+  | Some _ -> ()
+  | None ->
+      say_step "Prefix assembled at %s (%d packages)" prefix
+        (List.length layer_hashes));
   (prefix, toolchain)
 
 (* True if [cwd]/_oi/prefix is missing, or any *.opam in [cwd] has been

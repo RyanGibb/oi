@@ -114,6 +114,7 @@ val fetch_remote_layers :
   ?on_phase:(string -> unit) ->
   ?on_progress:(string -> unit) ->
   ?jobs:int ->
+  ?shared_display:(unit, unit) Progress.Display.t ->
   session:D10.Sysops.Http.session ->
   layer_remote:D10.Layer.remote option ->
   d10:D10.Config.t ->
@@ -164,6 +165,7 @@ val build :
   ?on_phase:(string -> unit) ->
   ?on_progress:(string -> unit) ->
   ?preflight_done:(unit -> unit) ->
+  ?shared_display:(unit, unit) Progress.Display.t ->
   OpamPackage.Name.t list ->
   string list
 (** [build] solves for [names], ensures every needed layer exists (building from

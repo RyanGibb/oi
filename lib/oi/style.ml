@@ -15,6 +15,10 @@ let dim = Style.faint
 let accent = Style.(bold + fg Color.cyan)
 let strong_ok = Style.(bold + fg Color.green)
 let source = Style.(fg Color.blue)
+(* OCaml.org camel orange — used by progress spinners / bars across the
+   pipeline so cache preload, registry fetch, and build all look like one
+   tool. See {!Ui.Theme.camel} for the matching Progress library colour. *)
+let camel = Style.(bold + fg (Color.hex "#EF7D00"))
 let phase_fetch = info
 let phase_build = source
 let phase_install = ok
@@ -31,4 +35,5 @@ let dim_string ppf s = Style.styled dim Fmt.string ppf s
 let accent_string ppf s = Style.styled accent Fmt.string ppf s
 let strong_ok_string ppf s = Style.styled strong_ok Fmt.string ppf s
 let source_string ppf s = Style.styled source Fmt.string ppf s
+let camel_string ppf s = Style.styled camel Fmt.string ppf s
 let pp s pp = Style.styled s pp

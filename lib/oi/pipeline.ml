@@ -181,8 +181,182 @@ let fmt_mb n =
     Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
   else Fmt.str "%LdB" n
 
-let fetch_remote_layers ?on_phase ?on_progress ?jobs ~session ~layer_remote ~d10
-    ~packages_dirs ~ctx ~pkgs build_plan =
+(* -- Multi-bar fetch UI -------------------------------------------------- *)
+
+let to_int = Int64.to_int
+
+(* Layout constants live in [Ui]: the same widths drive the overall
+   [Preflight] row above and [Execute]'s per-package rows below, so
+   keeping one source of truth makes alignment changes a one-line
+   edit. *)
+
+(* Pretty-print bytes using Progress's standard byte unit
+   ([245.8 MiB]). Used as the static [total] anchor on every row. *)
+let bytes_const_of_int n =
+  Progress.Printer.to_to_string Progress.Units.Bytes.of_int n
+
+(* Aggregate row at the top of the multi-bar: bold "Pre-built"
+   header rpad'd to [Ui.row_label_width] so its bar lines up with the
+   per-layer bars below; [bar(24)] + total bytes + tight (pct).
+   No running-byte count or elapsed: the bar position + pct already
+   convey progress and elapsed-time stalls (registry slow, host CPU
+   saturated) lie about ETA more than they help. *)
+let aggregate_line ~total =
+  let open Progress.Line in
+  let header =
+    constf "%a"
+      Fmt.(styled `Bold string)
+      (Printf.sprintf "%-*s" Ui.row_label_width "Pre-built")
+  in
+  let bar_seg = Ui.Theme.bar ~width:(`Fixed Ui.row_bar_width) total in
+  let total_seg = const (bytes_const_of_int total) in
+  let pct_seg = sum ~pp:(Ui.Theme.pct_pp ~total) ~width:6 () in
+  list ~sep:(const " ") [ header; bar_seg; total_seg; pct_seg ]
+
+(* Per-layer row: [<pkg.ver col 32> [bar(24)] <total> (<pct>)]. *)
+let layer_line ~pkg ~size =
+  let open Progress.Line in
+  let bar_seg = Ui.Theme.bar ~width:(`Fixed Ui.row_bar_width) size in
+  let total_seg = const (bytes_const_of_int size) in
+  let pct_seg = sum ~pp:(Ui.Theme.pct_pp ~total:size) ~width:6 () in
+  list ~sep:(const " ")
+    [ const (Ui.fit_label Ui.row_label_width pkg); bar_seg; total_seg; pct_seg ]
+
+(* Drive the live multi-bar. When [shared_display] is supplied we
+   attach to it (overall bar above stays visible); otherwise we open
+   our own [Display]. Both paths use [add_line] / [Reporter.t] so the
+   [Display.t]'s type parameter stays unconstrained. *)
+let fetch_with_display ?jobs ?shared_display ~session ~remote ~d10 ~index
+    ~available ~pkg_of ~total_bytes_known ~clock () =
+  let n_total = List.length available in
+  let bytes_received = ref 0L in
+  let done_count = ref 0 in
+  let cfg =
+    Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()
+  in
+  let owns_display, display =
+    match shared_display with
+    | Some d -> (false, d)
+    | None ->
+        let d = Progress.Display.start ~config:cfg Progress.Multi.blank in
+        (true, d)
+  in
+  let agg_handle =
+    Progress.Display.add_line display
+      (aggregate_line ~total:(to_int total_bytes_known))
+  in
+  let layer_handles : (string, int Progress.Reporter.t) Hashtbl.t =
+    Hashtbl.create n_total
+  in
+  let layer_size : (string, int) Hashtbl.t = Hashtbl.create n_total in
+  let lock = Mutex.create () in
+  let with_lock f = Mutex.protect lock f in
+  let stop_heartbeat = ref false in
+  Eio.Switch.run @@ fun hb_sw ->
+  if owns_display then
+    Eio.Fiber.fork_daemon ~sw:hb_sw (fun () ->
+        let rec loop () =
+          Eio.Time.sleep clock 0.1;
+          if !stop_heartbeat then `Stop_daemon
+          else begin
+            (try Progress.Display.tick display with _ -> ());
+            loop ()
+          end
+        in
+        loop ());
+  let ensure_line hash =
+    if not (Hashtbl.mem layer_handles hash) then begin
+      let my_size =
+        Stdlib.Option.value (Hashtbl.find_opt layer_size hash) ~default:0
+      in
+      (* Sort rows size-descending: biggest layers (which dominate
+         fetch time) pin near the top. [~above] counts existing rows
+         smaller than us; we land just above them. *)
+      let above =
+        Hashtbl.fold
+          (fun h _ acc ->
+            let s =
+              Stdlib.Option.value (Hashtbl.find_opt layer_size h) ~default:0
+            in
+            if s < my_size then acc + 1 else acc)
+          layer_handles 0
+      in
+      let pkg =
+        Stdlib.Option.value (Hashtbl.find_opt pkg_of hash) ~default:""
+      in
+      let r =
+        Progress.Display.add_line ~above display
+          (layer_line ~pkg ~size:my_size)
+      in
+      Hashtbl.add layer_handles hash r
+    end
+  in
+  let report_to_layer hash delta =
+    match Hashtbl.find_opt layer_handles hash with
+    | None -> ()
+    | Some r -> (try Progress.Reporter.report r delta with _ -> ())
+  in
+  let fiber_progress hash hash_ref ~received ~total:_ =
+    with_lock @@ fun () ->
+    let prev = !hash_ref in
+    hash_ref := received;
+    let delta = Int64.sub received prev in
+    bytes_received := Int64.add !bytes_received delta;
+    let delta_i = to_int delta in
+    (try Progress.Reporter.report agg_handle delta_i with _ -> ());
+    report_to_layer hash delta_i
+  in
+  let remove_line hash =
+    with_lock @@ fun () ->
+    match Hashtbl.find_opt layer_handles hash with
+    | None -> ()
+    | Some r ->
+        (try Progress.Reporter.finalise r with _ -> ());
+        (try Progress.Display.remove_line display r with _ -> ());
+        Hashtbl.remove layer_handles hash
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      stop_heartbeat := true;
+      (* Always retire the aggregate row; finalise the display only
+         when we own it. *)
+      (try Progress.Reporter.finalise agg_handle with _ -> ());
+      (try Progress.Display.remove_line display agg_handle with _ -> ());
+      if owns_display then
+        try Progress.Display.finalise display with _ -> ())
+    (fun () ->
+      Eio.Fiber.List.iter
+        ~max_fibers:(fetch_parallelism ?jobs ())
+        (fun hash ->
+          let sha256 =
+            Option.map
+              (fun (e : D10.Layer.index_entry) -> e.sha256)
+              (Hashtbl.find_opt index hash)
+          in
+          let size =
+            match Hashtbl.find_opt index hash with
+            | Some (e : D10.Layer.index_entry) -> e.size
+            | None -> 0L
+          in
+          with_lock (fun () ->
+              Hashtbl.replace layer_size hash (to_int size);
+              ensure_line hash);
+          let received_ref = ref 0L in
+          let on_progress = fiber_progress hash received_ref in
+          let ok =
+            D10.Layer.pull_remote d10 ~remote ~hash ~session ~on_progress
+              ?sha256 ()
+          in
+          remove_line hash;
+          if ok then begin
+            with_lock (fun () -> incr done_count);
+            Logs.info (fun m -> m "Fetched %s from registry" hash)
+          end)
+        available);
+  (!done_count, !bytes_received)
+
+let fetch_remote_layers ?on_phase ?on_progress ?jobs ?shared_display ~session
+    ~layer_remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan =
   match layer_remote with
   | None -> build_plan
   | Some r ->
@@ -208,84 +382,83 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ~session ~layer_remote ~d10
         end
         else begin
           let n_total = List.length available in
-          Logs.info (fun m ->
-              m "Fetching %d layer(s) from registry (%d needed)..." n_total
-                (List.length source_hashes));
-          (* Aggregate parallel fiber progress into one status line.
-             [done_count] increments on each successful pull;
-             [bytes_total] accumulates received bytes across all
-             in-flight fibers. We're under [Eio.Fiber.List.iter] which
-             on the default [Eio_posix] backend uses fibers (cooperative,
-             no preemption between yield points), so a plain ref is
-             safe — no mutex needed.
-
-             Routing: per-tick byte updates go to [on_progress] (a
-             high-frequency in-place sink), while one-shot milestone
-             messages — start of phase, final summary — go to [on_phase]
-             (typically a [Say.step] line). When [on_progress] isn't
-             supplied, byte updates fall through to [on_phase] so
-             callers like [oi run]'s spinner still see live activity. *)
-          let done_count = ref 0 in
-          let bytes_total = ref 0L in
-          let last_emit = ref 0.0 in
-          let throttle_s = 0.05 in
-          (* Byte updates prefer [on_progress] (in-place sink). Fall back
-             to [on_phase] so callers that only supplied a milestone sink
-             — typically [oi run]'s spinner — still see live activity. *)
-          let progress_sink =
-            match (on_progress, on_phase) with
-            | Some f, _ | None, Some f -> f
-            | None, None -> fun _ -> ()
+          let total_bytes_known =
+            List.fold_left
+              (fun acc h ->
+                match Hashtbl.find_opt index h with
+                | Some (e : D10.Layer.index_entry) -> Int64.add acc e.size
+                | None -> acc)
+              0L available
           in
-          let emit_progress () =
-            let now = Unix.gettimeofday () in
-            if now -. !last_emit >= throttle_s then begin
-              last_emit := now;
-              progress_sink
-                (Fmt.str "Fetching layers from registry (%d/%d, %s)" !done_count
-                   n_total (fmt_mb !bytes_total))
+          Logs.info (fun m ->
+              m "Fetching %d layer(s) from registry (%s, %d needed)..." n_total
+                (fmt_mb total_bytes_known) (List.length source_hashes));
+          (* Build a hash → "pkg.version" lookup for the per-row labels.
+             Layers we don't have a node for fall through to "" and the
+             row shows blanks. *)
+          let pkg_of : (string, string) Hashtbl.t = Hashtbl.create n_total in
+          List.iter
+            (fun (n : Plan.node) ->
+              Hashtbl.replace pkg_of n.layer_hash
+                (OpamPackage.to_string n.pkg))
+            (Plan.nodes build_plan);
+          let done_count, bytes_received =
+            if Tty.is_tty () then
+              fetch_with_display ?jobs ?shared_display ~session ~remote:r ~d10
+                ~index ~available ~pkg_of ~total_bytes_known ~clock:d10.clock
+                ()
+            else begin
+              (* Non-TTY: single-line text update routed through
+                 [on_progress] / [on_phase]. No multi-bar UI to corrupt. *)
+              let done_count = ref 0 in
+              let bytes_total = ref 0L in
+              let progress_sink =
+                match (on_progress, on_phase) with
+                | Some f, _ | None, Some f -> f
+                | None, None -> fun _ -> ()
+              in
+              let emit () =
+                progress_sink
+                  (Fmt.str "Fetching layers from registry (%d/%d, %s)"
+                     !done_count n_total (fmt_mb !bytes_total))
+              in
+              let fiber_progress hash_ref ~received ~total:_ =
+                let prev = !hash_ref in
+                hash_ref := received;
+                bytes_total :=
+                  Int64.add !bytes_total (Int64.sub received prev);
+                emit ()
+              in
+              Eio.Fiber.List.iter
+                ~max_fibers:(fetch_parallelism ?jobs ())
+                (fun hash ->
+                  let sha256 =
+                    Option.map
+                      (fun (e : D10.Layer.index_entry) -> e.sha256)
+                      (Hashtbl.find_opt index hash)
+                  in
+                  let received_ref = ref 0L in
+                  let on_progress = fiber_progress received_ref in
+                  if
+                    D10.Layer.pull_remote d10 ~remote:r ~hash ~session
+                      ~on_progress ?sha256 ()
+                  then begin
+                    incr done_count;
+                    emit ();
+                    Logs.info (fun m -> m "Fetched %s from registry" hash)
+                  end)
+                available;
+              (!done_count, !bytes_total)
             end
           in
-          (* Per-fiber received counter so we don't double-count when
-             retries / chunked downloads call [on_progress] cumulatively
-             within one fiber. *)
-          let fiber_progress hash_ref ~received ~total:_ =
-            let prev = !hash_ref in
-            hash_ref := received;
-            bytes_total := Int64.add !bytes_total (Int64.sub received prev);
-            emit_progress ()
-          in
-          Eio.Fiber.List.iter
-            ~max_fibers:(fetch_parallelism ?jobs ())
-            (fun hash ->
-              let sha256 =
-                Option.map
-                  (fun (e : D10.Layer.index_entry) -> e.sha256)
-                  (Hashtbl.find_opt index hash)
-              in
-              let received_ref = ref 0L in
-              let on_progress = fiber_progress received_ref in
-              if
-                D10.Layer.pull_remote d10 ~remote:r ~hash ~session ~on_progress
-                  ?sha256 ()
-              then begin
-                incr done_count;
-                emit_progress ();
-                Logs.info (fun m -> m "Fetched %s from registry" hash)
-              end)
-            available;
-          (* Wipe the in-place progress line (if any) and emit the final
-             summary as a milestone — [on_phase] is a "fresh line" sink,
-             so the summary lands on its own row rather than overwriting
-             the last progress update. *)
           (match on_progress with
           | Some _ -> Say.progress_clear ()
           | None -> ());
           (match on_phase with
           | Some f ->
               f
-                (Fmt.str "Fetched %d/%d layers from registry (%s)" !done_count
-                   n_total (fmt_mb !bytes_total))
+                (Fmt.str "Fetched %d/%d layers from registry (%s)" done_count
+                   n_total (fmt_mb bytes_received))
           | None -> ());
           Plan.build ctx ~d10 ~packages_dirs pkgs
         end
@@ -296,8 +469,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
     ?layer_remote ?source_remote ?jobs ?toolchain
     ?(constraints = OpamPackage.Name.Map.empty) ?project_root
-    ?local_packages_dir ?on_phase ?on_progress ?preflight_done names =
-  let _ = preflight_done in
+    ?local_packages_dir ?on_phase ?on_progress ?preflight_done ?shared_display
+    names =
   let on_phase =
     match on_phase with
     | Some f -> f
@@ -359,6 +532,17 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
                 m "layer cache entry stale (layers missing), falling through");
             None)
   in
+  (* [preflight_done] used to be invoked here by [Pipeline.build] mid-flow,
+     to let the caller clear its own preflight bar before [Execute.run]
+     opened a separate [Progress.Display]. With the shared-display
+     architecture introduced by {!Ui.Preflight} that's no longer
+     necessary — [Pipeline.build]'s subsystems attach their multi-bar
+     lines to the caller's display via [add_line], so the display
+     stays open the entire time. The parameter is kept on the
+     signature for backwards-compatibility with the few callers that
+     still pass it; it's only fired at the {i very} end of this
+     function (after [Execute.run] returns), so the display isn't
+     finalised while inner code is still trying to drive it. *)
   let fire_preflight_done () =
     match preflight_done with Some f -> f () | None -> ()
   in
@@ -413,8 +597,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
         | None -> build_plan
         | Some _ ->
             on_phase "Checking registry for prebuilt layers";
-            fetch_remote_layers ~on_phase ?on_progress ?jobs ~session
-              ~layer_remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
+            fetch_remote_layers ~on_phase ?on_progress ?jobs ?shared_display
+              ~session ~layer_remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
       in
       let hashes = Plan.layer_hashes build_plan in
       (* Every layer in the plan must be cached (Binary method) to skip
@@ -432,13 +616,10 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
         | None -> ()
         | Some k -> Solver.Cache.store_layers ~fs ~cache_root ~key:k hashes
       in
-      (* Hand off to the caller: the preflight bar (if any) clears here,
-         either because we're about to skip Execute.run (all-cached) or
-         because Execute.run is about to open its own progress bar. *)
-      fire_preflight_done ();
       if all_layers_cached then begin
         Logs.info (fun m -> m "Layers cached, skipping build");
         persist_layer_cache ();
+        fire_preflight_done ();
         hashes
       end
       else begin
@@ -567,7 +748,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             end
         | _ -> ());
         let urls = cache_urls ~cache ~source_remote in
-        Execute.run ~cache_urls:urls ~proc_mgr ~fs ?jobs
+        Execute.run ?shared_display ~cache_urls:urls ~proc_mgr ~fs ?jobs
           ~clock:(clock :> D10.Config.clk)
           ~sys ~os_key exec_plan;
         let prefix_hash = D10.Prefix.solve_hash hashes in
@@ -577,6 +758,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
         (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix_dir)
          with _ -> ());
         persist_layer_cache ();
+        fire_preflight_done ();
         hashes
       end
 

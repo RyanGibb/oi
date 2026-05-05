@@ -495,32 +495,176 @@ type reporter = { pkg_event : pkg_event -> unit }
 
 (* -- Main loop ------------------------------------------------------------ *)
 
-(* Default reporter: internal Progress bar + inline FAIL prints. Used by
-   [oi run] / [oi build], which only ever run one [Execute.run] at a time
-   and have no outer UI to coordinate with. [oi build --all] supplies
-   its own reporter to drive a cross-invocation bar with live counters. *)
-let with_default_reporter ~clock ~total_packages f =
-  Eio.Switch.run @@ fun sw ->
-  Ui.run ~status_lines:0 ~sw ~clock ~total:total_packages ~title:"build"
-  @@ fun ui ->
-  let reporter =
-    {
-      pkg_event =
-        (fun e ->
-          match e with
-          | Started { pkg; phase } -> Ui.with_msg ui (Fmt.str "%s %s" phase pkg)
-          | Cached _ | Built _ -> Ui.tick ui
-          | Dep_failed _ -> ()
-          | Build_failed { pkg; log } ->
-              Ui.suspend ui (fun () ->
-                  Fmt.epr "  %a %s → %s@." Style.error_string "FAIL" pkg log)
-          | Install_failed { pkg; log } ->
-              Ui.suspend ui (fun () ->
-                  Fmt.epr "  %a %s (install) → %s@." Style.error_string "FAIL"
-                    pkg log));
-    }
+(* Build-phase UI matching the fetch UI in [Pipeline.fetch_with_display]
+   so the [oi build] / [oi run] flow looks like one tool: bold "Build"
+   header rpad'd to {!Ui.row_label_width}, then the same {!Ui.row_bar_width}-cell
+   bar fetch uses; per-package rows are pkg name fitted to the same
+   width plus a spinner and a trailing "<phase> (Xs)" status string. *)
+
+let agg_build_line ~total =
+  let open Progress.Line in
+  let header =
+    constf "%a"
+      Fmt.(styled `Bold string)
+      (Printf.sprintf "%-*s" Ui.row_label_width "Build")
   in
-  f reporter
+  list ~sep:(const " ")
+    [
+      header;
+      Ui.Theme.bar ~width:(`Fixed Ui.row_bar_width) total;
+      count_to total;
+      sum ~pp:(Ui.Theme.pct_pp ~total) ~width:6 ();
+    ]
+
+let pkg_build_line ~pkg =
+  let open Progress.Line in
+  list ~sep:(const " ")
+    [
+      const (Ui.fit_label Ui.row_label_width pkg);
+      Ui.Theme.spinner ();
+      string;
+    ]
+
+(* Default reporter: aggregate "Build M/N" bar plus one row per
+   in-flight package, with inline FAIL prints when builds bail. Used
+   by [oi run] / [oi build], which only ever run one [Execute.run]
+   at a time. [oi build --all] supplies its own reporter for a
+   cross-invocation bar.
+
+   When [shared_display] is supplied (the unified UI from
+   {!Ui.Preflight.with_bar}), attach to it so the overall progress
+   bar above stays visible across the build phase. Otherwise own a
+   fresh [Display].
+
+   A heartbeat fiber refreshes the per-package row text once a
+   second so the elapsed counter ticks even when a long compile (e.g.
+   ocaml-base-compiler at >60s) hasn't yielded. *)
+let with_default_reporter ?shared_display ~clock ~total_packages f =
+  if not (Tty.is_tty ()) then begin
+    let log_event = function
+      | Started { pkg; phase } ->
+          Logs.info (fun m -> m "build: %s %s" phase pkg)
+      | Cached { pkg } -> Logs.info (fun m -> m "build: cached %s" pkg)
+      | Built { pkg } -> Logs.info (fun m -> m "build: built %s" pkg)
+      | Dep_failed _ -> ()
+      | Build_failed { pkg; log } ->
+          Fmt.epr "  %a %s → %s@." Style.error_string "FAIL" pkg log
+      | Install_failed { pkg; log } ->
+          Fmt.epr "  %a %s (install) → %s@." Style.error_string "FAIL" pkg log
+    in
+    f { pkg_event = log_event }
+  end
+  else begin
+    Eio.Switch.run @@ fun sw ->
+    let cfg =
+      Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()
+    in
+    let owns_display, display =
+      match shared_display with
+      | Some d -> (false, d)
+      | None ->
+          let d = Progress.Display.start ~config:cfg Progress.Multi.blank in
+          (true, d)
+    in
+    let agg_handle =
+      Progress.Display.add_line display (agg_build_line ~total:total_packages)
+    in
+    let pkg_handles : (string, string Progress.Reporter.t) Hashtbl.t =
+      Hashtbl.create 8
+    in
+    let pkg_started_at : (string, float) Hashtbl.t = Hashtbl.create 8 in
+    let pkg_phase : (string, string) Hashtbl.t = Hashtbl.create 8 in
+    let lock = Mutex.create () in
+    let with_lock f = Mutex.protect lock f in
+    let now () = Unix.gettimeofday () in
+    let stopped = ref false in
+    let render_pkg pkg =
+      match Hashtbl.find_opt pkg_handles pkg with
+      | None -> ()
+      | Some r ->
+          let phase =
+            Hashtbl.find_opt pkg_phase pkg |> Stdlib.Option.value ~default:""
+          in
+          let elapsed =
+            match Hashtbl.find_opt pkg_started_at pkg with
+            | Some t0 -> now () -. t0
+            | None -> 0.0
+          in
+          (try
+             Progress.Reporter.report r (Fmt.str "%s (%.0fs)" phase elapsed)
+           with _ -> ())
+    in
+    (* Heartbeat at 100ms: animates spinner ([Display.tick]) when we
+       own the display, plus refreshes per-package row text every 10
+       ticks (1s) so [(Xs)] advances even when compilers are silent.
+       Shared mode skips the [Display.tick] (the owner already runs
+       one). *)
+    Eio.Fiber.fork_daemon ~sw (fun () ->
+        let n = ref 0 in
+        let rec loop () =
+          Eio.Time.sleep clock 0.1;
+          if !stopped then `Stop_daemon
+          else begin
+            if owns_display then
+              (try Progress.Display.tick display with _ -> ());
+            incr n;
+            if !n mod 10 = 0 then
+              with_lock (fun () ->
+                  Hashtbl.iter (fun pkg _ -> render_pkg pkg) pkg_handles);
+            loop ()
+          end
+        in
+        loop ());
+    let on_started pkg phase =
+      with_lock @@ fun () ->
+      if not (Hashtbl.mem pkg_handles pkg) then begin
+        let r = Progress.Display.add_line display (pkg_build_line ~pkg) in
+        Hashtbl.add pkg_handles pkg r;
+        Hashtbl.add pkg_started_at pkg (now ())
+      end;
+      Hashtbl.replace pkg_phase pkg phase;
+      render_pkg pkg
+    in
+    let on_done pkg =
+      with_lock @@ fun () ->
+      match Hashtbl.find_opt pkg_handles pkg with
+      | None -> ()
+      | Some r ->
+          (try Progress.Reporter.finalise r with _ -> ());
+          (try Progress.Display.remove_line display r with _ -> ());
+          Hashtbl.remove pkg_handles pkg;
+          Hashtbl.remove pkg_started_at pkg;
+          Hashtbl.remove pkg_phase pkg
+    in
+    let report_event = function
+      | Started { pkg; phase } -> on_started pkg phase
+      | Cached { pkg } ->
+          on_done pkg;
+          (try Progress.Reporter.report agg_handle 1 with _ -> ())
+      | Built { pkg } ->
+          on_done pkg;
+          (try Progress.Reporter.report agg_handle 1 with _ -> ())
+      | Dep_failed { pkg; _ } -> on_done pkg
+      | Build_failed { pkg; log } ->
+          on_done pkg;
+          (try Progress.Display.pause display with _ -> ());
+          Fmt.epr "  %a %s → %s@." Style.error_string "FAIL" pkg log;
+          (try Progress.Display.resume display with _ -> ())
+      | Install_failed { pkg; log } ->
+          on_done pkg;
+          (try Progress.Display.pause display with _ -> ());
+          Fmt.epr "  %a %s (install) → %s@." Style.error_string "FAIL" pkg log;
+          (try Progress.Display.resume display with _ -> ())
+    in
+    Fun.protect
+      ~finally:(fun () ->
+        stopped := true;
+        (try Progress.Reporter.finalise agg_handle with _ -> ());
+        (try Progress.Display.remove_line display agg_handle with _ -> ());
+        if owns_display then
+          try Progress.Display.finalise display with _ -> ())
+      (fun () -> f { pkg_event = report_event })
+  end
 
 (* -- Per-package trace for Audit + Provenance writes -------------------- *)
 
@@ -665,8 +809,8 @@ let emit_event ~fs ~cache_root ~os_key ~ocaml_version ~audit_base ~outcome
     Provenance.write ~fs ~cache_root prov
   end
 
-let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
-    ~fs ~clock ~sys ~os_key plan =
+let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base
+    ?shared_display ~proc_mgr ~fs ~clock ~sys ~os_key plan =
   let build_parallelism =
     match jobs with Some n when n > 0 -> n | _ -> default_build_parallelism ()
   in
@@ -974,7 +1118,7 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base ~proc_mgr
   (match reporter with
   | Some r -> do_work r
   | None ->
-      with_default_reporter
+      with_default_reporter ?shared_display
         ~clock:(clock :> _ Eio.Time.clock)
         ~total_packages:(List.length plan.packages)
         do_work);

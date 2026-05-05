@@ -48,6 +48,9 @@ val do_sync :
   ?jobs:int ->
   ?toolchain:string ->
   ?envrc_mode:envrc_mode ->
+  ?bar_on_phase:(string -> unit) ->
+  ?bar_on_text:(string -> unit) ->
+  ?bar_display:(unit, unit) Progress.Display.t ->
   proc_mgr:Eio_unix.Process.mgr_ty Eio.Resource.t ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   clock:float Eio.Time.clock_ty Eio.Resource.t ->
@@ -65,4 +68,11 @@ val do_sync :
 (** Run a full sync in [cwd] and return the assembled [_oi/prefix/] path along
     with the resolved toolchain so callers can reuse it (e.g. [oi exec] reading
     env vars without re-resolving). [quiet] (default [false]) routes narration
-    to [Logs.info] instead of stdout. *)
+    to [Logs.info] instead of stdout.
+
+    [bar_on_phase] / [bar_on_text] / [bar_display]: when supplied, narration
+    is routed to the {!Oi.Ui.Preflight} overall progress bar instead of
+    stdout, and [Pipeline.fetch_remote_layers] / [Execute.run] attach their
+    multi-bar lines to [bar_display] via [Progress.Display.add_line]. Pass
+    these straight from [Oi.Ui.Preflight.with_bar] in callers that wrap
+    [do_sync] in the overall progress UI. *)

@@ -293,34 +293,54 @@ module Http = struct
       method fs = t.fs
     end
 
-  (* [max_connections_per_host] sized for parallel layer fetches. With
-     HTTP/2 (the default on [oi.ci.dev] etc.) one connection multiplexes
-     many streams and the pool barely matters; on HTTP/1.1 servers, 32
-     parallel connections give us enough headroom that
-     [OI_HTTP_PARALLELISM=32] doesn't queue. The idle/lifetime numbers
-     are deliberately generous so a CLI run that issues fetches in two
-     waves (e.g. layers, then sources) reuses the same connections
-     across the gap. *)
+  (* [max_connections_per_host] sized for the typical
+     [OI_HTTP_PARALLELISM] (default 8 in [Oi.Pipeline.fetch_parallelism]).
+     With HTTP/2 (the default on [oi.ci.dev] etc.) one connection
+     multiplexes many streams and the pool barely matters; on HTTP/1.1
+     servers, 16 parallel connections gives a 2x headroom over the
+     fiber count so high-jobs invocations don't queue. The
+     idle/lifetime numbers are deliberately generous so a CLI run that
+     issues fetches in two waves (layers, then sources) reuses the
+     same connections across the gap.
+
+     [OI_FORCE_HTTP1=1] (test-only) routes through [Requests.v]'s
+     [~protocol_mode:Http1_only] so the session advertises only
+     [http/1.1] in ALPN, forcing the registry to fall back to HTTP/1.1
+     even when it supports HTTP/2. Useful for A/B-comparing the H1 vs
+     H2 paths. *)
+  let force_http1 () =
+    match Sys.getenv_opt "OI_FORCE_HTTP1" with
+    | Some v when v <> "" && v <> "0" -> true
+    | _ -> false
+
   let with_session ~sw t f =
+    let protocol_mode =
+      if force_http1 () then Some Requests.Http1_only else None
+    in
     let session =
-      Requests.v ~sw ~max_connections_per_host:32 ~connection_idle_timeout:300.0
-        ~connection_lifetime:1800.0 (env_of t)
+      Requests.v ~sw ~max_connections_per_host:16 ~connection_idle_timeout:300.0
+        ~connection_lifetime:1800.0 ?protocol_mode (env_of t)
     in
     f session
 
   let fetch_session ?on_progress session ~url ~dst =
     try
-      let resp = Requests.get session url in
+      (* [Requests.get ?on_progress] fires the callback as response
+         body bytes arrive on the wire (per HTTP/2 DATA frame on the
+         h2 path). That's what makes the per-layer progress bar tick
+         in real time — without it the body is fully buffered before
+         [Response.body] returns and the subsequent [Flow.copy] sees
+         memory-copy speed, not network speed. *)
+      let resp = Requests.get ?on_progress session url in
       if not (Requests.Response.ok resp) then begin
         Log.debug (fun m ->
             m "http %s: status %d" url (Requests.Response.status_code resp));
         false
       end
       else begin
-        let total = Requests.Response.content_length resp in
         let body = Requests.Response.body resp in
         Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
-            copy_with_progress ?on_progress ?total body out);
+            Eio.Flow.copy body out);
         true
       end
     with exn ->

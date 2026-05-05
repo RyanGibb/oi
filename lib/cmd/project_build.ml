@@ -198,20 +198,42 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
       (String.concat ", " order);
     0
   end
-  else begin
+  else
+    (* One spinner across the whole flow. The multi-bar [Progress]
+       displays inside [Pipeline.fetch_remote_layers] / [Execute.run]
+       / [install_tools] attach to the same [shared_display] via
+       [add_line] / [remove_line], so the overall bar stays visible
+       across phase transitions. The dune subprocess at the end runs
+       after [preflight_done] finalises the display so its stdout has
+       a clean canvas.
+
+       Phase budget for the overall bar: the visible phases that
+       [Pipeline.build] / [Sync.do_sync] / [install_tools] fire when
+       run from [oi build]. Easy to over- or under-shoot — the bar
+       caps at 100% — but lands close enough to give the user a
+       useful sense of "how far am I". *)
+    Oi.Ui.Preflight.with_bar ~clock ~total_steps:18
+    @@ fun ~on_phase ~on_text ~preflight_done ~shared_display ->
     let prefix, tc =
       Sync.do_sync ~quiet:false ~refresh ~with_repos ~with_deps ?jobs ?toolchain
-        ?envrc_mode ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
-        ~registry ~use_registry ~session ~cwd ()
+        ?envrc_mode ~bar_on_phase:on_phase ~bar_on_text:on_text
+        ?bar_display:shared_display ~proc_mgr ~fs ~clock ~sys ~platform ~os_key
+        ~cache ~data_dir ~registry ~use_registry ~session ~cwd ()
     in
     match dune_target action with
-    | None -> 0
+    | None ->
+        preflight_done ();
+        0
     | Some target ->
         let dune_cache_root = Oi.Cache.dune_root cache in
         let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info tc in
         let env =
           Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
         in
+        (* Hand the screen to dune for the actual compile: clear the
+           spinner and stop animating it so dune's incremental output
+           shows on its own lines. *)
+        preflight_done ();
         Fmt.pr "@.%a %d package(s): %s@." Oi.Style.header_string (label ^ "ing")
           (List.length opams) (String.concat ", " order);
         let ec =
@@ -226,4 +248,3 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
           Fmt.pr "%a@." Oi.Style.ok_string (label ^ " successful");
           0
         end
-  end

@@ -13,6 +13,7 @@
   nox-tty
   nox-tty-eio
   nox-xdg
+  progress
   fmt
   logs
   jsont

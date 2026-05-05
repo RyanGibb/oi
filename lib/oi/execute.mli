@@ -49,6 +49,7 @@ val run :
   ?failed_layers:(string, string) Hashtbl.t ->
   ?reporter:reporter ->
   ?audit_base:Audit.context ->
+  ?shared_display:(unit, unit) Progress.Display.t ->
   proc_mgr:_ Eio.Process.mgr ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   clock:D10.Config.clk ->

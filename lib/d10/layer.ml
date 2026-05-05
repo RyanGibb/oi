@@ -230,7 +230,10 @@ let fetch_remote_index (c : Config.t) ~session ~remote =
 
 (* -- Remote pull --------------------------------------------------------- *)
 
-let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?sha256 () =
+type fetch_phase = Fetching | Verifying | Extracting
+
+let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
+    ?sha256 () =
   if succeeded c ~hash then true
   else begin
     let url =
@@ -240,14 +243,33 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?sha256 () =
     in
     let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
     let layer_dir = dir c ~hash in
+    (* Atomic publication: extract into [<hash>.partial/] and rename
+       to [<hash>/] only after the tar exits 0. The tarball stores
+       [./layer.json] at the top level (alphabetically before [./fs/]),
+       so a torn [tar xf] into [<hash>/] would leave the dir looking
+       "succeeded" to {!succeeded} while [fs/] is half-empty —
+       exactly the bug that produced corrupt [ppx_sexp_value] layers
+       in the wild. Renaming a freshly-built sibling sidesteps that:
+       either [<hash>/] is whole, or it doesn't exist. *)
+    let staging_dir = Eio.Path.(os_layer_dir / (hash ^ ".partial")) in
     let tmp_file = Eio.Path.(os_layer_dir / (hash ^ ".tar.zst.tmp")) in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
+    (* Wipe any leftover staging dir from a prior interrupted run.
+       Without this, the next [tar xf] would merge new files on top of
+       stale ones, so a previously-corrupt layer would publish corrupt
+       again. *)
+    (try Eio.Path.rmtree ~missing_ok:true staging_dir with _ -> ());
+    let phase p = match on_phase with Some f -> f p | None -> () in
+    phase Fetching;
     let ok =
       Sysops.Http.fetch_session ?on_progress session ~url ~dst:tmp_file
     in
     let cleanup_tmp () = try Eio.Path.unlink tmp_file with _ -> () in
+    let cleanup_staging () =
+      try Eio.Path.rmtree ~missing_ok:true staging_dir with _ -> ()
+    in
     if ok then begin
-      (* Verify sha256 if provided *)
+      phase Verifying;
       let checksum_ok =
         match sha256 with
         | None -> true
@@ -265,13 +287,37 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?sha256 () =
             end
       in
       if checksum_ok then begin
-        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 layer_dir;
-        (try Sysops.Tar.extract c.sys ~archive:tmp_file ~dst:layer_dir ()
-         with Failure msg -> (
-           Logs.warn (fun m -> m "Failed to extract %s: %s" hash msg);
-           try Eio.Path.rmtree ~missing_ok:true layer_dir with _ -> ()));
+        phase Extracting;
+        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 staging_dir;
+        let extract_ok =
+          try
+            Sysops.Tar.extract c.sys ~archive:tmp_file ~dst:staging_dir ();
+            true
+          with Failure msg ->
+            Logs.warn (fun m -> m "Failed to extract %s: %s" hash msg);
+            false
+        in
         cleanup_tmp ();
-        succeeded c ~hash
+        if extract_ok then begin
+          (* [rename(2)] on Linux fails with ENOTEMPTY if the
+             destination is a non-empty directory, so blow away any
+             pre-existing [<hash>/] (which we already proved is not
+             [succeeded] above) before publishing the staging dir. *)
+          (try Eio.Path.rmtree ~missing_ok:true layer_dir with _ -> ());
+          try
+            Eio.Path.rename staging_dir layer_dir;
+            succeeded c ~hash
+          with exn ->
+            Logs.warn (fun m ->
+                m "Failed to publish layer %s: %s" hash
+                  (Printexc.to_string exn));
+            cleanup_staging ();
+            false
+        end
+        else begin
+          cleanup_staging ();
+          false
+        end
       end
       else begin
         cleanup_tmp ();

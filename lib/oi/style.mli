@@ -12,6 +12,11 @@ val dim : Tty.Style.t
 val accent : Tty.Style.t
 val strong_ok : Tty.Style.t
 val source : Tty.Style.t
+
+val camel : Tty.Style.t
+(** OCaml.org camel-orange. Used by progress UI (preflight spinner, multi-bar
+    fills) for unified branding across pipeline phases. *)
+
 val phase_fetch : Tty.Style.t
 val phase_build : Tty.Style.t
 val phase_install : Tty.Style.t
@@ -28,6 +33,7 @@ val dim_string : string Fmt.t
 val accent_string : string Fmt.t
 val strong_ok_string : string Fmt.t
 val source_string : string Fmt.t
+val camel_string : string Fmt.t
 
 val pp : Tty.Style.t -> 'a Fmt.t -> 'a Fmt.t
 (** [pp style pp] wraps a formatter with [style]. Use for non-string formatters
