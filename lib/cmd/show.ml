@@ -857,7 +857,12 @@ let cmd =
         ~clock:(clock :> D10.Config.clk)
         ~cache ~os_key
     in
-    let action_plan = Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs in
+    let action_plan =
+      try Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs
+      with Oi.Plan.Cycle cycles ->
+        Oi.Error.config_error "dependency cycle in solved packages:@\n%a"
+          Oi.Plan.pp_cycles cycles
+    in
     let json_plan_node (n : Oi.Plan.node) =
       let name = OpamPackage.Name.to_string (OpamPackage.name n.pkg) in
       let version = OpamPackage.Version.to_string (OpamPackage.version n.pkg) in

@@ -41,6 +41,24 @@ type node = {
 type graph
 (** A DAG of nodes keyed by package name. *)
 
+exception Cycle of OpamPackage.t list list
+(** Raised by {!of_solution} when the solved package set contains a dependency
+    cycle (one or more strongly-connected components in the in-plan dep graph
+    with size > 1, or a self-loop). Each inner list is one cycle in discovery
+    order; multiple distinct cycles surface as separate inner lists.
+
+    Cycles are an upstream-metadata bug: opam-0install solves cyclic
+    [{= version}] depend-pairs without complaint, but {!Execute.run}'s
+    fiber-per-package model deadlocks because each package's [await_dep] sleeps
+    on a promise the cycle prevents from ever resolving. Callers should catch
+    this and skip the offending solve group rather than letting it wedge. *)
+
+val pp_cycle : OpamPackage.t list Fmt.t
+(** Render a single cycle as ["a → b → c → a"]. *)
+
+val pp_cycles : OpamPackage.t list list Fmt.t
+(** Render a list of cycles, one per line. *)
+
 val of_solution :
   Solver.Ctx.t ->
   ?d10:D10.Config.t ->
@@ -49,7 +67,8 @@ val of_solution :
   graph
 (** [of_solution ctx ?d10 ~packages_dirs pkgs] builds an action graph from a
     topologically-sorted package list. When [d10] is given, checks the layer
-    cache and marks cached packages as [Binary]. *)
+    cache and marks cached packages as [Binary]. Raises {!Cycle} when the
+    in-plan dep graph contains a cycle. *)
 
 val nodes : graph -> node list
 (** [nodes g] is the list of all nodes in topological order. *)

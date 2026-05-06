@@ -48,7 +48,16 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
             exit 1
       in
       let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
-      let plan = Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs in
+      let plan =
+        try Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs
+        with Oi.Plan.Cycle cycles ->
+          Oi.Error.config_error
+            "dependency cycle in script's solved packages:@\n\
+             %a@\n\
+             Re-check the [@@@@@@opam ...] header — the cycle came from one of \
+             the listed deps' opam metadata."
+            Oi.Plan.pp_cycles cycles
+      in
       let exec_plan =
         Oi.Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
           ~ocaml_version:conf.ocaml_version plan

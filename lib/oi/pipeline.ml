@@ -180,9 +180,7 @@ let fetch_parallelism ?jobs () =
   | _ -> (
       match Sys.getenv_opt "OI_HTTP_PARALLELISM" with
       | Some s -> (
-          match int_of_string_opt s with
-          | Some n when n > 0 -> n
-          | _ -> default)
+          match int_of_string_opt s with Some n when n > 0 -> n | _ -> default)
       | None -> default)
 
 let fmt_mb n =
@@ -465,7 +463,16 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ?shared_display ~session
                 (Fmt.str "Fetched %d/%d layers from registry (%s)" done_count
                    n_total (fmt_mb bytes_received))
           | None -> ());
-          Plan.of_solution ctx ~d10 ~packages_dirs pkgs
+          try Plan.of_solution ctx ~d10 ~packages_dirs pkgs
+          with Plan.Cycle cycles ->
+            Error.config_error
+              "dependency cycle in solved packages:@\n\
+               %a@\n\
+               This is an upstream metadata bug — the cyclic packages declare \
+               mutually-equivalent [{= version}] dependencies. Run [oi build \
+               --all] to skip just the offending solve group, or fix the \
+               offending overlay's opam files."
+              Plan.pp_cycles cycles
         end
 
 (* -- Central build pipeline (was main.ml's solve_and_ensure_layers) ----- *)
@@ -585,7 +592,18 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
       on_phase
         (Fmt.str "Planning %d package%s" (List.length pkgs)
            (if List.length pkgs = 1 then "" else "s"));
-      let build_plan = Plan.of_solution ctx ~d10 ~packages_dirs pkgs in
+      let build_plan =
+        try Plan.of_solution ctx ~d10 ~packages_dirs pkgs
+        with Plan.Cycle cycles ->
+          Error.config_error
+            "dependency cycle in solved packages:@\n\
+             %a@\n\
+             This is an upstream metadata bug — the cyclic packages declare \
+             mutually-equivalent [{= version}] dependencies. Run [oi build \
+             --all] to skip just the offending solve group, or fix the \
+             offending overlay's opam files."
+            Plan.pp_cycles cycles
+      in
       if dry_run then begin
         let remote_has =
           match layer_remote with

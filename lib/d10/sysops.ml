@@ -66,11 +66,11 @@ let with_timeout t ~cmd f =
           m "subprocess timed out after %.0fs (%.1f min): %s" timeout mins argv);
       Fmt.failwith
         "subprocess timed out after %.0fs (%.1f min) and was cancelled: %s\n\
-         A child process exceeded the per-command time limit. The most \
-         common cause is a wedged network operation (git fetch/clone from a \
-         slow or unreachable remote, an opam source download, a hung HTTPS \
-         handshake). Override the cap by exporting OI_CMD_TIMEOUT=N \
-         (seconds; [0] disables)."
+         A child process exceeded the per-command time limit. The most common \
+         cause is a wedged network operation (git fetch/clone from a slow or \
+         unreachable remote, an opam source download, a hung HTTPS handshake). \
+         Override the cap by exporting OI_CMD_TIMEOUT=N (seconds; [0] \
+         disables)."
         timeout mins argv
 
 let run_quiet t cmd =
@@ -225,11 +225,11 @@ let run_inherit t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
   match (t.stdout, t.stderr) with
   | None, _ | _, None -> run_quiet t cmd
-  | Some stdout, Some stderr ->
+  | Some stdout, Some stderr -> (
       with_timeout t ~cmd @@ fun () ->
       Eio.Switch.run @@ fun sw ->
       let child = Eio.Process.spawn ~sw t.proc_mgr ~stdout ~stderr cmd in
-      (match Eio.Process.await child with
+      match Eio.Process.await child with
       | `Exited 0 -> ()
       | `Exited n -> Fmt.failwith "%s exited %d" (List.hd cmd) n
       | `Signaled n -> Fmt.failwith "%s killed by signal %d" (List.hd cmd) n)
@@ -295,9 +295,7 @@ module Http = struct
               "HTTP request timed out after %.0fs (%.1f min); cancelling: %s\n\
                Override the cap by exporting OI_HTTP_TIMEOUT=N (seconds; [0] \
                disables)."
-              timeout
-              (timeout /. 60.0)
-              url);
+              timeout (timeout /. 60.0) url);
         false
 
   (* Stream [src] into [sink] while invoking [on_progress] with the

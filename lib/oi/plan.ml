@@ -23,6 +23,79 @@ type graph = {
   topo_order : OpamPackage.Name.t list;
 }
 
+exception Cycle of OpamPackage.t list list
+
+let pp_cycle ppf cycle =
+  Fmt.pf ppf "  %s → %s"
+    (String.concat " → " (List.map OpamPackage.to_string cycle))
+    (OpamPackage.to_string (List.hd cycle))
+
+let pp_cycles ppf cycles =
+  Fmt.pf ppf "@[<v>%a@]" (Fmt.list ~sep:Fmt.cut pp_cycle) cycles
+
+(* Tarjan's strongly-connected-components algorithm restricted to
+   non-trivial SCCs — i.e. dependency cycles. A single-node SCC with
+   no self-edge is just a normal package and is filtered out. Self-
+   edges (a package that lists itself as a dep, however unlikely) are
+   reported as a length-1 cycle.
+
+   Each returned inner list is one cycle in discovery order. *)
+let find_scc_cycles g =
+  let module N = OpamPackage.Name in
+  let index : (N.t, int) Hashtbl.t = Hashtbl.create 16 in
+  let lowlink : (N.t, int) Hashtbl.t = Hashtbl.create 16 in
+  let on_stack : (N.t, bool) Hashtbl.t = Hashtbl.create 16 in
+  let stack : N.t Stack.t = Stack.create () in
+  let counter = ref 0 in
+  let cycles = ref [] in
+  let pkg_of n = (N.Map.find n g.nodes_by_name).pkg in
+  let deps_of n = (N.Map.find n g.nodes_by_name).deps in
+  let rec strongconnect v =
+    Hashtbl.replace index v !counter;
+    Hashtbl.replace lowlink v !counter;
+    incr counter;
+    Stack.push v stack;
+    Hashtbl.replace on_stack v true;
+    List.iter
+      (fun w ->
+        if not (Hashtbl.mem index w) then begin
+          strongconnect w;
+          let lv = Hashtbl.find lowlink v in
+          let lw = Hashtbl.find lowlink w in
+          Hashtbl.replace lowlink v (min lv lw)
+        end
+        else if Stdlib.Option.value (Hashtbl.find_opt on_stack w) ~default:false
+        then begin
+          let lv = Hashtbl.find lowlink v in
+          let iw = Hashtbl.find index w in
+          Hashtbl.replace lowlink v (min lv iw)
+        end)
+      (deps_of v);
+    if Hashtbl.find lowlink v = Hashtbl.find index v then begin
+      let scc = ref [] in
+      let rec pop () =
+        let w = Stack.pop stack in
+        Hashtbl.replace on_stack w false;
+        scc := w :: !scc;
+        if N.compare w v <> 0 then pop ()
+      in
+      pop ();
+      let names = !scc in
+      let is_cycle =
+        List.length names > 1
+        ||
+        match names with
+        | [ n ] -> List.exists (fun d -> N.compare d n = 0) (deps_of n)
+        | _ -> false
+      in
+      if is_cycle then cycles := List.map pkg_of names :: !cycles
+    end
+  in
+  N.Map.iter
+    (fun v _ -> if not (Hashtbl.mem index v) then strongconnect v)
+    g.nodes_by_name;
+  List.rev !cycles
+
 let of_solution ctx ?d10 ~packages_dirs pkgs =
   let in_solution =
     List.fold_left
@@ -139,7 +212,13 @@ let of_solution ctx ?d10 ~packages_dirs pkgs =
       (OpamPackage.Name.Set.empty, OpamPackage.Name.Map.empty, [])
       pkgs
   in
-  { nodes_by_name; topo_order }
+  let g = { nodes_by_name; topo_order } in
+  (* Detect cycles before returning. opam-0install will solve a
+     cyclic dependency set without complaint (it only checks
+     satisfiability), but [Execute.run] then deadlocks because each
+     package's fiber awaits a dep promise that never resolves. *)
+  (match find_scc_cycles g with [] -> () | cycles -> raise (Cycle cycles));
+  g
 
 (* -- Graph accessors ----------------------------------------------------- *)
 
