@@ -84,7 +84,8 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   let events = Oi.Audit.read_all ~fs ~cache_root ~os_key in
   if provs <> [] || events <> [] then begin
     let manifest =
-      Oi.Manifest.from_logs ~os_key ~exported_at:(Unix.gettimeofday ()) provs events
+      Oi.Manifest.from_logs ~os_key ~exported_at:(Unix.gettimeofday ()) provs
+        events
     in
     let logs_dir = output / os_key / "logs" in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / logs_dir);

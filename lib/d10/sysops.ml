@@ -25,8 +25,57 @@ type t = {
 
 let native p = Eio.Path.native_exn p
 
+(* -- Subprocess timeout --------------------------------------------------
+
+   Default 10-minute hard cap on every syscmd subprocess this module
+   spawns: git fetch/clone, tar extract, cp, which, etc. Long enough
+   for a slow git clone of a multi-GB repository on flaky connectivity,
+   short enough to break a wedged process before it tanks an
+   [oi build --all]. Override per-process via [OI_CMD_TIMEOUT] (seconds);
+   set to [0] to disable.
+
+   Why this exists: bare [Eio.Process.await] has no timeout. A [git
+   clone] from a stalled remote will block the calling fiber forever,
+   leaving the rest of the build queued and the spawned [git] process
+   uncollectable. With this cap a wedged subprocess fails the calling
+   fiber with [Failure], the switch unwinds, the child is killed, and
+   the rest of the [oi build --all] continues.
+
+   Build-step subprocesses (compile commands invoked by [Oi.Execute])
+   do NOT go through this path — those legitimately take longer for
+   large native compiles and have their own bookkeeping. *)
+let default_cmd_timeout_s = 600.0
+
+let cmd_timeout_s () =
+  match Sys.getenv_opt "OI_CMD_TIMEOUT" with
+  | Some v -> (
+      match float_of_string_opt v with
+      | Some n when n >= 0.0 -> n
+      | _ -> default_cmd_timeout_s)
+  | None -> default_cmd_timeout_s
+
+let with_timeout t ~cmd f =
+  let timeout = cmd_timeout_s () in
+  if timeout <= 0.0 then f ()
+  else
+    try Eio.Time.with_timeout_exn t.clock timeout f
+    with Eio.Time.Timeout ->
+      let argv = String.concat " " cmd in
+      let mins = timeout /. 60.0 in
+      Log.warn (fun m ->
+          m "subprocess timed out after %.0fs (%.1f min): %s" timeout mins argv);
+      Fmt.failwith
+        "subprocess timed out after %.0fs (%.1f min) and was cancelled: %s\n\
+         A child process exceeded the per-command time limit. The most \
+         common cause is a wedged network operation (git fetch/clone from a \
+         slow or unreachable remote, an opam source download, a hung HTTPS \
+         handshake). Override the cap by exporting OI_CMD_TIMEOUT=N \
+         (seconds; [0] disables)."
+        timeout mins argv
+
 let run_quiet t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
+  with_timeout t ~cmd @@ fun () ->
   Eio.Switch.run @@ fun sw ->
   let buf = Buffer.create 256 in
   let sink = Eio.Flow.buffer_sink buf in
@@ -45,6 +94,7 @@ let run_quiet t cmd =
 let run_capture t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
   let out =
+    with_timeout t ~cmd @@ fun () ->
     String.trim (Eio.Process.parse_out t.proc_mgr Eio.Buf_read.take_all cmd)
   in
   Log.debug (fun m -> m "%s" out);
@@ -58,6 +108,7 @@ let run_capture_quiet t cmd =
   let stderr_buf = Buffer.create 64 in
   let stderr_sink = Eio.Flow.buffer_sink stderr_buf in
   let out =
+    with_timeout t ~cmd @@ fun () ->
     String.trim
       (Eio.Process.parse_out ~stderr:stderr_sink t.proc_mgr
          Eio.Buf_read.take_all cmd)
@@ -70,12 +121,12 @@ let run_capture_quiet t cmd =
    on miss; [Eio.Process.parse_out] only captures stdout, so without
    the buffered stderr sink that line leaks to the CLI's own stderr. *)
 let has_cmd t name =
+  let cmd = [ "which"; name ] in
+  with_timeout t ~cmd @@ fun () ->
   Eio.Switch.run @@ fun sw ->
   let buf = Buffer.create 64 in
   let sink = Eio.Flow.buffer_sink buf in
-  let child =
-    Eio.Process.spawn ~sw t.proc_mgr ~stdout:sink ~stderr:sink [ "which"; name ]
-  in
+  let child = Eio.Process.spawn ~sw t.proc_mgr ~stdout:sink ~stderr:sink cmd in
   match Eio.Process.await child with
   | `Exited 0 -> true
   | `Exited _ | `Signaled _ -> false
@@ -174,10 +225,11 @@ let run_inherit t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
   match (t.stdout, t.stderr) with
   | None, _ | _, None -> run_quiet t cmd
-  | Some stdout, Some stderr -> (
+  | Some stdout, Some stderr ->
+      with_timeout t ~cmd @@ fun () ->
       Eio.Switch.run @@ fun sw ->
       let child = Eio.Process.spawn ~sw t.proc_mgr ~stdout ~stderr cmd in
-      match Eio.Process.await child with
+      (match Eio.Process.await child with
       | `Exited 0 -> ()
       | `Exited n -> Fmt.failwith "%s exited %d" (List.hd cmd) n
       | `Signaled n -> Fmt.failwith "%s killed by signal %d" (List.hd cmd) n)

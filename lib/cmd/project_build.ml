@@ -125,8 +125,8 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
   let url_names = List.map OpamPackage.Name.of_string url_project.roots in
   let names =
     List.map OpamPackage.Name.of_string project.deps @ extra_names @ url_names
-    |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
-         ~toolchain
+    |> Oi.Pipeline.strip_compiler_roots_for_override
+         ~override:toolchain_override ~toolchain
   in
   match
     Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs

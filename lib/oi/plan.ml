@@ -37,8 +37,8 @@ let of_solution ctx ?d10 ~packages_dirs pkgs =
       (fun (installed, nodes, order) pkg ->
         let name = OpamPackage.name pkg in
         let dep_set =
-          Solver.direct_deps_within ~packages_dirs ~conf:(Solver.Ctx.conf ctx) pkg
-            in_solution
+          Solver.direct_deps_within ~packages_dirs ~conf:(Solver.Ctx.conf ctx)
+            pkg in_solution
         in
         let deps =
           dep_set |> OpamPackage.Name.Set.elements
@@ -378,8 +378,8 @@ let resolve_node ctx ~packages_dirs ~cache_root ~prefix g (node : node) :
     depexts;
   }
 
-let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version ?build_prefix
-    g =
+let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
+    ?build_prefix g =
   let build_prefix =
     match build_prefix with
     | Some p -> p

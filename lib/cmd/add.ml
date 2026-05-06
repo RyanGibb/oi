@@ -93,9 +93,9 @@ let cmd =
     (* Phase 4: re-sync so the prefix reflects the committed *.opam. *)
     Fmt.pr "Re-syncing to pick up regenerated *.opam...@.";
     ignore
-      (Sync.run ~quiet:true ~refresh:false ~with_repos ~with_deps:[]
-         ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
-         ~registry ~use_registry ~session:http_session ~cwd ());
+      (Sync.run ~quiet:true ~refresh:false ~with_repos ~with_deps:[] ?toolchain
+         ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
+         ~use_registry ~session:http_session ~cwd ());
     Fmt.pr "Done.@."
   in
   let pkg_spec =

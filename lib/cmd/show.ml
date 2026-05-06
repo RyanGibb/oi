@@ -772,8 +772,8 @@ let cmd =
     let names =
       List.map OpamPackage.Name.of_string targets
       @ project_dep_names @ extra_names @ url_names
-      |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
-           ~toolchain
+      |> Oi.Pipeline.strip_compiler_roots_for_override
+           ~override:toolchain_override ~toolchain
     in
     if names = [] then
       Oi.Error.config_error

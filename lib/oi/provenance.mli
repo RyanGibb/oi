@@ -83,9 +83,9 @@ val read_one :
   os_key:string ->
   hash:string ->
   t option
-(** [read_one ~fs ~cache_root ~os_key ~hash] reads a single [provenance.json]
-    by layer hash. [None] when the file is missing or fails to decode. Pairs
-    with {!read_all}. *)
+(** [read_one ~fs ~cache_root ~os_key ~hash] reads a single [provenance.json] by
+    layer hash. [None] when the file is missing or fails to decode. Pairs with
+    {!read_all}. *)
 
 val overlay_of_layer :
   fs:Eio.Fs.dir_ty Eio.Path.t ->

@@ -25,9 +25,9 @@ module Repo : sig
     string list
   (** [ensure_many ~fs ~data_dir extras] clones/updates each entry using the
       same age/force semantics as {!ensure}. Each entry is cloned into
-      [data_dir/repos/<name>] — two entries with the same name collide by
-      design (callers should deduplicate). Returns one [packages/] directory
-      per entry in input order. *)
+      [data_dir/repos/<name>] — two entries with the same name collide by design
+      (callers should deduplicate). Returns one [packages/] directory per entry
+      in input order. *)
 
   val ensure :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -398,11 +398,11 @@ module Mirror : sig
     prewarm_summary
   (** [fetch_from_registry ~registry archives] pulls source archives from
       [<registry>/sources/<algo>/<XX>/<hash>] into the local mirror via the
-      shared HTTP [session] before {!Execute.run} fetches them per-package.
-      Each inner list is one archive's declared checksums; already-mirrored
-      entries are skipped. Multiplexes over [session] and runs in [max_fibers]
-      parallel fibers (default 16). Failures are non-fatal — uncovered archives
-      fall back to opam's per-package fetch chain. *)
+      shared HTTP [session] before {!Execute.run} fetches them per-package. Each
+      inner list is one archive's declared checksums; already-mirrored entries
+      are skipped. Multiplexes over [session] and runs in [max_fibers] parallel
+      fibers (default 16). Failures are non-fatal — uncovered archives fall back
+      to opam's per-package fetch chain. *)
 
   type archive = { url : OpamUrl.t; checksums : OpamHash.t list; pkg : string }
   (** One downloadable source entity: either an [url {…}] block or an
@@ -457,11 +457,10 @@ module Mirror : sig
 
   val source_origin :
     cache_urls:OpamUrl.t list -> checksums:OpamHash.t list -> origin
-  (** [source_origin ~cache_urls ~checksums] probes each [file://] cache_url
-      for any of [checksums] via {!Sys.file_exists}, returning
-      [Local_mirror path] on the first hit and [Other] otherwise. Used by
-      {!Execute} to log whether a fetch hits the local mirror — HTTP cache_urls
-      are intentionally not probed (a per-package HEAD round-trip just to
-      refine the log line isn't worth it; opam's [pull_tree] handles the cache
-      hierarchy itself). *)
+  (** [source_origin ~cache_urls ~checksums] probes each [file://] cache_url for
+      any of [checksums] via {!Sys.file_exists}, returning [Local_mirror path]
+      on the first hit and [Other] otherwise. Used by {!Execute} to log whether
+      a fetch hits the local mirror — HTTP cache_urls are intentionally not
+      probed (a per-package HEAD round-trip just to refine the log line isn't
+      worth it; opam's [pull_tree] handles the cache hierarchy itself). *)
 end

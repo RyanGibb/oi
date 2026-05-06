@@ -732,7 +732,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             in
             if archives <> [] then begin
               let s =
-                Source.Mirror.fetch_from_registry ~session ~fs ~cache_root ~registry
+                Source.Mirror.fetch_from_registry ~session ~fs ~cache_root
+                  ~registry
                   ~max_fibers:(fetch_parallelism ?jobs ())
                   archives
               in

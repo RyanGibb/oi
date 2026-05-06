@@ -357,7 +357,8 @@ let update_cmd =
       else [ OpamPackage.Name.of_string "oi" ]
     in
     let names =
-      Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain names
+      Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain
+        names
     in
     let on_phase msg = Oi.Say.step "%s" msg in
     let on_progress = Oi.Say.progress in

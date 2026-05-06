@@ -272,8 +272,8 @@ val direct_deps_within :
     platform variables in [conf]. *)
 
 val find_opam_file : string list -> OpamPackage.t -> OpamFile.OPAM.t option
-(** [find_opam_file packages_dirs pkg] searches [packages_dirs] in order for
-    the opam file of [pkg]. *)
+(** [find_opam_file packages_dirs pkg] searches [packages_dirs] in order for the
+    opam file of [pkg]. *)
 
 val filter_env : Ctx.conf -> OpamFilter.env
 (** Filter environment built from a synthetic platform configuration. *)

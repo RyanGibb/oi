@@ -401,8 +401,8 @@ let cmd =
     let names =
       List.map OpamPackage.Name.of_string targets
       @ List.map OpamPackage.Name.of_string url_project.roots
-      |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
-           ~toolchain
+      |> Oi.Pipeline.strip_compiler_roots_for_override
+           ~override:toolchain_override ~toolchain
     in
     Oi.Say.step "Solving %d target(s) (+test, +doc)" (List.length names);
     (* Enable {with-test} / {with-doc} for every known package, not

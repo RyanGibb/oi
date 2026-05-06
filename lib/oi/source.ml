@@ -1909,7 +1909,8 @@ module Mirror = struct
         match opam_cached_blob checksums with
         | None ->
             Log.debug (fun m ->
-                m "import_from_opam_cache: no opam-cached blob for %d \
+                m
+                  "import_from_opam_cache: no opam-cached blob for %d \
                    checksum(s), skipping"
                   (List.length checksums));
             0

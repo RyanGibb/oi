@@ -265,8 +265,8 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
         m "Solving for packages: %s" (String.concat ", " pkg_names));
     let names =
       List.map OpamPackage.Name.of_string pkg_names
-      |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
-           ~toolchain
+      |> Oi.Pipeline.strip_compiler_roots_for_override
+           ~override:toolchain_override ~toolchain
     in
     let layer_hashes =
       with_preflight_bar

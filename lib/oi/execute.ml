@@ -297,7 +297,10 @@ let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
                   (* Promote the just-fetched blob into our content-
                      addressed mirror so [oi build --export] picks it up
                      and registry consumers can fetch it offline. *)
-                  let _ = Source.Mirror.import_from_opam_cache ~fs ~cache_root checksums in
+                  let _ =
+                    Source.Mirror.import_from_opam_cache ~fs ~cache_root
+                      checksums
+                  in
                   ()
               | OpamTypes.Not_available (_, msg) ->
                   Fmt.failwith "Failed to fetch %s: %s" p.pkg msg)
@@ -336,7 +339,10 @@ let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
               in
               match result with
               | OpamTypes.Result () | OpamTypes.Up_to_date () ->
-                  let _ = Source.Mirror.import_from_opam_cache ~fs ~cache_root checksums in
+                  let _ =
+                    Source.Mirror.import_from_opam_cache ~fs ~cache_root
+                      checksums
+                  in
                   ()
               | OpamTypes.Not_available (_, msg) -> Fmt.failwith "%s" msg)
         with Failure msg ->
@@ -742,11 +748,7 @@ let provenance_source_of_plan (p : Plan.package_plan) :
     Provenance.source_info option =
   Option.map
     (fun (s : Plan.source_info) : Provenance.source_info ->
-      {
-        url = s.url;
-        kind = Provenance.url_kind s.url;
-        checksums = s.checksums;
-      })
+      { url = s.url; kind = Provenance.url_kind s.url; checksums = s.checksums })
     p.source
 
 let emit_event ~fs ~cache_root ~os_key ~ocaml_version ~audit_base ~outcome

@@ -74,9 +74,9 @@ val from_logs :
   Provenance.t list ->
   Audit.event list ->
   t
-(** [from_logs ~os_key ~exported_at provs events] joins [provs] with [events]
-    by layer hash. Audit events tagged [Solve_key] are bucketed under their
-    own digest and produce failure-only entries (no provenance, headline =
-    [K_solve_failed]). Audit events tagged [Layer] join the provenance for
-    that hash; layers with only failure events get a synthesised failure-only
-    entry. *)
+(** [from_logs ~os_key ~exported_at provs events] joins [provs] with [events] by
+    layer hash. Audit events tagged [Solve_key] are bucketed under their own
+    digest and produce failure-only entries (no provenance, headline =
+    [K_solve_failed]). Audit events tagged [Layer] join the provenance for that
+    hash; layers with only failure events get a synthesised failure-only entry.
+*)

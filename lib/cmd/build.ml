@@ -286,8 +286,8 @@ let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
           | Some e when e.toolchain_name <> None -> e.toolchain_name
           | _ -> None)
     in
-    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf:host_conf
-      ~install:false ~override:auto_override ~handles:[ handle ] ()
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf:host_conf ~install:false
+      ~override:auto_override ~handles:[ handle ] ()
   in
   let pkg_dirs_for handle =
     packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle

@@ -683,7 +683,8 @@ let explain_cmd =
       | None ->
           let prov =
             match
-              Oi.Provenance.read_one ~fs:h.fs ~cache_root ~os_key:d10.os_key ~hash
+              Oi.Provenance.read_one ~fs:h.fs ~cache_root ~os_key:d10.os_key
+                ~hash
             with
             | Some p -> p
             | None ->

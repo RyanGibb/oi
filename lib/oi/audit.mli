@@ -44,8 +44,8 @@ type event = {
 
 val hash_of_target : event_target -> string
 (** [hash_of_target t] pulls the layer hash out of [t]. Returns the embedded
-    string for both variants — when filtering to "real" layers, pattern-match
-    on [t] directly instead. *)
+    string for both variants — when filtering to "real" layers, pattern-match on
+    [t] directly instead. *)
 
 (** {1 Codecs} *)
 
@@ -65,8 +65,8 @@ val local_log_path : cache_root:string -> string
 
 val append : fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> event -> unit
 (** [append ~cache_root e] appends [e] as a single JSON line to
-    {!local_log_path}. Errors are logged and swallowed so logging failure
-    cannot abort the build. *)
+    {!local_log_path}. Errors are logged and swallowed so logging failure cannot
+    abort the build. *)
 
 val read_all :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -74,8 +74,8 @@ val read_all :
   os_key:string ->
   event list
 (** [read_all ~cache_root ~os_key] reads every line of {!local_log_path},
-    decodes, and filters by [os_key]. Lines that fail to decode are skipped
-    with a debug log. *)
+    decodes, and filters by [os_key]. Lines that fail to decode are skipped with
+    a debug log. *)
 
 val exported_log_path : output_dir:string -> os_key:string -> string
 (** [exported_log_path ~output_dir ~os_key] is

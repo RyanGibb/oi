@@ -310,8 +310,8 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   let url_names = List.map OpamPackage.Name.of_string url_project.roots in
   let names =
     List.map OpamPackage.Name.of_string deps @ extra_names @ url_names
-    |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
-         ~toolchain
+    |> Oi.Pipeline.strip_compiler_roots_for_override
+         ~override:toolchain_override ~toolchain
   in
   let layer_hashes =
     let local_packages_dir =
