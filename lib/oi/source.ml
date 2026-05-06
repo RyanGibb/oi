@@ -1979,14 +1979,16 @@ module Mirror = struct
     let n = String.length s in
     if n > 0 && s.[n - 1] = '/' then String.sub s 0 (n - 1) else s
 
-  let fetch_from_registry ~session ~fs ~cache_root ~registry ?(max_fibers = 16)
-      (archive_checksums : OpamHash.t list list) =
+  let fetch_from_registry ~clock ~session ~fs ~cache_root ~registry
+      ?(max_fibers = 16) (archive_checksums : OpamHash.t list list) =
     let mirror_dir = cache_root / "mirror" in
     mkdir_p ~fs mirror_dir;
     let registry = trim_trailing_slash registry in
     let fetched = Atomic.make 0 in
     let cached = Atomic.make 0 in
     let failed = Atomic.make 0 in
+    Eio.Switch.run @@ fun sw ->
+    let hb = Heartbeat.create ~sw ~clock "mirror-fetch" in
     let fetch_one cks =
       if cks = [] then ()
       else if already_mirrored ~mirror_dir cks then Atomic.incr cached
@@ -2003,7 +2005,9 @@ module Mirror = struct
             let dst = List.fold_left ( / ) mirror_dir (OpamHash.to_path ck) in
             let tmp = unique_tmp dst in
             mkdir_p ~fs (Filename.dirname dst);
+            let label = Fmt.str "%s/%s" kind hex in
             if
+              Heartbeat.track hb label @@ fun () ->
               D10.Sysops.Http.fetch_session session ~url
                 ~dst:Eio.Path.(fs / tmp)
             then

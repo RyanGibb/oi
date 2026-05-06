@@ -1107,8 +1107,15 @@ let run ?(cache_urls = []) ?jobs ?failed_layers ?reporter ?audit_base
                 resolve p.layer_hash `Failed)
       in
       Eio.Switch.run @@ fun sw ->
+      let hb =
+        Heartbeat.create ~sw
+          ~clock:(clock :> float Eio.Time.clock_ty Eio.Resource.t)
+          "build"
+      in
       List.iter
-        (fun p -> Eio.Fiber.fork ~sw (fun () -> pkg_fiber p))
+        (fun p ->
+          Eio.Fiber.fork ~sw (fun () ->
+              Heartbeat.track hb p.Plan.pkg (fun () -> pkg_fiber p)))
         plan.packages
     end
   in

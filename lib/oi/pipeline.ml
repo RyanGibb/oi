@@ -160,19 +160,30 @@ let cache_urls ~cache ~source_remote =
   | None | Some _ -> [ local ]
 
 (* HTTP fetches are I/O-bound: a fiber spends ~all of its wall-time
-   waiting on the wire, so we want many more concurrent fibers than we
-   have CPUs. Default 16 (clamped to the larger of 16 and the recommended
-   domain count). Override via [OI_HTTP_PARALLELISM]; [?jobs] (which
+   waiting on the wire, so we run more concurrent fibers than CPUs.
+   Default 8 — large enough to amortise TLS handshakes against a small
+   pool, small enough that one wedged registry connection doesn't
+   monopolise the [max_connections_per_host] cap and starve the
+   remaining fibers. Override via [OI_HTTP_PARALLELISM]; [?jobs] (which
    originates from [-j N] and primarily caps build subprocesses) wins
-   when explicitly set. *)
+   when explicitly set.
+
+   Previously defaulted to [max(domain_count, 16)] which on a 32-core
+   build host (oi.ci.dev) opened up to 32 simultaneous registry fetches
+   with one HTTPS-keepalive connection each — when a remote stops
+   responding mid-stream, the half-closed sockets pile up faster than
+   the per-host pool can recycle them. *)
 let fetch_parallelism ?jobs () =
+  let default = 8 in
   match jobs with
   | Some n when n > 0 -> n
   | _ -> (
       match Sys.getenv_opt "OI_HTTP_PARALLELISM" with
       | Some s -> (
-          match int_of_string_opt s with Some n when n > 0 -> n | _ -> 16)
-      | None -> max (Domain.recommended_domain_count ()) 16)
+          match int_of_string_opt s with
+          | Some n when n > 0 -> n
+          | _ -> default)
+      | None -> default)
 
 let fmt_mb n =
   if Int64.compare n 1_048_576L >= 0 then
@@ -732,8 +743,9 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             in
             if archives <> [] then begin
               let s =
-                Source.Mirror.fetch_from_registry ~session ~fs ~cache_root
-                  ~registry
+                Source.Mirror.fetch_from_registry
+                  ~clock:(clock :> _ Eio.Time.clock_ty Eio.Resource.t)
+                  ~session ~fs ~cache_root ~registry
                   ~max_fibers:(fetch_parallelism ?jobs ())
                   archives
               in

@@ -389,6 +389,7 @@ module Mirror : sig
   type prewarm_summary = { fetched : int; cached : int; failed : int }
 
   val fetch_from_registry :
+    clock:float Eio.Time.clock_ty Eio.Resource.t ->
     session:D10.Sysops.Http.session ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     cache_root:string ->
@@ -396,13 +397,17 @@ module Mirror : sig
     ?max_fibers:int ->
     OpamHash.t list list ->
     prewarm_summary
-  (** [fetch_from_registry ~registry archives] pulls source archives from
-      [<registry>/sources/<algo>/<XX>/<hash>] into the local mirror via the
-      shared HTTP [session] before {!Execute.run} fetches them per-package. Each
-      inner list is one archive's declared checksums; already-mirrored entries
-      are skipped. Multiplexes over [session] and runs in [max_fibers] parallel
-      fibers (default 16). Failures are non-fatal — uncovered archives fall back
-      to opam's per-package fetch chain. *)
+  (** [fetch_from_registry ~clock ~registry archives] pulls source archives
+      from [<registry>/sources/<algo>/<XX>/<hash>] into the local mirror via
+      the shared HTTP [session] before {!Execute.run} fetches them per-package.
+      Each inner list is one archive's declared checksums; already-mirrored
+      entries are skipped. Multiplexes over [session] and runs in [max_fibers]
+      parallel fibers (default 16). Failures are non-fatal — uncovered archives
+      fall back to opam's per-package fetch chain.
+
+      A {!Heartbeat} tracker logs the in-flight URL set every
+      [OI_HEARTBEAT_INTERVAL] seconds (default 30s) so a wedged registry
+      fetch surfaces as a warn-level line instead of an invisible stall. *)
 
   type archive = { url : OpamUrl.t; checksums : OpamHash.t list; pkg : string }
   (** One downloadable source entity: either an [url {…}] block or an

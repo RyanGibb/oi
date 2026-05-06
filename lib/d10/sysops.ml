@@ -257,6 +257,49 @@ module Tar = struct
 end
 
 module Http = struct
+  (* -- Per-request HTTP timeout --------------------------------------------
+
+     Default 10-minute hard cap on every in-process [Requests] fetch this
+     module performs. Same rationale as {!cmd_timeout_s} for subprocess
+     spawns, but for the HTTP path: a wedged TCP socket (e.g. a remote
+     that sent FIN but where our [Eio.Flow.single_read] never observes
+     EOF, leaving us in [CLOSE_WAIT] until the kernel's keepalive expires
+     ~2 hours later) blocks the whole [oi build --all] pipeline.
+
+     Override per-fetch via [OI_HTTP_TIMEOUT] (seconds); set to [0] to
+     disable. Distinct from [OI_CMD_TIMEOUT] so callers can tune the two
+     paths independently. *)
+  let default_http_timeout_s = 600.0
+
+  let http_timeout_s () =
+    match Sys.getenv_opt "OI_HTTP_TIMEOUT" with
+    | Some v -> (
+        match float_of_string_opt v with
+        | Some n when n >= 0.0 -> n
+        | _ -> default_http_timeout_s)
+    | None -> default_http_timeout_s
+
+  (* [Http.fetch] / [Http.fetch_session] return [bool] (true on success,
+     false on any error) — never raise. On timeout we log at warn and
+     return false so callers fall back to whatever cache hierarchy or
+     retry policy they have, the same way they would on a 5xx or a
+     network error. *)
+  let with_http_timeout ~clock ~url f =
+    let timeout = http_timeout_s () in
+    if timeout <= 0.0 then f ()
+    else
+      try Eio.Time.with_timeout_exn clock timeout f
+      with Eio.Time.Timeout ->
+        Log.warn (fun m ->
+            m
+              "HTTP request timed out after %.0fs (%.1f min); cancelling: %s\n\
+               Override the cap by exporting OI_HTTP_TIMEOUT=N (seconds; [0] \
+               disables)."
+              timeout
+              (timeout /. 60.0)
+              url);
+        false
+
   (* Stream [src] into [sink] while invoking [on_progress] with the
      running byte count. Throttles callbacks to ~20Hz so a fast
      download doesn't spam the renderer (each [Tty.Progress.set] is
@@ -307,6 +350,7 @@ module Http = struct
      Throttled to ~20Hz inside [copy_with_progress] so terminal redraws
      don't dominate the wall-clock cost on a fast LAN. *)
   let fetch ?on_progress t ~url ~dst =
+    with_http_timeout ~clock:t.clock ~url @@ fun () ->
     Eio.Switch.run @@ fun sw ->
     try
       let resp = Requests.One.get ~sw ~clock:t.clock ~net:t.net url in
@@ -336,23 +380,31 @@ module Http = struct
      requests and lets concurrent fibers multiplex over the same h2 stream,
      so N parallel fetches collapse to one handshake plus N concurrent
      STREAM frames. *)
-  type session = Requests.t
+  (* Wraps the [Requests.t] connection pool with a [clock] so
+     {!fetch_session} can cap each request via {!with_http_timeout}.
+     Held by the parent switch via {!with_session}. *)
+  type session = { req : Requests.t; clock : clk }
 
-  let env_of t : < clock : _ Eio.Time.clock ; net : _ Eio.Net.t ; fs : _ > =
+  let env_of (t : t) : < clock : _ Eio.Time.clock ; net : _ Eio.Net.t ; fs : _ >
+      =
     object
       method clock = t.clock
       method net = t.net
       method fs = t.fs
     end
 
-  (* [max_connections_per_host] sized for the typical
-     [OI_HTTP_PARALLELISM] (default 8 in [Oi.Pipeline.fetch_parallelism]).
-     With HTTP/2 (the default on [oi.ci.dev] etc.) one connection
-     multiplexes many streams and the pool barely matters; on HTTP/1.1
-     servers, 16 parallel connections gives a 2x headroom over the
-     fiber count so high-jobs invocations don't queue. The
-     idle/lifetime numbers are deliberately generous so a CLI run that
-     issues fetches in two waves (layers, then sources) reuses the
+  (* [max_connections_per_host] is sized to match [OI_HTTP_PARALLELISM]
+     (default 8 in [Oi.Pipeline.fetch_parallelism]) — one connection
+     per concurrent fiber, no headroom. Earlier we ran a 2x cushion
+     (16 connections vs 8 fibers) which sounded harmless but made the
+     pool harder to drain when a remote got flaky: half-closed sockets
+     piled up and new fibers picked already-broken connections out of
+     the pool. Sizing the cap to the fiber count keeps the pool small
+     and the failure mode obvious — if every connection is stuck, no
+     fiber starts.
+
+     The idle/lifetime numbers are deliberately generous so a CLI run
+     that issues fetches in two waves (layers, then sources) reuses the
      same connections across the gap.
 
      [OI_FORCE_HTTP1=1] (test-only) routes through [Requests.v]'s
@@ -360,6 +412,8 @@ module Http = struct
      [http/1.1] in ALPN, forcing the registry to fall back to HTTP/1.1
      even when it supports HTTP/2. Useful for A/B-comparing the H1 vs
      H2 paths. *)
+  let default_pool_size = 8
+
   let force_http1 () =
     match Sys.getenv_opt "OI_FORCE_HTTP1" with
     | Some v when v <> "" && v <> "0" -> true
@@ -369,13 +423,15 @@ module Http = struct
     let protocol_mode =
       if force_http1 () then Some Requests.Http1_only else None
     in
-    let session =
-      Requests.v ~sw ~max_connections_per_host:16 ~connection_idle_timeout:300.0
-        ~connection_lifetime:1800.0 ?protocol_mode (env_of t)
+    let req =
+      Requests.v ~sw ~max_connections_per_host:default_pool_size
+        ~connection_idle_timeout:300.0 ~connection_lifetime:1800.0
+        ?protocol_mode (env_of t)
     in
-    f session
+    f { req; clock = t.clock }
 
   let fetch_session ?on_progress session ~url ~dst =
+    with_http_timeout ~clock:session.clock ~url @@ fun () ->
     try
       (* [Requests.get ?on_progress] fires the callback as response
          body bytes arrive on the wire (per HTTP/2 DATA frame on the
@@ -383,7 +439,7 @@ module Http = struct
          in real time — without it the body is fully buffered before
          [Response.body] returns and the subsequent [Flow.copy] sees
          memory-copy speed, not network speed. *)
-      let resp = Requests.get ?on_progress session url in
+      let resp = Requests.get ?on_progress session.req url in
       if not (Requests.Response.ok resp) then begin
         Log.debug (fun m ->
             m "http %s: status %d" url (Requests.Response.status_code resp));
