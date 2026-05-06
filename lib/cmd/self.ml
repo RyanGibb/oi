@@ -312,7 +312,7 @@ let update_cmd =
        what we want — building exactly that tree. *)
     let with_deps = if dev then [ dev_url () ] else [] in
     let extra_deps, url_project =
-      Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
     in
     let extra_constraints =
       let base = Oi.Project.Script.constraints extra_deps in
@@ -345,7 +345,7 @@ let update_cmd =
     in
     let tc_handles = with_repos |> List.sort_uniq String.compare in
     let toolchain =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+      Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
         ~override:None ~handles:tc_handles ()
     in
     let names =
@@ -357,7 +357,7 @@ let update_cmd =
       else [ OpamPackage.Name.of_string "oi" ]
     in
     let names =
-      Oi.Pipeline.drop_override_compiler_roots ~override:None ~toolchain names
+      Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain names
     in
     let on_phase msg = Oi.Say.step "%s" msg in
     let on_progress = Oi.Say.progress in

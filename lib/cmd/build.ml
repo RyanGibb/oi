@@ -249,7 +249,7 @@ let packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle =
    - [Walk_clone]: every [opam] file in [v1/<handle>/packages/] is
      listed verbatim — no solve. The overlay's [packages_dirs] is still
      the toolchain-aware closure from {!packages_dirs_for_overlay} so
-     {!Oi.Solver.load_opam} resolves each version against the right
+     {!Oi.Solver.find_opam_file} resolves each version against the right
      tree (overlay first, then base). *)
 let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
     ?override ?handle_filter () =
@@ -286,7 +286,7 @@ let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
           | Some e when e.toolchain_name <> None -> e.toolchain_name
           | _ -> None)
     in
-    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf:host_conf
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf:host_conf
       ~install:false ~override:auto_override ~handles:[ handle ] ()
   in
   let pkg_dirs_for handle =
@@ -310,7 +310,7 @@ let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
           | Some _ ->
               let pkg_dirs = pkg_dirs_for handle in
               let conf, tc_ctx =
-                Oi.Pipeline.toolchain_views toolchain host_conf
+                Oi.Pipeline.solver_inputs toolchain host_conf
               in
               List.filter_map
                 (fun group ->
@@ -458,7 +458,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
     Target.extract_handle_pins ~with_repos with_deps
   in
   let extra_deps, url_project =
-    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
   let handle_pins = Stdlib.Option.to_list target_pin @ with_pins in
   let tc_handles =
@@ -468,7 +468,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
     |> List.sort_uniq String.compare
   in
   let toolchain =
-    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
       ~override:toolchain ~handles:tc_handles ()
   in
   let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in
@@ -487,7 +487,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
   let pkg_name = OpamPackage.Name.of_string target in
   let names =
     [ pkg_name ]
-    |> Oi.Pipeline.drop_override_compiler_roots ~override:None ~toolchain
+    |> Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain
   in
   if dry_run then begin
     Fmt.pr
@@ -707,7 +707,7 @@ let cmd =
     let do_export_if_set ?(ok = true) () =
       match export with
       | Some output when ok && not dry_run ->
-          Registry_export.do_registry_export ~fs
+          Registry_export.run ~fs
             ~clock:(clock :> D10.Config.clk)
             ~sys ~os_key ~cache ~registry ~output
       | _ -> ()
@@ -849,7 +849,7 @@ let cmd =
       with_repos @ handles
     in
     let extra_cli, url_project =
-      Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
     in
     (* Split handles into two scopes:
        - [global_handles] apply to every solve (explicit [--with-repo]
@@ -883,7 +883,7 @@ let cmd =
         ~project:url_project.extra_repos
     in
     let _ : string list =
-      Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh cli_extras_records
+      Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh cli_extras_records
     in
     (* URL-project pins materialize into a synthetic packages/ tree
        the solver consumes ahead of everything else, so the URL's
@@ -1131,7 +1131,7 @@ let cmd =
     let reporepo_entries_cache =
       try Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ()) with _ -> []
     in
-    (* Toolchain resolution per group goes through {Pipeline.resolve_toolchain}
+    (* Toolchain resolution per group goes through {Pipeline.pick_toolchain}
        — same precedence rulebook every command shares ([--toolchain=NAME]
        override, then implicit pickup from the group's handles, then the
        reporepo default). The cache memoises the resolved [info] so 30
@@ -1152,7 +1152,7 @@ let cmd =
       | Some i -> i
       | None ->
           let info =
-            Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+            Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
               ~override:toolchain_override ~handles:key ()
           in
           Hashtbl.add resolved_toolchains key info;
@@ -1313,7 +1313,7 @@ let cmd =
       let solve_one (group, handles) =
         let toolchain = toolchain_for_handles handles in
         let pkg_dirs = packages_dirs_for_handles ?toolchain handles in
-        let group_conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain conf in
+        let group_conf, tc_ctx = Oi.Pipeline.solver_inputs toolchain conf in
         let gctx =
           Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
             ~conf:group_conf ?toolchain:tc_ctx ()
@@ -1321,7 +1321,7 @@ let cmd =
         (* When [--toolchain=NAME] is explicit, strip any compiler-family
            entries the overlay's [x-root-packages] declares so the
            override's compiler pins land cleanly. Same intent as
-           {Pipeline.drop_override_compiler_roots} but applied to the raw
+           {Pipeline.strip_compiler_roots_for_override} but applied to the raw
            [pkg] strings (e.g. ["oxcaml-compiler.5.2.0+ox"]) rather than
            parsed [Name.t]s. *)
         let group =
@@ -1591,7 +1591,7 @@ let cmd =
         else
           Log.info (fun m -> m "%d unique packages" (List.length sorted_pkgs));
         let build_plan =
-          Oi.Plan.build group_ctx ~d10 ~packages_dirs:pkg_dirs sorted_pkgs
+          Oi.Plan.of_solution group_ctx ~d10 ~packages_dirs:pkg_dirs sorted_pkgs
         in
         let count_by f =
           List.length (List.filter f (Oi.Plan.nodes build_plan))
@@ -1798,7 +1798,7 @@ let cmd =
             let exec_plan_ref = ref None in
             try
               let exec_plan =
-                Oi.Plan.resolve group_ctx ~packages_dirs:pkg_dirs ~cache_root
+                Oi.Plan.elaborate group_ctx ~packages_dirs:pkg_dirs ~cache_root
                   ~os_key ~ocaml_version:conf.ocaml_version build_plan
               in
               exec_plan_ref := Some exec_plan;

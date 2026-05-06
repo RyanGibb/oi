@@ -48,9 +48,9 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
             exit 1
       in
       let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
-      let plan = Oi.Plan.build ctx ~d10 ~packages_dirs pkgs in
+      let plan = Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs in
       let exec_plan =
-        Oi.Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
+        Oi.Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
           ~ocaml_version:conf.ocaml_version plan
       in
       let cache_urls = Oi.Pipeline.cache_urls ~cache ~source_remote in

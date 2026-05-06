@@ -7,7 +7,7 @@ type entry = { pkg : OpamPackage.t; sys_pkgs : OpamSysPkg.Set.t }
 let compute_from_env ~env ~packages_dirs solved =
   List.filter_map
     (fun pkg ->
-      match Solver.load_opam packages_dirs pkg with
+      match Solver.find_opam_file packages_dirs pkg with
       | None -> None
       | Some opam ->
           let depexts = OpamFile.OPAM.depexts opam in

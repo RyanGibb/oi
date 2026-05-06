@@ -345,7 +345,7 @@ let show_cmd =
               ->
                 let files_count = count_files (layers_dir / hash / "fs") in
                 let provenance =
-                  Oi.Provenance.load ~fs:h.fs ~cache_root ~os_key:d10.os_key
+                  Oi.Provenance.read_one ~fs:h.fs ~cache_root ~os_key:d10.os_key
                     ~hash
                 in
                 Some
@@ -683,7 +683,7 @@ let explain_cmd =
       | None ->
           let prov =
             match
-              Oi.Provenance.load ~fs:h.fs ~cache_root ~os_key:d10.os_key ~hash
+              Oi.Provenance.read_one ~fs:h.fs ~cache_root ~os_key:d10.os_key ~hash
             with
             | Some p -> p
             | None ->

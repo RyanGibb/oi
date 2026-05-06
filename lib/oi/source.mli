@@ -14,32 +14,31 @@
 (** {1 Opam repository clones} *)
 
 module Repo : sig
-  val repo_dir : data_dir:string -> string -> string
-  (** [repo_dir ~data_dir name] is the local clone path for a repo named [name].
-  *)
+  val dir : data_dir:string -> string -> string
+  (** [dir ~data_dir name] is the local clone path for a repo named [name]. *)
 
-  val ensure_extra :
+  val ensure_many :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     data_dir:string ->
     ?refresh:bool ->
     Project.extra_repo list ->
     string list
-  (** [ensure_extra ~fs ~data_dir extras] clones/updates each entry using the
-      same age/force semantics as {!ensure_one}. Each entry is cloned into
-      [data_dir/repos/<name>] — two entries with the same name collide by design
-      (callers should deduplicate). Returns one [packages/] directory per entry
-      in input order. *)
+  (** [ensure_many ~fs ~data_dir extras] clones/updates each entry using the
+      same age/force semantics as {!ensure}. Each entry is cloned into
+      [data_dir/repos/<name>] — two entries with the same name collide by
+      design (callers should deduplicate). Returns one [packages/] directory
+      per entry in input order. *)
 
-  val ensure_one :
+  val ensure :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     refresh:bool ->
     label:string ->
     url:string ->
     dir:string ->
     unit
-  (** Low-level clone/update primitive. Clones [url] into [dir] if empty,
-      otherwise refreshes when [refresh] is true or the clone is older than
-      {!Cache.refresh_max_age}. *)
+  (** [ensure ~url ~dir ~refresh] is the low-level clone/update primitive.
+      Clones [url] into [dir] if empty, otherwise refreshes when [refresh] is
+      true or the clone is older than {!Cache.refresh_max_age}. *)
 end
 
 (** {1 Reporepo: overlay-of-overlays metadata}
@@ -379,16 +378,17 @@ module Mirror : sig
   (** Hardlink-copy the mirror tree to [<dst>/sources/]. Returns the number of
       blobs copied. *)
 
-  val promote :
+  val import_from_opam_cache :
     fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> OpamHash.t list -> int
-  (** Copy fetched-source blobs out of opam's download-cache and into the mirror
-      at [<cache_root>/mirror/<algo>/<XX>/<hash>] for each declared checksum.
-      Returns the number of blobs newly added; [0] if nothing was promoted (no
+  (** [import_from_opam_cache ~fs ~cache_root checksums] copies fetched-source
+      blobs out of opam's download-cache and into the mirror at
+      [<cache_root>/mirror/<algo>/<XX>/<hash>] for each declared checksum.
+      Returns the number of blobs newly added; [0] if nothing was imported (no
       checksums supplied, or no cached file found). Idempotent. *)
 
   type prewarm_summary = { fetched : int; cached : int; failed : int }
 
-  val prewarm_remote :
+  val fetch_from_registry :
     session:D10.Sysops.Http.session ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     cache_root:string ->
@@ -396,12 +396,13 @@ module Mirror : sig
     ?max_fibers:int ->
     OpamHash.t list list ->
     prewarm_summary
-  (** Pull source archives from [<registry>/sources/<algo>/<XX>/<hash>] into the
-      local mirror via the shared HTTP [session] before {!Execute.run} fetches
-      them per-package. Each inner list is one archive's declared checksums;
-      already-mirrored entries are skipped. Multiplexes over [session] and runs
-      in [max_fibers] parallel fibers (default 16). Failures are non-fatal —
-      uncovered archives fall back to opam's per-package fetch chain. *)
+  (** [fetch_from_registry ~registry archives] pulls source archives from
+      [<registry>/sources/<algo>/<XX>/<hash>] into the local mirror via the
+      shared HTTP [session] before {!Execute.run} fetches them per-package.
+      Each inner list is one archive's declared checksums; already-mirrored
+      entries are skipped. Multiplexes over [session] and runs in [max_fibers]
+      parallel fibers (default 16). Failures are non-fatal — uncovered archives
+      fall back to opam's per-package fetch chain. *)
 
   type archive = { url : OpamUrl.t; checksums : OpamHash.t list; pkg : string }
   (** One downloadable source entity: either an [url {…}] block or an
@@ -454,13 +455,13 @@ module Mirror : sig
             involvement. Also returned when the source has no checksums (e.g.
             [git+...] URLs, which can't live in a content-addressed mirror). *)
 
-  val classify_source :
+  val source_origin :
     cache_urls:OpamUrl.t list -> checksums:OpamHash.t list -> origin
-  (** [classify_source ~cache_urls ~checksums] probes each [file://] cache_url
+  (** [source_origin ~cache_urls ~checksums] probes each [file://] cache_url
       for any of [checksums] via {!Sys.file_exists}, returning
       [Local_mirror path] on the first hit and [Other] otherwise. Used by
       {!Execute} to log whether a fetch hits the local mirror — HTTP cache_urls
-      are intentionally not probed (a per-package HEAD round-trip just to refine
-      the log line isn't worth it; opam's [pull_tree] handles the cache
+      are intentionally not probed (a per-package HEAD round-trip just to
+      refine the log line isn't worth it; opam's [pull_tree] handles the cache
       hierarchy itself). *)
 end

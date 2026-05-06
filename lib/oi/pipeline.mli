@@ -4,7 +4,7 @@
 
 (** End-to-end pipeline: solve → plan → build → assemble.
 
-    The CLI commands compose these operations: most do {!resolve_toolchain} →
+    The CLI commands compose these operations: most do {!pick_toolchain} →
     {!build} → {!assemble_prefix}, then exec into the result. The smaller
     helpers ({!cache_urls}, {!fetch_remote_layers}) are exported so callers can
     intercept the pipeline at intermediate points (e.g. registry-build wraps
@@ -30,16 +30,16 @@ val init_opam_root : fs:Eio.Fs.dir_ty Eio.Path.t -> data_dir:string -> unit
 
 (** {1 Toolchain resolution} *)
 
-val toolchain_views :
+val solver_inputs :
   Toolchain.info option ->
   Solver.Ctx.conf ->
   Solver.Ctx.conf * Solver.Ctx.toolchain option
-(** [toolchain_views info conf] derives the two views the rest of the pipeline
+(** [solver_inputs info conf] derives the two views the rest of the pipeline
     consumes: a [conf] with [ocaml_version] aligned to the toolchain's compiler,
     and the {!Solver.Ctx.toolchain} subset {!Solver.Ctx.create} /
     {!Solver.Env.make_env} take. *)
 
-val resolve_toolchain :
+val pick_toolchain :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   sys:D10.Sysops.t ->
   data_dir:string ->
@@ -49,13 +49,14 @@ val resolve_toolchain :
   handles:string list ->
   unit ->
   Toolchain.info option
-(** Single source of truth for picking which toolchain a command runs against.
-    Selection precedence (first match wins):
+(** [pick_toolchain ~override ~handles ()] is the single source of truth for
+    picking which toolchain a command runs against. Selection precedence
+    (first match wins):
 
     + [override = Some h]: resolve [h] directly. The [--toolchain=NAME] flag.
     + Implicit pickup from [handles]: scan each handle's latest reporepo entry
-      for an [x-oi-toolchain] field, and check whether the handle itself names a
-      toolchain definition ([x-oi-toolchain-name]). A unique non-empty result
+      for an [x-oi-toolchain] field, and check whether the handle itself names
+      a toolchain definition ([x-oi-toolchain-name]). A unique non-empty result
       wins; multiple distinct names hard-error with a "pass --toolchain=NAME to
       disambiguate" hint.
     + Reporepo default: the entry flagged [x-oi-default-toolchain: true].
@@ -64,16 +65,18 @@ val resolve_toolchain :
 
     [install:true] runs {!Toolchain.ensure_installed} on the chosen toolchain;
     [install:false] returns the [info] without preparing its on-disk prefix.
-    Compose with {!toolchain_views} when the caller also needs the [conf] /
-    [Ctx.toolchain] views. *)
+    Compose with {!solver_inputs} when the caller also needs the [conf] /
+    [Ctx.toolchain] views. The lower-level [Toolchain.resolve] handles a single
+    named handle without precedence rules. *)
 
-val drop_override_compiler_roots :
+val strip_compiler_roots_for_override :
   override:string option ->
   toolchain:Toolchain.info option ->
   OpamPackage.Name.t list ->
   OpamPackage.Name.t list
-(** Strip compiler-family root names (i.e. those in [tc.root_names]) from
-    [names] when [override] is set. Used to substitute the explicit
+(** [strip_compiler_roots_for_override ~override ~toolchain names] removes
+    compiler-family root names (i.e. those in [tc.root_names]) from [names]
+    when [override] is set. Used to substitute the explicit
     [--toolchain=NAME]'s compiler pins for whatever the call-site's overlays /
     project would otherwise have asked for, avoiding [conflict-class] failures
     on [ocaml-core-compiler]. No-op when [override] is [None] (the toolchain
@@ -82,16 +85,16 @@ val drop_override_compiler_roots :
 
 (** {1 Sources} *)
 
-val materialize_with_deps :
+val classify_with_args :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   sys:D10.Sysops.t ->
   cache:Cache.t ->
   ?refresh:bool ->
   string list ->
   Project.Script.dep list * Project.Url.t
-(** Classify every [--with=…] token in one pass: URLs get cloned into the pin
-    cache and produce pins + solver roots; opam package specs come back as
-    already-parsed {!Project.Script.dep}. *)
+(** [classify_with_args tokens] partitions every [--with=…] token in one pass:
+    URLs get cloned into the pin cache and produce pins + solver roots; opam
+    package specs come back as already-parsed {!Project.Script.dep}. *)
 
 val filter_compatible_overlays :
   reporepo_path:string ->

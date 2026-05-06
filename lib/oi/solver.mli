@@ -172,19 +172,19 @@ module Env : sig
       [Eio.Process.spawn]. *)
 end
 
-(** {1 Persistent solve cache}
+(** {1 Persistent solve memo}
 
     Memoises {!solve} by digesting [conf], every [packages_dir] paired with its
     containing repository's [HEAD] commit, the constraints, and the target
     names. On a hit the stored result is loaded with [Marshal] instead of
     re-running 0install. Only successful solves are cached.
 
-    A parallel "layer hashes" cache stores the topo-sorted list of d10 layer
+    A parallel "layer hashes" memo stores the topo-sorted list of d10 layer
     hashes a successful solve produced; a subsequent identical [oi run] can skip
-    {!Ctx.create} / {!solve} / {!Plan.build} entirely when every cached layer is
-    still in the d10 cache. *)
+    {!Ctx.create} / {!solve} / {!Plan.of_solution} entirely when every cached
+    layer is still in the d10 cache. *)
 
-module Cache : sig
+module Memo : sig
   val key :
     ?test:OpamPackage.Name.Set.t ->
     ?doc:OpamPackage.Name.Set.t ->
@@ -195,13 +195,13 @@ module Cache : sig
     ?toolchain:Ctx.toolchain ->
     unit ->
     string option
-  (** MD5 hex digest used as the cache key, or [None] if any [packages_dir] is
+  (** MD5 hex digest used as the memo key, or [None] if any [packages_dir] is
       not under a git working tree (in which case the caller should skip both
       {!lookup} and {!store}). [git rev-parse HEAD] results are memoised
       process-wide.
 
       [test] / [doc] enter the digest so a [+test/+doc] solve and a base solve
-      don't collide in the cache — the closures differ. *)
+      don't collide in the memo — the closures differ. *)
 
   val lookup : cache_root:string -> key:string -> OpamPackage.t list option
 
@@ -235,22 +235,21 @@ val solve :
   OpamPackage.Name.t list ->
   (OpamPackage.t list, string) result
 (** Resolve the dependency closure for [names]. Returns packages in topological
-    order. Successful solves are persisted to {!Cache} and re-used when an
+    order. Successful solves are persisted via {!Memo} and re-used when an
     identical input is presented again.
 
     [test] / [doc] enable [{with-test}] / [{with-doc}] dependency filters for
     the named packages — typically the solve roots, so
     [opam install --with-test foo] semantics. Empty by default. Both feed into
-    the solve cache key, so [+test/+doc] and base solves coexist without
-    colliding.
+    the memo key, so [+test/+doc] and base solves coexist without colliding.
 
     The compiler pin always comes from the toolchain set on {!Ctx.t} (consumer
-    solves go through {!Pipeline.resolve_toolchain}, which returns the
+    solves go through {!Pipeline.pick_toolchain}, which returns the
     [x-oi-default-toolchain] entry when no [--toolchain] is given). Solves
     against a [Ctx] without a toolchain raise — the no-toolchain branch was
     removed when the default-toolchain wiring went in. *)
 
-val solve_dir :
+val raw_solve :
   ?test:OpamPackage.Name.Set.t ->
   ?doc:OpamPackage.Name.Set.t ->
   env:(string -> OpamVariable.variable_contents option) ->
@@ -260,19 +259,21 @@ val solve_dir :
   (OpamPackage.t list, string) result
 (** Lower-level entrypoint. Runs [opam-0install] over [packages_dirs] with
     exactly the [constraints] and [env] supplied — no auto-pinning, no {!Ctx},
-    no solve cache. *)
+    no memo. *)
 
-val dep_names :
+val direct_deps_within :
   packages_dirs:string list ->
   conf:Ctx.conf ->
   OpamPackage.t ->
   OpamPackage.Name.Set.t ->
   OpamPackage.Name.Set.t
-(** Direct dep names of [pkg] that appear in [in_solution], filtered by the
+(** [direct_deps_within ~packages_dirs ~conf pkg in_solution] is the set of
+    direct dep names of [pkg] that appear in [in_solution], filtered by the
     platform variables in [conf]. *)
 
-val load_opam : string list -> OpamPackage.t -> OpamFile.OPAM.t option
-(** Search [packages_dirs] in order for the opam file of [pkg]. *)
+val find_opam_file : string list -> OpamPackage.t -> OpamFile.OPAM.t option
+(** [find_opam_file packages_dirs pkg] searches [packages_dirs] in order for
+    the opam file of [pkg]. *)
 
 val filter_env : Ctx.conf -> OpamFilter.env
 (** Filter environment built from a synthetic platform configuration. *)

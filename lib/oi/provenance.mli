@@ -77,14 +77,15 @@ val read_all :
     Layer dirs without a [provenance.json] are silently skipped. Files that fail
     to decode are logged at debug and skipped. *)
 
-val load :
+val read_one :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   cache_root:string ->
   os_key:string ->
   hash:string ->
   t option
-(** [load ~fs ~cache_root ~os_key ~hash] reads a single [provenance.json] by
-    layer hash. [None] when the file is missing or fails to decode. *)
+(** [read_one ~fs ~cache_root ~os_key ~hash] reads a single [provenance.json]
+    by layer hash. [None] when the file is missing or fails to decode. Pairs
+    with {!read_all}. *)
 
 val overlay_of_layer :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -102,6 +103,7 @@ val hash_opam_file : path:string -> string
 (** Hex SHA-256 of [path]'s [effective_part]-equivalent bytes. Used by {!Plan}
     to populate {!opam_info.sha256}. Returns [""] if the file can't be read. *)
 
-val classify_url : string -> string
-(** ["git"] if URL starts with [git+] or contains [.git#], ["tar"] for known
-    archive extensions, ["local"] for [file://]/local paths, [""] otherwise. *)
+val url_kind : string -> string
+(** [url_kind url] is ["git"] if [url] starts with [git+] or contains [.git#],
+    ["tar"] for known archive extensions, ["local"] for [file://]/local paths,
+    [""] otherwise. *)

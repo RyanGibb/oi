@@ -6,10 +6,10 @@
     execution plan derived from it.
 
     Two-stage:
-    - {!build} returns a {!graph} (the action DAG with [method_] / layer hashes
-      decided per package). This is the structural plan suitable for dry-run
-      output and layer-cache lookups.
-    - {!resolve} expands a {!graph} into a {!t} with all opam variables,
+    - {!of_solution} returns a {!graph} (the action DAG with [method_] / layer
+      hashes decided per package). This is the structural plan suitable for
+      dry-run output and layer-cache lookups.
+    - {!elaborate} expands a {!graph} into a {!t} with all opam variables,
       filters, and commands turned into concrete shell commands. Packages are
       listed in topological order; the executor schedules them as a DAG, with
       each package's dep promises gating its own work, so there is no notion of
@@ -41,20 +41,22 @@ type node = {
 type graph
 (** A DAG of nodes keyed by package name. *)
 
-val build :
+val of_solution :
   Solver.Ctx.t ->
   ?d10:D10.Config.t ->
   packages_dirs:string list ->
   OpamPackage.t list ->
   graph
-(** [build ctx ?d10 ~packages_dirs pkgs] builds an action graph from a
+(** [of_solution ctx ?d10 ~packages_dirs pkgs] builds an action graph from a
     topologically-sorted package list. When [d10] is given, checks the layer
     cache and marks cached packages as [Binary]. *)
 
 val nodes : graph -> node list
 (** [nodes g] is the list of all nodes in topological order. *)
 
-val find : graph -> OpamPackage.Name.t -> node
+val find_node : graph -> OpamPackage.Name.t -> node
+(** [find_node g name] is the node for package [name]. Raises [Not_found] when
+    no such node exists in [g]. *)
 
 val overlay_of_pkg :
   packages_dirs:string list -> OpamPackage.t -> D10.Overlay.t option
@@ -151,7 +153,7 @@ val staging_dir : t -> package_plan -> string
     path is deterministic from the layer hash so concurrent fibers never
     collide. *)
 
-val resolve :
+val elaborate :
   Solver.Ctx.t ->
   packages_dirs:string list ->
   cache_root:string ->
@@ -160,8 +162,9 @@ val resolve :
   ?build_prefix:string ->
   graph ->
   t
-(** [resolve ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version ?build_prefix
-     g] turns an action graph into a fully-resolved execution plan.
+(** [elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
+     ?build_prefix g] turns an action graph into a fully-resolved execution
+    plan.
 
     [packages_dirs] is the same list passed to the solver, used to attribute
     each package to its source directory so the resulting plan (and any layer

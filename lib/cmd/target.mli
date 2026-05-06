@@ -54,7 +54,7 @@ val extract_handle_pins :
 val pin_handles : handle_pin list -> string list
 (** Project a list of handle-pins down to their handle strings. Useful for
     feeding the [@h/pkg] half of [--with] / [TARGET] tokens into
-    {!Oi.Pipeline.resolve_toolchain}. *)
+    {!Oi.Pipeline.pick_toolchain}. *)
 
 val handle_pin_constraints :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -77,7 +77,7 @@ val is_url_like : string -> bool
 val handles_of_tokens : string list -> string list
 (** Keep only the handle-shaped tokens (those for which {!is_url_like} returns
     [false]). Used by every solving command to derive the handle list fed into
-    {!Oi.Pipeline.resolve_toolchain}. *)
+    {!Oi.Pipeline.pick_toolchain}. *)
 
 val cli_extra_repo_of_url : string -> Oi.Project.extra_repo
 (** Convert a CLI [--with-repo URL] entry into a {!Oi.Project.extra_repo} with a

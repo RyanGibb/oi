@@ -161,14 +161,14 @@ let resolve_project_toolchain ?(refresh = false) ?(skip_local = false)
       | p -> p.overlays
   in
   let _, url_project =
-    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
   let tc_handles =
     project_overlays @ url_project.overlays
     @ Target.handles_of_tokens with_repos
     |> List.sort_uniq String.compare
   in
-  Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override
+  Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install ~override
     ~handles:tc_handles ()
 
 (* Run a full sync in [cwd]: solve the deps declared in *.opam files,
@@ -204,7 +204,7 @@ let envrc_should_write = function
   | `Always -> true
   | `Detect -> direnv_on_path ()
 
-let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
+let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     ?(with_repos = []) ?(with_deps = []) ?jobs ?(toolchain : string option)
     ?(envrc_mode = `Detect) ?bar_on_phase ?bar_on_text ?bar_display ~proc_mgr
     ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry ~use_registry
@@ -250,7 +250,7 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     if skip_local then Oi.Project.empty else Oi.Project.load ~fs cwd
   in
   let extra_cli, url_project =
-    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
   let deps = project.deps in
   if deps = [] && extra_cli = [] && url_project.roots = [] then
@@ -275,10 +275,10 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     |> List.sort_uniq String.compare
   in
   let toolchain =
-    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
       ~override:toolchain ~handles:tc_handles ()
   in
-  let conf, _ = Oi.Pipeline.toolchain_views toolchain conf in
+  let conf, _ = Oi.Pipeline.solver_inputs toolchain conf in
   let project_overlays =
     Oi.Pipeline.filter_compatible_overlays
       ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
@@ -310,7 +310,7 @@ let do_sync ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   let url_names = List.map OpamPackage.Name.of_string url_project.roots in
   let names =
     List.map OpamPackage.Name.of_string deps @ extra_names @ url_names
-    |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+    |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
          ~toolchain
   in
   let layer_hashes =

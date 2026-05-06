@@ -14,7 +14,7 @@ type extra_repo = {
   url : string;
   local_packages_dir : string option;
       (* When [Some d], [d] is an existing on-disk packages/ directory and
-         [Source.Repo.ensure_extra] returns it without cloning. Used for
+         [Source.Repo.ensure_many] returns it without cloning. Used for
          reporepo-handle overlays that live in [<reporepo>/v1/<handle>/]. *)
 }
 
@@ -699,7 +699,7 @@ module Tool = struct
      triggers are project-state checks ([.ocamlformat] file present,
      [dune-project] uses a particular plugin) that the reporepo can't
      express. *)
-  let registry =
+  let specs =
     [
       { name = "mdx"; binary = "ocaml-mdx"; trigger = Dune_project_using "mdx" };
       {
@@ -775,6 +775,6 @@ module Tool = struct
     | Ocamlformat_file -> probe_ocamlformat ~fs dir spec
     | Dune_project_using plugin -> probe_using ~fs dir spec plugin
 
-  let probe ~fs dir = List.map (probe_one ~fs dir) registry
+  let probe ~fs dir = List.map (probe_one ~fs dir) specs
   let hits = List.filter (fun r -> r.hit)
 end

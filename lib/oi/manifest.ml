@@ -173,7 +173,7 @@ let entry_for_failure_only = function
       invalid_arg "Manifest.entry_for_failure_only: no events"
   | (e : Audit.event) :: _ as events ->
       {
-        layer_hash = Audit.target_hash e.target;
+        layer_hash = Audit.hash_of_target e.target;
         pkg = e.pkg;
         os_key = e.os_key;
         method_ = method_of_outcome e.outcome;
@@ -212,7 +212,7 @@ let entry_of_provenance (p : Provenance.t) (events : Audit.event list) : entry =
     log = None;
   }
 
-let build ~os_key ~exported_at provs events =
+let from_logs ~os_key ~exported_at provs events =
   (* Bucket [events] by hash. [Solve_key] events live in their own
      namespace from [Layer] events — we don't want a stray solve digest
      accidentally joining a real layer or vice versa. Filtering by

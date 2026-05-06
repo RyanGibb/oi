@@ -42,10 +42,10 @@ type event = {
   log : log_pointer option;  (** Present on failure events. *)
 }
 
-val target_hash : event_target -> string
-(** Convenience accessor: pull the layer hash out of [target]. Returns the
-    embedded string for both variants — when filtering to "real" layers,
-    pattern-match on [target] directly instead. *)
+val hash_of_target : event_target -> string
+(** [hash_of_target t] pulls the layer hash out of [t]. Returns the embedded
+    string for both variants — when filtering to "real" layers, pattern-match
+    on [t] directly instead. *)
 
 (** {1 Codecs} *)
 
@@ -59,23 +59,27 @@ val log_pointer_codec : log_pointer Jsont.t
 
 (** {1 Storage} *)
 
-val path : cache_root:string -> string
-(** [<cache_root>/build/audit.jsonl]. *)
+val local_log_path : cache_root:string -> string
+(** [local_log_path ~cache_root] is [<cache_root>/build/audit.jsonl] — the
+    cache-local append log written by every [oi] invocation on this host. *)
 
 val append : fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> event -> unit
-(** Append [event] as a single JSON line to {!path}. Errors are logged and
-    swallowed so logging failure cannot abort the build. *)
+(** [append ~cache_root e] appends [e] as a single JSON line to
+    {!local_log_path}. Errors are logged and swallowed so logging failure
+    cannot abort the build. *)
 
 val read_all :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   cache_root:string ->
   os_key:string ->
   event list
-(** Read every line of {!path}, decode, and filter by [os_key]. Lines that fail
-    to decode are skipped with a debug log. *)
+(** [read_all ~cache_root ~os_key] reads every line of {!local_log_path},
+    decodes, and filters by [os_key]. Lines that fail to decode are skipped
+    with a debug log. *)
 
-val per_os_path : output_dir:string -> os_key:string -> string
-(** [<output_dir>/<os_key>/audit.jsonl] — the registry-side per-os audit file
+val exported_log_path : output_dir:string -> os_key:string -> string
+(** [exported_log_path ~output_dir ~os_key] is
+    [<output_dir>/<os_key>/audit.jsonl] — the registry-side per-os audit file
     emitted by [oi build --export]. *)
 
 val write_per_os :
@@ -84,7 +88,8 @@ val write_per_os :
   os_key:string ->
   event list ->
   unit
-(** Write [events] (sorted by [event_id]) to {!per_os_path} as jsonl. *)
+(** [write_per_os ~output_dir ~os_key events] writes [events] (sorted by
+    [event_id]) to {!exported_log_path} as jsonl. *)
 
 (** {1 IDs and helpers} *)
 

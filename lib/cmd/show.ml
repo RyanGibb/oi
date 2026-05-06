@@ -103,7 +103,7 @@ type show_meta_source =
 
 let show_primary_meta ~action_plan ~targets ~project_deps ~cwd =
   let find_name name =
-    try Some (Oi.Plan.find action_plan (OpamPackage.Name.of_string name))
+    try Some (Oi.Plan.find_node action_plan (OpamPackage.Name.of_string name))
     with _ -> None
   in
   match targets with
@@ -670,7 +670,7 @@ let cmd =
     in
     let handle_pins = target_pins @ with_pins in
     let extra_deps, url_project =
-      Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
     in
     (* Only consult the local project's declarations when the user did
        not name an explicit target; otherwise [oi show pkg] inside a
@@ -706,10 +706,10 @@ let cmd =
       |> List.sort_uniq String.compare
     in
     let toolchain =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false
+      Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:false
         ~override:toolchain_override ~handles:tc_handles ()
     in
-    let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain conf in
+    let conf, tc_ctx = Oi.Pipeline.solver_inputs toolchain conf in
     (* Toolchain overlay's packages_dirs drive the consumer solve too:
        when set, they REPLACE [get_packages_dirs] rather than stack
        on top, otherwise the default flow would add [relocatable]
@@ -730,7 +730,7 @@ let cmd =
       Target.merge_extras ~cli:cli_extras ~project:project_extras
     in
     let extra_pkg_dirs =
-      Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
+      Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh all_extras
     in
     let pin_dir =
       Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
@@ -772,7 +772,7 @@ let cmd =
     let names =
       List.map OpamPackage.Name.of_string targets
       @ project_dep_names @ extra_names @ url_names
-      |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+      |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
            ~toolchain
     in
     if names = [] then
@@ -857,7 +857,7 @@ let cmd =
         ~clock:(clock :> D10.Config.clk)
         ~cache ~os_key
     in
-    let action_plan = Oi.Plan.build ctx ~d10 ~packages_dirs pkgs in
+    let action_plan = Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs in
     let json_plan_node (n : Oi.Plan.node) =
       let name = OpamPackage.Name.to_string (OpamPackage.name n.pkg) in
       let version = OpamPackage.Version.to_string (OpamPackage.version n.pkg) in
@@ -949,7 +949,7 @@ let cmd =
     | Text -> ());
     if tree then begin
       let plan =
-        Oi.Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
+        Oi.Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
           ~ocaml_version:conf.ocaml_version action_plan
       in
       Fmt.pr "%a@." Oi.Plan.pp plan

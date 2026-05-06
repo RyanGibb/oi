@@ -1,7 +1,7 @@
 let ( / ) = Filename.concat
 
 (* Placeholder ocaml-version used to seed Pipeline.make_conf before
-   toolchain resolution overrides it via Pipeline.toolchain_views.
+   toolchain resolution overrides it via Pipeline.solver_inputs.
    Every consumer solve goes through resolve_toolchain (which returns
    the x-oi-default-toolchain entry when --toolchain isn't set) and
    the resulting toolchain.ocaml_version replaces this string in the

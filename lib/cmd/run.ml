@@ -145,7 +145,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
        scan its *.opam files, and merge the contribution as pins +
        solver roots + overlays + extra_repos. *)
   let extra_deps, url_project =
-    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
   let extra_constraints = Oi.Project.Script.constraints extra_deps in
   (* Resolve the cwd once; reused for project-extras loading and the
@@ -183,7 +183,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
     |> List.sort_uniq String.compare
   in
   let toolchain =
-    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
       ~override:toolchain_override ~handles:tc_handles ()
   in
   (* Treat [@HANDLE] entries from the project's [x-repos:] as if
@@ -265,7 +265,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
         m "Solving for packages: %s" (String.concat ", " pkg_names));
     let names =
       List.map OpamPackage.Name.of_string pkg_names
-      |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+      |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
            ~toolchain
     in
     let layer_hashes =
@@ -371,7 +371,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
     in
     let constraints = Oi.Project.Script.constraints all_script_deps in
     let dep_opam_names =
-      Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+      Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
         ~toolchain dep_opam_names
     in
     let layer_hashes =
@@ -424,7 +424,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
          in
          Stdlib.Option.to_list local_packages_dir
          @ Stdlib.Option.to_list pin_dir
-         @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
+         @ Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh all_extras
          @
          match toolchain with
          | Some (info : Oi.Toolchain.info) -> info.packages_dirs

@@ -47,7 +47,7 @@ module Repo = struct
       Unix.utimes dir now now
     with Unix.Unix_error _ -> ()
 
-  let repo_dir ~data_dir name = data_dir / "repos" / name
+  let dir ~data_dir name = data_dir / "repos" / name
 
   let dir_needs_refresh dir =
     try
@@ -55,7 +55,7 @@ module Repo = struct
       Unix.time () -. st.Unix.st_mtime > Cache.refresh_max_age
     with Unix.Unix_error _ -> true
 
-  let ensure_one ~fs ~refresh ~label ~url ~dir =
+  let ensure ~fs ~refresh ~label ~url ~dir =
     let pkg_dir = dir / "packages" in
     if not (Sys.file_exists pkg_dir) then begin
       if Sys.file_exists dir then begin
@@ -77,15 +77,15 @@ module Repo = struct
             m "Failed to update %s: %s" label (Printexc.to_string exn))
     end
 
-  let ensure_extra ~fs ~data_dir ?(refresh = false) extras =
+  let ensure_many ~fs ~data_dir ?(refresh = false) extras =
     List.map
       (fun (e : Project.extra_repo) ->
         match e.local_packages_dir with
         | Some d -> d
         | None ->
-            let dir = repo_dir ~data_dir e.name in
-            ensure_one ~fs ~refresh ~label:e.name ~url:e.url ~dir;
-            dir / "packages")
+            let path = dir ~data_dir e.name in
+            ensure ~fs ~refresh ~label:e.name ~url:e.url ~dir:path;
+            path / "packages")
       extras
 end
 
@@ -1902,14 +1902,15 @@ module Mirror = struct
         if Sys.file_exists path then Some path else None)
       checksums
 
-  let promote ~fs ~cache_root checksums =
+  let import_from_opam_cache ~fs ~cache_root checksums =
     match checksums with
     | [] -> 0
     | _ -> (
         match opam_cached_blob checksums with
         | None ->
             Log.debug (fun m ->
-                m "promote: no opam-cached blob for %d checksum(s), skipping"
+                m "import_from_opam_cache: no opam-cached blob for %d \
+                   checksum(s), skipping"
                   (List.length checksums));
             0
         | Some src ->
@@ -1977,7 +1978,7 @@ module Mirror = struct
     let n = String.length s in
     if n > 0 && s.[n - 1] = '/' then String.sub s 0 (n - 1) else s
 
-  let prewarm_remote ~session ~fs ~cache_root ~registry ?(max_fibers = 16)
+  let fetch_from_registry ~session ~fs ~cache_root ~registry ?(max_fibers = 16)
       (archive_checksums : OpamHash.t list list) =
     let mirror_dir = cache_root / "mirror" in
     mkdir_p ~fs mirror_dir;
@@ -2151,7 +2152,7 @@ module Mirror = struct
      refine a log line is a wasted round-trip. The [Other] case
      therefore means "either the registry or upstream — opam will
      decide" and the actual fetch goes through [cache_urls] as usual. *)
-  let classify_source ~cache_urls ~checksums =
+  let source_origin ~cache_urls ~checksums =
     if checksums = [] then Other
     else
       let probe (cu : OpamUrl.t) =
@@ -2182,7 +2183,7 @@ module Mirror = struct
       match result with
       | OpamTypes.Result () | OpamTypes.Up_to_date () -> (
           try
-            let _ = promote ~fs ~cache_root a.checksums in
+            let _ = import_from_opam_cache ~fs ~cache_root a.checksums in
             (* Size lookup goes through the mirror because opam may have
                served from its download-cache without writing to [tmp]. *)
             let bytes =

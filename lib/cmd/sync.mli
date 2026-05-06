@@ -31,7 +31,7 @@ val resolve_project_toolchain :
 *)
 
 type envrc_mode = [ `Skip | `Always | `Detect ]
-(** Controls [.envrc] writing during {!do_sync}. [`Detect] (the default) writes
+(** Controls [.envrc] writing during {!run}. [`Detect] (the default) writes
     [.envrc] only if [direnv] is on PATH; [`Skip] never writes; [`Always] writes
     regardless. *)
 
@@ -39,7 +39,7 @@ val envrc_mode_arg : envrc_mode Cmdliner.Term.t
 (** Cmdliner term for [--envrc=skip|always|detect]. Shared between [oi sync] and
     [oi build]. *)
 
-val do_sync :
+val run :
   ?quiet:bool ->
   ?refresh:bool ->
   ?skip_local:bool ->
@@ -74,5 +74,5 @@ val do_sync :
     routed to the {!Oi.Ui.Preflight} overall progress bar instead of stdout, and
     [Pipeline.fetch_remote_layers] / [Execute.run] attach their multi-bar lines
     to [bar_display] via [Progress.Display.add_line]. Pass these straight from
-    [Oi.Ui.Preflight.with_bar] in callers that wrap [do_sync] in the overall
+    [Oi.Ui.Preflight.with_bar] in callers that wrap {!run} in the overall
     progress UI. *)

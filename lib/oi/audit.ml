@@ -16,7 +16,7 @@ type context = {
 type log_pointer = { text_path : string; tail : string option }
 type event_target = Layer of string | Solve_key of string
 
-let target_hash = function Layer h | Solve_key h -> h
+let hash_of_target = function Layer h | Solve_key h -> h
 
 type event = {
   schema : int;
@@ -202,7 +202,7 @@ let event_codec =
 
 (* -- Storage ------------------------------------------------------------- *)
 
-let path ~cache_root = cache_root / "build" / "audit.jsonl"
+let local_log_path ~cache_root = cache_root / "build" / "audit.jsonl"
 
 let ensure_dir ~fs ~cache_root =
   try
@@ -216,7 +216,7 @@ let ensure_dir ~fs ~cache_root =
    [O_APPEND]; a single event is well under 4 KiB, so concurrent appenders
    from multiple [oi build] processes don't need explicit locking. *)
 let append ~fs ~cache_root e =
-  let dst = path ~cache_root in
+  let dst = local_log_path ~cache_root in
   match Jsont_bytesrw.encode_string event_codec e with
   | Ok line -> (
       ensure_dir ~fs ~cache_root;
@@ -236,7 +236,7 @@ let split_lines s =
   String.split_on_char '\n' s |> List.filter (fun l -> l <> "")
 
 let read_all ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root ~os_key =
-  let p = path ~cache_root in
+  let p = local_log_path ~cache_root in
   match
     try Some (Eio.Path.load Eio.Path.(fs / p)) with Eio.Exn.Io _ -> None
   with
@@ -255,10 +255,10 @@ let read_all ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root ~os_key =
 
 (* -- Per-os export ------------------------------------------------------- *)
 
-let per_os_path ~output_dir ~os_key = output_dir / os_key / "audit.jsonl"
+let exported_log_path ~output_dir ~os_key = output_dir / os_key / "audit.jsonl"
 
 let write_per_os ~fs ~output_dir ~os_key events =
-  let dst = per_os_path ~output_dir ~os_key in
+  let dst = exported_log_path ~output_dir ~os_key in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
     Eio.Path.(fs / output_dir / os_key);
   (* Sort by event_id (ULIDs are timestamp-prefixed so this also sorts by

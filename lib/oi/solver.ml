@@ -43,7 +43,7 @@ module Dir_context = struct
      each candidate. Every quirk is a workaround for a specific
      upstream issue; each one carries a TODO so audits surface it
      when the cause is gone. The on-disk opam file is untouched —
-     layer hashes and [Plan.resolve] keep seeing the canonical file.
+     layer hashes and [Plan.elaborate] keep seeing the canonical file.
 
      - [graphics] (global): the legacy [graphics] package is almost
        always listed by upstream packages as an optional plotting /
@@ -742,10 +742,10 @@ module Env = struct
     Array.of_list (env_pairs @ base)
 end
 
-(* -- Persistent solve cache (was lib/oi/solve_cache.ml) ------------------ *)
+(* -- Persistent solve memo (was lib/oi/solve_cache.ml) ------------------ *)
 
-module Cache = struct
-  let log_src = Logs.Src.create "oi.solver.cache"
+module Memo = struct
+  let log_src = Logs.Src.create "oi.solver.memo"
 
   module Log = (val Logs.src_log log_src : Logs.LOG)
 
@@ -958,7 +958,7 @@ end
 
 module Inst = Opam_0install.Solver.Make (Dir_context)
 
-let load_opam_from packages_dir pkg =
+let find_opam_file_in packages_dir pkg =
   let name_s = OpamPackage.Name.to_string (OpamPackage.name pkg) in
   let pkg_s = OpamPackage.to_string pkg in
   let path = packages_dir / name_s / pkg_s / "opam" in
@@ -966,8 +966,8 @@ let load_opam_from packages_dir pkg =
     Some (OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)))
   else None
 
-let load_opam packages_dirs pkg =
-  List.find_map (fun d -> load_opam_from d pkg) packages_dirs
+let find_opam_file packages_dirs pkg =
+  List.find_map (fun d -> find_opam_file_in d pkg) packages_dirs
 
 let std_env ?(ocaml_native = true) ?opam_version (conf : Ctx.conf) v =
   match v with
@@ -1005,7 +1005,7 @@ let ctx_env ctx = std_env (Ctx.conf ctx)
 let filter_env (conf : Ctx.conf) v =
   std_env conf (OpamVariable.Full.to_string v)
 
-let dep_names ~packages_dirs ~(conf : Ctx.conf) pkg in_solution =
+let direct_deps_within ~packages_dirs ~(conf : Ctx.conf) pkg in_solution =
   let env v =
     if List.mem v OpamPackageVar.predefined_depends_variables then None
     else
@@ -1016,7 +1016,7 @@ let dep_names ~packages_dirs ~(conf : Ctx.conf) pkg in_solution =
                (OpamPackage.Version.to_string (OpamPackage.version pkg)))
       | x -> std_env conf x
   in
-  match load_opam packages_dirs pkg with
+  match find_opam_file packages_dirs pkg with
   | None -> OpamPackage.Name.Set.empty
   | Some opam ->
       let names_from_formula f =
@@ -1061,7 +1061,7 @@ let topo_sort ~packages_dirs ~conf pkgs =
     List.fold_left
       (fun m p ->
         OpamPackage.Name.Map.add (OpamPackage.name p)
-          (dep_names ~packages_dirs ~conf p in_solution)
+          (direct_deps_within ~packages_dirs ~conf p in_solution)
           m)
       OpamPackage.Name.Map.empty pkgs
   in
@@ -1079,7 +1079,7 @@ let topo_sort ~packages_dirs ~conf pkgs =
   List.iter (fun p -> visit (OpamPackage.name p)) pkgs;
   List.rev !result
 
-let solve_dir ?test ?doc ~env ~packages_dirs ~constraints names =
+let raw_solve ?test ?doc ~env ~packages_dirs ~constraints names =
   let dir_ctx = Dir_context.create ?test ?doc ~env ~constraints packages_dirs in
   match Inst.solve dir_ctx names with
   | Ok sels -> Ok (Inst.packages_of_result sels)
@@ -1089,7 +1089,7 @@ let augment_compiler_constraints ctx constraints =
   match Ctx.toolchain ctx with
   | None ->
       (* Every code path that reaches the augment step now goes
-         through Pipeline.resolve_toolchain (which returns the
+         through Pipeline.pick_toolchain (which returns the
          x-oi-default-toolchain entry when no --toolchain is given,
          or hard-errors). Hitting this branch means the caller
          constructed a Ctx without a toolchain and tried to solve —
@@ -1097,7 +1097,7 @@ let augment_compiler_constraints ctx constraints =
       Error.config_error
         "Solver.augment_compiler_constraints: no toolchain set on Solver.Ctx — \
          every solve must thread a toolchain through (default or \
-         --toolchain=NAME). Construct the Ctx via Pipeline.resolve_toolchain."
+         --toolchain=NAME). Construct the Ctx via Pipeline.pick_toolchain."
   | Some tc ->
       let add name version_s m =
         if OpamPackage.Name.Map.mem name m then m
@@ -1126,7 +1126,7 @@ let solve_with_dir_context ?test ?doc ctx ~packages_dirs ~constraints names =
         Fmt.(list ~sep:comma string)
         (List.map OpamPackage.Name.to_string names));
   match
-    solve_dir ?test ?doc ~env:(ctx_env ctx) ~packages_dirs ~constraints names
+    raw_solve ?test ?doc ~env:(ctx_env ctx) ~packages_dirs ~constraints names
   with
   | Ok pkgs ->
       Log.info (fun m -> m "Solution: %d packages to build" (List.length pkgs));
@@ -1217,12 +1217,12 @@ let solve ?test ?doc ~fs ~cache_root ctx ~packages_dirs ~constraints names =
     | Error _ as e -> e
   in
   match
-    Cache.key ?test ?doc ~conf ~packages_dirs ~constraints ~names
+    Memo.key ?test ?doc ~conf ~packages_dirs ~constraints ~names
       ?toolchain:(Ctx.toolchain ctx) ()
   with
   | None -> run_solve ()
   | Some cache_key -> (
-      match Cache.lookup ~cache_root ~key:cache_key with
+      match Memo.lookup ~cache_root ~key:cache_key with
       | Some pkgs ->
           Log.info (fun m ->
               m "solve cache hit %s (%d packages)"
@@ -1233,6 +1233,6 @@ let solve ?test ?doc ~fs ~cache_root ctx ~packages_dirs ~constraints names =
       | None -> (
           match run_solve () with
           | Ok pkgs as r ->
-              Cache.store ~fs ~cache_root ~key:cache_key pkgs;
+              Memo.store ~fs ~cache_root ~key:cache_key pkgs;
               r
           | Error _ as e -> e))

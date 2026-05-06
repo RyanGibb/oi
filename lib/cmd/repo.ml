@@ -1032,7 +1032,7 @@ end
 (* -- repo lint ----------------------------------------------------------- *)
 
 (* Shape and integrity checks for a reporepo on disk. The contract every
-   command's [Pipeline.resolve_toolchain] depends on: exactly one
+   command's [Pipeline.pick_toolchain] depends on: exactly one
    default toolchain, every [x-oi-toolchain] reference resolves, every
    toolchain definition carries the fields the resolver and Toolchain
    pipeline read. Loading a reporepo through {!Reporepo.load} already

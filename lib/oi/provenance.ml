@@ -38,7 +38,7 @@ let empty_phases =
 
 (* -- URL classification --------------------------------------------------- *)
 
-let classify_url url =
+let url_kind url =
   if url = "" then ""
   else if String.starts_with ~prefix:"git+" url then "git"
   else if String.starts_with ~prefix:"file://" url then "local"
@@ -185,12 +185,12 @@ let try_decode ~fs ~path : t option =
         m "provenance read %s: %s" path (Printexc.to_string exn));
     None
 
-let load ~fs ~cache_root ~os_key ~hash =
+let read_one ~fs ~cache_root ~os_key ~hash =
   let p = path ~cache_root ~os_key ~hash in
   if Eio.Path.is_file Eio.Path.(fs / p) then try_decode ~fs ~path:p else None
 
 let overlay_of_layer ~fs ~cache_root ~os_key ~hash =
-  match load ~fs ~cache_root ~os_key ~hash with
+  match read_one ~fs ~cache_root ~os_key ~hash with
   | None -> None
   | Some p -> p.opam.origin.overlay
 
@@ -205,5 +205,5 @@ let read_all ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root ~os_key =
              OINDEX.txt manifest) — every real layer dir is a flat hex
              string with no extension. *)
           if String.contains hash '.' then None
-          else load ~fs ~cache_root ~os_key ~hash)
+          else read_one ~fs ~cache_root ~os_key ~hash)
         hashes

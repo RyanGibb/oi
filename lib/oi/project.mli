@@ -14,7 +14,7 @@ type extra_repo = {
   url : string;
   local_packages_dir : string option;
       (** When set, the entry resolves to this on-disk [packages/] directory and
-          {!Source.Repo.ensure_extra} returns it without cloning. Used for
+          {!Source.Repo.ensure_many} returns it without cloning. Used for
           reporepo-handle overlays already materialised under
           [<reporepo>/v1/<handle>/]. *)
 }
@@ -154,12 +154,12 @@ module Tool : sig
   type trigger = Ocamlformat_file | Dune_project_using of string
   type spec = { name : string; binary : string; trigger : trigger }
 
-  val registry : spec list
+  val specs : spec list
   (** Editor / dev tools whose installation is project-state-driven (e.g.
       ocamlformat when [.ocamlformat] is present, mdx when [dune-project] uses
-      it). Always-on tools live in the active toolchain's [x-oi-toolchain-tools]
-      field instead — the toolchain decides what its consumers get without a
-      hardcoded list here. *)
+      it). Always-on tools live in the active toolchain's
+      [x-oi-toolchain-tools] field instead — the toolchain decides what its
+      consumers get without a hardcoded list here. *)
 
   type result = {
     spec : spec;

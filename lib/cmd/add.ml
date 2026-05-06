@@ -50,11 +50,11 @@ let cmd =
       | Some (op, ver) -> Fmt.str " %s %s" op ver
     in
     (* Phase 1: prove the solve succeeds with the new dep included. If
-       solve fails, [Sync.do_sync] raises before we touch any project files. *)
+       solve fails, [Sync.run] raises before we touch any project files. *)
     Fmt.pr "Solving %s%s into the project...@." dep_name
       (render_constraint op_ver);
     ignore
-      (Sync.do_sync ~refresh ~with_repos ~with_deps:[ pkg_spec ] ?toolchain
+      (Sync.run ~refresh ~with_repos ~with_deps:[ pkg_spec ] ?toolchain
          ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir ~registry
          ~use_registry ~session:http_session ~cwd ());
     (* Phase 2: edit dune-project. Reload in case something touched it
@@ -93,7 +93,7 @@ let cmd =
     (* Phase 4: re-sync so the prefix reflects the committed *.opam. *)
     Fmt.pr "Re-syncing to pick up regenerated *.opam...@.";
     ignore
-      (Sync.do_sync ~quiet:true ~refresh:false ~with_repos ~with_deps:[]
+      (Sync.run ~quiet:true ~refresh:false ~with_repos ~with_deps:[]
          ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
          ~registry ~use_registry ~session:http_session ~cwd ());
     Fmt.pr "Done.@."

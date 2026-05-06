@@ -36,7 +36,7 @@ let fetch_remote_to ~sys ~fs ~registry ~rel ~dst =
   end
 
 (* Layer-cache + sources publish helper, called by [oi build --export DIR]. *)
-let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
+let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
   let dst = Eio.Path.(fs / output) in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
@@ -84,7 +84,7 @@ let do_registry_export ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   let events = Oi.Audit.read_all ~fs ~cache_root ~os_key in
   if provs <> [] || events <> [] then begin
     let manifest =
-      Oi.Manifest.build ~os_key ~exported_at:(Unix.gettimeofday ()) provs events
+      Oi.Manifest.from_logs ~os_key ~exported_at:(Unix.gettimeofday ()) provs events
     in
     let logs_dir = output / os_key / "logs" in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / logs_dir);

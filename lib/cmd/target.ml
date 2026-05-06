@@ -199,7 +199,7 @@ let handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras handle_pins =
   if handle_pins = [] then OpamPackage.Name.Map.empty
   else
     let overlay_pkg_dirs =
-      Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh cli_extras
+      Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh cli_extras
     in
     List.fold_left
       (fun acc { handle; pkg; user_constr } ->

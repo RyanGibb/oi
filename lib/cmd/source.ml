@@ -361,7 +361,7 @@ let cmd =
       split_handle_targets ~with_repos ~with_deps targets
     in
     let extra_deps, url_project =
-      Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
     in
     let extra_constraints = Oi.Project.Script.constraints extra_deps in
     let with_repos =
@@ -377,16 +377,16 @@ let cmd =
       Target.merge_extras ~cli:cli_extras ~project:url_project.extra_repos
     in
     let toolchain =
-      Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false
+      Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:false
         ~override:toolchain_override
         ~handles:(List.sort_uniq String.compare with_repos)
         ()
     in
-    let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain conf in
+    let conf, tc_ctx = Oi.Pipeline.solver_inputs toolchain conf in
     let packages_dirs =
       Stdlib.Option.to_list
         (Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh url_project.pins)
-      @ Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
+      @ Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh all_extras
       @
       match toolchain with
       | Some (info : Oi.Toolchain.info) -> info.packages_dirs
@@ -401,7 +401,7 @@ let cmd =
     let names =
       List.map OpamPackage.Name.of_string targets
       @ List.map OpamPackage.Name.of_string url_project.roots
-      |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+      |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
            ~toolchain
     in
     Oi.Say.step "Solving %d target(s) (+test, +doc)" (List.length names);

@@ -30,7 +30,7 @@ let init_opam_root ~fs ~data_dir =
 
 (* -- Toolchain ----------------------------------------------------------- *)
 
-let toolchain_views info conf =
+let solver_inputs info conf =
   let conf = Toolchain.apply_conf info conf in
   let ctx = Option.map Toolchain.opam_ctx_of_info info in
   (conf, ctx)
@@ -52,7 +52,7 @@ let toolchain_names_of_handle entries handle =
   in
   from_field @ from_self
 
-let resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
+let pick_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
   let path = Source.Reporepo.env_path () in
   let entries =
     if Sys.file_exists path then
@@ -112,7 +112,7 @@ let resolve_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
   if install then Toolchain.ensure_installed ~fs info;
   Some info
 
-let drop_override_compiler_roots ~override ~toolchain names =
+let strip_compiler_roots_for_override ~override ~toolchain names =
   match (override, (toolchain : Toolchain.info option)) with
   | None, _ | _, None -> names
   | Some _, Some info ->
@@ -122,7 +122,7 @@ let drop_override_compiler_roots ~override ~toolchain names =
 
 (* -- Sources ------------------------------------------------------------- *)
 
-let materialize_with_deps ~fs ~sys ~cache ?refresh with_deps =
+let classify_with_args ~fs ~sys ~cache ?refresh with_deps =
   let urls, pkg_deps = Project.Url.classify_all with_deps in
   let url_project = Project.Url.materialize ~fs ~sys ~cache ?refresh urls in
   (pkg_deps, url_project)
@@ -454,7 +454,7 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ?shared_display ~session
                 (Fmt.str "Fetched %d/%d layers from registry (%s)" done_count
                    n_total (fmt_mb bytes_received))
           | None -> ());
-          Plan.build ctx ~d10 ~packages_dirs pkgs
+          Plan.of_solution ctx ~d10 ~packages_dirs pkgs
         end
 
 (* -- Central build pipeline (was main.ml's solve_and_ensure_layers) ----- *)
@@ -471,7 +471,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
     | None -> fun s -> Logs.info (fun m -> m "%s" s)
   in
   let extra_pkg_dirs =
-    Source.Repo.ensure_extra ~fs ~data_dir ~refresh extra_repos
+    Source.Repo.ensure_many ~fs ~data_dir ~refresh extra_repos
   in
   let pins = Source.Pin.resolve_pins ~fs ~sys ?project_root pins in
   let pin_dir = Source.Pin.materialize ~fs ~sys ~cache ~refresh pins in
@@ -490,7 +490,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
     @ Stdlib.Option.to_list pin_dir
     @ extra_pkg_dirs @ base_pkg_dirs
   in
-  let conf, toolchain_ctx = toolchain_views toolchain conf in
+  let conf, toolchain_ctx = solver_inputs toolchain conf in
   Log.debug (fun m ->
       m "solver packages_dirs (first-wins, %d entries):%s"
         (List.length packages_dirs)
@@ -500,7 +500,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
   let d10 = make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key in
   (* Fast-path: if we've seen these exact inputs before AND every layer
      hash we stored is still present in the d10 cache, skip
-     [Solver.Ctx.create] + [Solver.solve] + [Plan.build] entirely. The
+     [Solver.Ctx.create] + [Solver.solve] + [Plan.of_solution] entirely. The
      ~900ms of opam-file parsing that [Solver.Ctx.create] does swamps
      everything else in the happy-path [oi run] of an already-built
      target, so cutting it out here is the main perf win. Disabled
@@ -509,14 +509,14 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
   let layer_cache_key =
     if dry_run then None
     else
-      Solver.Cache.key ~conf ~packages_dirs ~constraints ~names
+      Solver.Memo.key ~conf ~packages_dirs ~constraints ~names
         ?toolchain:toolchain_ctx ()
   in
   let fast_hashes =
     match layer_cache_key with
     | None -> None
     | Some k -> (
-        match Solver.Cache.lookup_layers ~cache_root ~key:k with
+        match Solver.Memo.lookup_layers ~cache_root ~key:k with
         | None -> None
         | Some hashes
           when List.for_all (fun h -> D10.Layer.succeeded d10 ~hash:h) hashes ->
@@ -574,7 +574,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
       on_phase
         (Fmt.str "Planning %d package%s" (List.length pkgs)
            (if List.length pkgs = 1 then "" else "s"));
-      let build_plan = Plan.build ctx ~d10 ~packages_dirs pkgs in
+      let build_plan = Plan.of_solution ctx ~d10 ~packages_dirs pkgs in
       if dry_run then begin
         let remote_has =
           match layer_remote with
@@ -608,7 +608,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
       let persist_layer_cache () =
         match layer_cache_key with
         | None -> ()
-        | Some k -> Solver.Cache.store_layers ~fs ~cache_root ~key:k hashes
+        | Some k -> Solver.Memo.store_layers ~fs ~cache_root ~key:k hashes
       in
       if all_layers_cached then begin
         Logs.info (fun m -> m "Layers cached, skipping build");
@@ -695,7 +695,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
                 |> String.concat ", "))
         end;
         let exec_plan =
-          Plan.resolve ctx ~packages_dirs ~cache_root ~os_key
+          Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
             ~ocaml_version:conf.ocaml_version build_plan
         in
         (* Prewarm the local source mirror from the registry's [/sources/]
@@ -732,7 +732,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             in
             if archives <> [] then begin
               let s =
-                Source.Mirror.prewarm_remote ~session ~fs ~cache_root ~registry
+                Source.Mirror.fetch_from_registry ~session ~fs ~cache_root ~registry
                   ~max_fibers:(fetch_parallelism ?jobs ())
                   archives
               in

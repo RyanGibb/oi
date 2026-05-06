@@ -278,7 +278,7 @@ let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
         let cache_dir =
           OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
         in
-        let origin = Source.Mirror.classify_source ~cache_urls ~checksums in
+        let origin = Source.Mirror.source_origin ~cache_urls ~checksums in
         Log.info (fun m ->
             m "Fetching %s from %s" p.pkg
               (describe_origin ~src_url:src.url origin));
@@ -297,7 +297,7 @@ let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
                   (* Promote the just-fetched blob into our content-
                      addressed mirror so [oi build --export] picks it up
                      and registry consumers can fetch it offline. *)
-                  let _ = Source.Mirror.promote ~fs ~cache_root checksums in
+                  let _ = Source.Mirror.import_from_opam_cache ~fs ~cache_root checksums in
                   ()
               | OpamTypes.Not_available (_, msg) ->
                   Fmt.failwith "Failed to fetch %s: %s" p.pkg msg)
@@ -319,7 +319,7 @@ let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
         let cache_dir =
           OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
         in
-        let origin = Source.Mirror.classify_source ~cache_urls ~checksums in
+        let origin = Source.Mirror.source_origin ~cache_urls ~checksums in
         Log.info (fun m ->
             m "Fetching extra source %s for %s from %s" name p.pkg
               (describe_origin ~src_url:src.url origin));
@@ -336,7 +336,7 @@ let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
               in
               match result with
               | OpamTypes.Result () | OpamTypes.Up_to_date () ->
-                  let _ = Source.Mirror.promote ~fs ~cache_root checksums in
+                  let _ = Source.Mirror.import_from_opam_cache ~fs ~cache_root checksums in
                   ()
               | OpamTypes.Not_available (_, msg) -> Fmt.failwith "%s" msg)
         with Failure msg ->
@@ -419,7 +419,7 @@ let fetch_phase ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
   fetch_extra_sources ~cache_urls ~fs ~cache_root p
 
 (* Per-package rebased view: planning-time prefix (the same path baked
-   into every package's commands by [Plan.resolve]) is replaced with this
+   into every package's commands by [Plan.elaborate]) is replaced with this
    package's staging dir. The substitution is plain string replacement on
    the planning-prefix path — the planning prefix is a deterministic,
    unique path under [<cache_root>/build/prefix] so accidental matches
@@ -744,7 +744,7 @@ let provenance_source_of_plan (p : Plan.package_plan) :
     (fun (s : Plan.source_info) : Provenance.source_info ->
       {
         url = s.url;
-        kind = Provenance.classify_url s.url;
+        kind = Provenance.url_kind s.url;
         checksums = s.checksums;
       })
     p.source

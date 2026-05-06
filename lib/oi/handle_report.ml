@@ -32,7 +32,7 @@ let load_manifest ~fs ~output_dir ~os_key =
           None)
 
 let load_audit_events ~fs ~output_dir ~os_key =
-  let path = Audit.per_os_path ~output_dir ~os_key in
+  let path = Audit.exported_log_path ~output_dir ~os_key in
   match load_text fs path with
   | None -> []
   | Some content ->

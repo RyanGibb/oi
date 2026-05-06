@@ -313,12 +313,12 @@ let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
       (fun spec -> OpamPackage.Name.of_string (fst (parse_spec spec)))
       root_specs
   in
-  (* {!Solver.solve_dir} runs opam-0install with exactly these
+  (* {!Solver.raw_solve} runs opam-0install with exactly these
      constraints — no auto-pinning of OCaml-family packages, so the
      overlay's [+ox] versions aren't fought against [conf.ocaml_version]. *)
   let env v = Solver.filter_env conf (OpamVariable.Full.of_string v) in
   let pkgs =
-    match Solver.solve_dir ~env ~packages_dirs ~constraints names with
+    match Solver.raw_solve ~env ~packages_dirs ~constraints names with
     | Ok pkgs -> pkgs
     | Error msg ->
         Error.config_error "toolchain %s: solve failed: %s" handle msg

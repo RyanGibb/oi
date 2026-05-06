@@ -40,7 +40,7 @@ let cmd =
       if forced || Sync.needs_sync ~cwd ~prefix then begin
         Logs.info (fun m -> m "Syncing %s before exec" cwd);
         let _, tc =
-          Sync.do_sync ~quiet:true ~refresh ~skip_local ~with_repos ~with_deps
+          Sync.run ~quiet:true ~refresh ~skip_local ~with_repos ~with_deps
             ?jobs ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
             ~data_dir ~registry ~use_registry ~session:http_session ~cwd ()
         in

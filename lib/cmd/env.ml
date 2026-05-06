@@ -42,7 +42,7 @@ let cmd =
         ~fs ~sys ~cache ~data_dir ~conf ~install:true ~override:toolchain
         ~cwd:cwd_s ()
     in
-    let conf, tc_ctx = Oi.Pipeline.toolchain_views tc_info conf in
+    let conf, tc_ctx = Oi.Pipeline.solver_inputs tc_info conf in
     let prefix =
       if (not want_extras) && Workspace.path_exists cwd "_oi/prefix" then
         oi_prefix
@@ -52,7 +52,7 @@ let cmd =
         Oi.Pipeline.init_opam_root ~fs ~data_dir;
         ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
         let extra_cli, url_project =
-          Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+          Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
         in
         let url_overlays =
           Oi.Pipeline.filter_compatible_overlays

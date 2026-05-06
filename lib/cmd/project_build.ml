@@ -51,7 +51,7 @@ let topo_sort_local opams =
 
 (* Solve the project's dep closure without building. Returns
    [(packages_dirs, conf, pkgs)] for downstream depext / introspection.
-   Replicates the solver setup [Sync.do_sync] does internally up to the
+   Replicates the solver setup [Sync.run] does internally up to the
    [Solver.solve] call, then stops. *)
 let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
     ~with_deps ~toolchain_override ~cwd () =
@@ -59,7 +59,7 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let project = Oi.Project.load ~fs cwd in
   let extra_cli, url_project =
-    Oi.Pipeline.materialize_with_deps ~fs ~sys ~cache ~refresh with_deps
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
   if project.deps = [] && extra_cli = [] && url_project.roots = [] then
     Oi.Error.config_error "oi build: no *.opam files in %s" cwd;
@@ -72,10 +72,10 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
     |> List.sort_uniq String.compare
   in
   let toolchain =
-    Oi.Pipeline.resolve_toolchain ~fs ~sys ~data_dir ~conf ~install:false
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:false
       ~override:toolchain_override ~handles:tc_handles ()
   in
-  let conf, tc_ctx = Oi.Pipeline.toolchain_views toolchain conf in
+  let conf, tc_ctx = Oi.Pipeline.solver_inputs toolchain conf in
   let project_overlays =
     Oi.Pipeline.filter_compatible_overlays
       ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
@@ -87,7 +87,7 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
       ~project:(project.extra_repos @ url_project.extra_repos)
   in
   let extra_pkg_dirs =
-    Oi.Source.Repo.ensure_extra ~fs ~data_dir ~refresh all_extras
+    Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh all_extras
   in
   let pin_dir =
     Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh
@@ -125,7 +125,7 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
   let url_names = List.map OpamPackage.Name.of_string url_project.roots in
   let names =
     List.map OpamPackage.Name.of_string project.deps @ extra_names @ url_names
-    |> Oi.Pipeline.drop_override_compiler_roots ~override:toolchain_override
+    |> Oi.Pipeline.strip_compiler_roots_for_override ~override:toolchain_override
          ~toolchain
   in
   match
@@ -154,7 +154,7 @@ let depexts ~fs ~sys ~platform ~cache ~data_dir ?(refresh = false)
   OpamSysPkg.Set.iter (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p)) all;
   0
 
-(* Drive the cwd's [*.opam] project after a successful [Sync.do_sync].
+(* Drive the cwd's [*.opam] project after a successful [Sync.run].
    Dispatches on [action]:
    - [`Deps_only]: stop after sync (deps + tools + maybe .envrc).
    - [`Build]: run [dune build --profile=release].
@@ -208,14 +208,14 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
        a clean canvas.
 
        Phase budget for the overall bar: the visible phases that
-       [Pipeline.build] / [Sync.do_sync] / [install_tools] fire when
+       [Pipeline.build] / [Sync.run] / [install_tools] fire when
        run from [oi build]. Easy to over- or under-shoot — the bar
        caps at 100% — but lands close enough to give the user a
        useful sense of "how far am I". *)
     Oi.Ui.Preflight.with_bar ~clock ~total_steps:18
     @@ fun ~on_phase ~on_text ~preflight_done ~shared_display ->
     let prefix, tc =
-      Sync.do_sync ~quiet:false ~refresh ~with_repos ~with_deps ?jobs ?toolchain
+      Sync.run ~quiet:false ~refresh ~with_repos ~with_deps ?jobs ?toolchain
         ?envrc_mode ~bar_on_phase:on_phase ~bar_on_text:on_text
         ?bar_display:shared_display ~proc_mgr ~fs ~clock ~sys ~platform ~os_key
         ~cache ~data_dir ~registry ~use_registry ~session ~cwd ()

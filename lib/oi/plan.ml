@@ -23,7 +23,7 @@ type graph = {
   topo_order : OpamPackage.Name.t list;
 }
 
-let build ctx ?d10 ~packages_dirs pkgs =
+let of_solution ctx ?d10 ~packages_dirs pkgs =
   let in_solution =
     List.fold_left
       (fun s p -> OpamPackage.Name.Set.add (OpamPackage.name p) s)
@@ -37,7 +37,7 @@ let build ctx ?d10 ~packages_dirs pkgs =
       (fun (installed, nodes, order) pkg ->
         let name = OpamPackage.name pkg in
         let dep_set =
-          Solver.dep_names ~packages_dirs ~conf:(Solver.Ctx.conf ctx) pkg
+          Solver.direct_deps_within ~packages_dirs ~conf:(Solver.Ctx.conf ctx) pkg
             in_solution
         in
         let deps =
@@ -45,7 +45,7 @@ let build ctx ?d10 ~packages_dirs pkgs =
           |> List.filter (fun n -> OpamPackage.Name.Set.mem n in_solution)
         in
         let opam =
-          Solver.load_opam packages_dirs pkg
+          Solver.find_opam_file packages_dirs pkg
           |> Stdlib.Option.value ~default:(OpamFile.OPAM.create pkg)
         in
         let trans =
@@ -143,8 +143,8 @@ let build ctx ?d10 ~packages_dirs pkgs =
 
 (* -- Graph accessors ----------------------------------------------------- *)
 
-let find g name = OpamPackage.Name.Map.find name g.nodes_by_name
-let nodes g = List.map (find g) g.topo_order
+let find_node g name = OpamPackage.Name.Map.find name g.nodes_by_name
+let nodes g = List.map (find_node g) g.topo_order
 
 let pp_method_short ~remote_has fmt : Identity.method_ -> unit = function
   | Binary -> Fmt.pf fmt "%a" Style.ok_string "binary"
@@ -184,7 +184,7 @@ let pp_tree ?(remote_has = fun _ -> false) fmt g =
   Fmt.pf fmt "@]"
 
 let layer_hashes g =
-  List.map (fun name -> (find g name).layer_hash) g.topo_order
+  List.map (fun name -> (find_node g name).layer_hash) g.topo_order
 
 (* -- Executable plan ----------------------------------------------------- *)
 
@@ -378,7 +378,7 @@ let resolve_node ctx ~packages_dirs ~cache_root ~prefix g (node : node) :
     depexts;
   }
 
-let resolve ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version ?build_prefix
+let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version ?build_prefix
     g =
   let build_prefix =
     match build_prefix with
