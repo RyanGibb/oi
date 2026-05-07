@@ -1,0 +1,51 @@
+(* Hand-rolled tree-indent walk. We don't use [Tty.Tree] because its
+   prefix composition appends parent branch chars instead of replacing
+   them, so any tree of depth > 1 ends up with [├── │   ├── ] runs in
+   the prefix that should have been [│   ├── ]. The standard algorithm
+   is small enough to inline. *)
+
+let render ~label_first ~label_ref ~key_of ~children roots =
+  match roots with
+  | [] -> Fmt.pr "  (no roots)@."
+  | rs ->
+      let expanded : (string, unit) Hashtbl.t = Hashtbl.create 64 in
+      let rec walk ~parent_indent ~is_last ~is_root n =
+        let key = key_of n in
+        let repeated = Hashtbl.mem expanded key in
+        let branch =
+          if is_root then ""
+          else if is_last then "└── "
+          else "├── "
+        in
+        let label =
+          if repeated then
+            Fmt.str "%a"
+              (fun ppf () ->
+                Style.dim_string ppf
+                  (Fmt.str "\u{21B0} %s" (label_ref n)))
+              ()
+          else label_first n
+        in
+        Fmt.pr "%s%s%s@." parent_indent branch label;
+        if not repeated then begin
+          Hashtbl.add expanded key ();
+          let kids = children n in
+          let n_kids = List.length kids in
+          let child_indent =
+            if is_root then ""
+            else parent_indent ^ (if is_last then "    " else "│   ")
+          in
+          List.iteri
+            (fun i child ->
+              let is_last_child = i = n_kids - 1 in
+              walk ~parent_indent:child_indent ~is_last:is_last_child
+                ~is_root:false child)
+            kids
+        end
+      in
+      let n_roots = List.length rs in
+      List.iteri
+        (fun i r ->
+          walk ~parent_indent:"" ~is_last:true ~is_root:true r;
+          if i < n_roots - 1 then Fmt.pr "@.")
+        rs

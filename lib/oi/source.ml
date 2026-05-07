@@ -55,7 +55,8 @@ module Repo = struct
       Unix.time () -. st.Unix.st_mtime > Cache.refresh_max_age
     with Unix.Unix_error _ -> true
 
-  let ensure ~fs ~refresh ~label ~url ~dir =
+  let ensure ?(reporter = Build_progress.null) ~fs ~refresh ~label ~url ~dir
+      () =
     let pkg_dir = dir / "packages" in
     if not (Sys.file_exists pkg_dir) then begin
       if Sys.file_exists dir then begin
@@ -64,11 +65,15 @@ module Repo = struct
         Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / dir)
       end;
       Log.info (fun m -> m "Cloning %s from %s..." label url);
+      reporter.Build_progress.event
+        (Status (Fmt.str "Cloning %s" label));
       pull_repo ~label ~url_s:url ~dst:dir;
       touch_dir dir
     end
     else if refresh || dir_needs_refresh dir then begin
       Log.info (fun m -> m "Updating %s..." label);
+      reporter.Build_progress.event
+        (Status (Fmt.str "Updating %s" label));
       try
         pull_repo ~label ~url_s:url ~dst:dir;
         touch_dir dir
@@ -77,14 +82,16 @@ module Repo = struct
             m "Failed to update %s: %s" label (Printexc.to_string exn))
     end
 
-  let ensure_many ~fs ~data_dir ?(refresh = false) extras =
+  let ensure_many ?(reporter = Build_progress.null) ~fs ~data_dir
+      ?(refresh = false) extras =
     List.map
       (fun (e : Project.extra_repo) ->
         match e.local_packages_dir with
         | Some d -> d
         | None ->
             let path = dir ~data_dir e.name in
-            ensure ~fs ~refresh ~label:e.name ~url:e.url ~dir:path;
+            ensure ~reporter ~fs ~refresh ~label:e.name ~url:e.url ~dir:path
+              ();
             path / "packages")
       extras
 end
@@ -122,10 +129,10 @@ module Reporepo = struct
     | Some v when v <> "" -> v
     | _ -> default_url
 
-  (* -- v1 layout -------------------------------------------------------
+  (* -- v2 layout -------------------------------------------------------
 
      reporepo/
-       v1/
+       v2/
          reporepo/                       — meta-entries describing each
            repo                            overlay (handle -> upstream pin).
            packages/<handle>/<handle>.<version>/opam
@@ -133,12 +140,19 @@ module Reporepo = struct
            repo                            content-addressed end-to-end:
            packages/<pkg>/<pkg>.<ver>/opam every url{} block carries a
                                            tarball checksum or sha-pinned
-                                           git URL.
+                                           git URL. opam files MAY carry
+                                           [x-d10-archive: "<sha>"] pointing
+                                           at a consolidated .tar.zst
+                                           supplied by [oi repo bump].
 
-     The [v1] prefix is a schema marker — a future incompatible change
-     becomes [v2] without breaking older clients in flight. *)
+     The [v2] prefix is a schema marker. v1 trees are no longer read;
+     users with a legacy v1/ reporepo run [oi repo migrate] (or the
+     one-shot bash script) to copy the latest version of every package
+     into v2/. The shape is the same; only the highest version of each
+     package is retained. *)
 
-  let v1_root ~path = path / "v1"
+  let schema_dir = "v2"
+  let v1_root ~path = path / schema_dir
   let meta_root ~path = v1_root ~path / "reporepo"
   let meta_packages_dir ~path = meta_root ~path / "packages"
   let overlay_dir ~path ~handle = v1_root ~path / handle
@@ -160,7 +174,7 @@ module Reporepo = struct
           |> List.sort String.compare
       in
       let handle_ok h =
-        (* [v1/reporepo/] is the meta-overlay holding handle-registration
+        (* [v2/reporepo/] is the meta-overlay holding handle-registration
            entries, not an archive-bearing overlay. *)
         h <> "reporepo"
         && (include_handles = [] || List.mem h include_handles)
@@ -213,11 +227,13 @@ module Reporepo = struct
     mkdir_p ~fs (Filename.dirname path);
     Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) content
 
-  let ensure_clone ~fs ~sys ~refresh ~path ~url =
+  let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path
+      ~url () =
     let dot_git = path / ".git" in
     if Sys.file_exists dot_git then
       begin if refresh then begin
         Log.info (fun m -> m "Refreshing reporepo at %s" path);
+        reporter.Build_progress.event (Status "Refreshing reporepo");
         try
           Retry.with_attempts ~label:(Fmt.str "git pull reporepo at %s" path)
             (fun () ->
@@ -241,6 +257,7 @@ module Reporepo = struct
     else begin
       mkdir_p ~fs (Filename.dirname path);
       Log.info (fun m -> m "Cloning reporepo from %s to %s" url path);
+      reporter.Build_progress.event (Status (Fmt.str "Cloning reporepo"));
       try
         Retry.with_attempts ~label:(Fmt.str "git clone %s" url) (fun () ->
             D10.Sysops.Cmd.run sys [ "git"; "clone"; url; path ])
@@ -647,7 +664,7 @@ module Reporepo = struct
       let packages_dir = meta_packages_dir ~path in
       if not (Sys.file_exists packages_dir) then
         Error.config_error
-          "reporepo at %s has no v1/reporepo/packages/ tree (run 'oi repo add' \
+          "reporepo at %s has no v2/reporepo/packages/ tree (run 'oi repo add' \
            or migrate from the old layout)"
           path;
       let constraints =
@@ -719,9 +736,11 @@ module Reporepo = struct
         handle path dir handle;
     dir
 
-  let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false) () =
+  let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false)
+      ?(reporter = Build_progress.null) () =
     let path = env_path () in
-    ensure_clone ~fs ~sys ~refresh ~path ~url:(env_url ());
+    reporter.event (Status (Fmt.str "Reporepo at %s" path));
+    ensure_clone ~reporter ~fs ~sys ~refresh ~path ~url:(env_url ()) ();
     Log.debug (fun m -> m "ensure_base: reading reporepo %s" path);
     let entries = try load ~path with Error.E _ -> [] in
     match latest entries ~handle:"relocatable" with
@@ -1225,7 +1244,7 @@ module Reporepo = struct
         m "Materialising %s: %d package versions" handle (List.length pkgs));
     (* Copy [<pkg-dir>/files/] (patches and other [extra-files:]) from
        upstream into the materialised tree. opam reads them by relative
-       path during build, so the v1/ snapshot is incomplete without
+       path during build, so the v2/ snapshot is incomplete without
        them. Hardlink first, fall back to byte copy across filesystems. *)
     let copy_files_dir ~src ~dst =
       if Sys.file_exists src && Sys.is_directory src then begin
@@ -1600,7 +1619,8 @@ module Pin = struct
         end;
         pins'
 
-  let fetch_pin ~fs ~cache ~refresh (pin : Project.pin) =
+  let fetch_pin ?(reporter = Build_progress.null) ~fs ~cache ~refresh
+      (pin : Project.pin) =
     let root = Cache.pins_dir cache in
     let src_dir = root / "sources" / url_key pin.url in
     let sentinel = sentinel_path src_dir in
@@ -1611,6 +1631,9 @@ module Pin = struct
           m "Fetching pin %s from %s"
             (OpamPackage.to_string pin.pkg)
             (OpamUrl.to_string pin.url));
+      reporter.Build_progress.event
+        (Status
+           (Fmt.str "Fetching pin %s" (OpamPackage.to_string pin.pkg)));
       if Sys.file_exists src_dir then
         Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / src_dir);
       let dst = OpamFilename.Dir.of_string src_dir in
@@ -1689,17 +1712,26 @@ module Pin = struct
     revision : string;
   }
 
-  let materialize ~fs ~sys ~cache ?(refresh = false) pins =
+  let materialize ?(reporter = Build_progress.null) ~fs ~sys ~cache
+      ?(refresh = false) pins =
     match pins with
     | [] -> None
     | _ ->
+        let total = List.length pins in
+        reporter.Build_progress.event
+          (Status (Fmt.str "Materialising %d pin(s)" total));
+        let counter = ref 0 in
         let resolved =
           List.map
             (fun (pin : Project.pin) ->
-              let src_dir = fetch_pin ~fs ~cache ~refresh pin in
+              let src_dir = fetch_pin ~reporter ~fs ~cache ~refresh pin in
               let opam_path = locate_opam_file ~src_dir pin in
               let revision = resolved_revision ~sys pin ~src_dir in
               let opam = rewrite_opam ~src_dir ~opam_path ~revision pin in
+              incr counter;
+              reporter.Build_progress.event
+                (Aggregate
+                   { phase = Fetching; total; current = !counter });
               { pin; opam; revision })
             pins
         in
@@ -1979,19 +2011,27 @@ module Mirror = struct
     let n = String.length s in
     if n > 0 && s.[n - 1] = '/' then String.sub s 0 (n - 1) else s
 
-  let fetch_from_registry ~clock ~session ~fs ~cache_root ~registry
-      ?(max_fibers = 16) (archive_checksums : OpamHash.t list list) =
+  let fetch_from_registry ?(reporter = Build_progress.null) ~clock ~session ~fs
+      ~cache_root ~registry ?(max_fibers = 16)
+      (archive_checksums : OpamHash.t list list) =
     let mirror_dir = cache_root / "mirror" in
     mkdir_p ~fs mirror_dir;
     let registry = trim_trailing_slash registry in
     let fetched = Atomic.make 0 in
     let cached = Atomic.make 0 in
     let failed = Atomic.make 0 in
+    let total = List.length archive_checksums in
+    let progressed = Atomic.make 0 in
     Eio.Switch.run @@ fun sw ->
     let hb = Heartbeat.create ~sw ~clock "mirror-fetch" in
     let fetch_one cks =
       if cks = [] then ()
-      else if already_mirrored ~mirror_dir cks then Atomic.incr cached
+      else if already_mirrored ~mirror_dir cks then begin
+        Atomic.incr cached;
+        let now = Atomic.fetch_and_add progressed 1 + 1 in
+        reporter.Build_progress.event
+          (Aggregate { phase = Fetching; total; current = now })
+      end
       else
         match prefer_sha256 cks with
         | None -> ()
@@ -2006,9 +2046,22 @@ module Mirror = struct
             let tmp = unique_tmp dst in
             mkdir_p ~fs (Filename.dirname dst);
             let label = Fmt.str "%s/%s" kind hex in
+            let key = hex in
+            reporter.Build_progress.event
+              (Fetch_started
+                 { kind = Source; key; pkg = label; size = 0L });
+            let on_progress ~received ~total =
+              let total_known =
+                match total with Some t -> t | None -> 0L
+              in
+              reporter.Build_progress.event
+                (Fetch_progress
+                   { kind = Source; key; bytes = received;
+                     total = total_known })
+            in
             if
               Heartbeat.track hb label @@ fun () ->
-              D10.Sysops.Http.fetch_session session ~url
+              D10.Sysops.Http.fetch_session ~on_progress session ~url
                 ~dst:Eio.Path.(fs / tmp)
             then
               let ok =
@@ -2039,7 +2092,12 @@ module Mirror = struct
             else begin
               (try Unix.unlink tmp with _ -> ());
               Atomic.incr failed
-            end
+            end;
+            reporter.Build_progress.event
+              (Fetch_finished { kind = Source; key });
+            let now = Atomic.fetch_and_add progressed 1 + 1 in
+            reporter.Build_progress.event
+              (Aggregate { phase = Fetching; total; current = now })
     in
     Eio.Fiber.List.iter ~max_fibers fetch_one archive_checksums;
     {

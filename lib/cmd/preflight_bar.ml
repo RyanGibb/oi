@@ -119,8 +119,10 @@ module Preflight = struct
          Display.t] without OCaml's inference unifying the type
          parameter to whatever the OWNED-display path uses. *)
       let display : (unit, unit) Progress.Display.t =
-        Progress.Display.start ~config:cfg Progress.Multi.blank
+        Logs_progress.start_display_compact ~ppf:Format.err_formatter
+          ~config:cfg
       in
+      Logs_progress.set_active display;
       let overall_h = Progress.Display.add_line display (overall_line ~total) in
       let msg = ref "Preparing" in
       let stepped = ref false in
@@ -155,6 +157,7 @@ module Preflight = struct
       let preflight_done () =
         if not !stopped then begin
           stopped := true;
+          Logs_progress.clear_active ();
           try Progress.Display.finalise display with _ -> ()
         end
       in
@@ -162,6 +165,7 @@ module Preflight = struct
         ~finally:(fun () ->
           if not !stopped then begin
             stopped := true;
+            Logs_progress.clear_active ();
             try Progress.Display.finalise display with _ -> ()
           end)
         (fun () ->
@@ -181,7 +185,27 @@ let run ?(status_lines = 4) ~sw ~clock ~total ~title f =
     Tty.Progress.v ~enabled:(Tty.is_tty ()) ~status_lines ~total title
   in
   Tty_eio.Progress.animate ~sw ~clock bar;
-  Fun.protect ~finally:(fun () -> Tty.Progress.clear bar) (fun () -> f bar)
+  (* On exit:
+       1. [Tty.Progress.finish] renders the bar one last time at
+          100% and sets [finished := true] so the animate fiber's
+          next tick becomes a no-op. Without this the daemon could
+          redraw the bar back on top of whatever we print next.
+       2. We then erase that final 100% line — Tty.Progress is
+          designed to leave a "done" footprint visible, but oi's
+          callers always print their own summary block immediately
+          after, so the persistent bar is just clutter above the
+          summary.
+
+     The escape is: cursor up one line, erase that line, carriage
+     return. ASCII fallback: do nothing on non-tty (the bar wasn't
+     rendered anyway). *)
+  Fun.protect
+    ~finally:(fun () ->
+      Tty.Progress.finish bar;
+      if Tty.is_tty () then begin
+        Format.eprintf "\x1b[1A\x1b[2K\r%!"
+      end)
+    (fun () -> f bar)
 
 let with_msg = Tty.Progress.message
 
@@ -190,5 +214,10 @@ let tick ?msg t =
   Tty.Progress.tick t
 
 let log = Tty.Progress.log
-let suspend _ f = Tty.Progress.suspend f
-let finish ?msg t = Tty.Progress.finish ?message:msg t
+
+(* Suspend BOTH bar systems: nox-tty's [Tty.Progress] (the legacy
+   [oi build --all] bar) and the [progress] library's [Display]
+   (the [Pipeline.fetch] / [D10ir_bar] multi-line UI). [oi build --all]
+   only uses the former, but a caller that overlaps both shouldn't
+   need to know which is active. *)
+let suspend _ f = Tty.Progress.suspend (fun () -> Logs_progress.interject f)

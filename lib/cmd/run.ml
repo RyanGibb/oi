@@ -252,7 +252,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
      subprocess), so ~8 phases on cold cache, fewer when the layer
      cache hit short-circuits the source path. *)
   let with_preflight_bar f =
-    Oi.Ui.Preflight.with_bar ~clock ~total_steps:10 f
+    Preflight_bar.Preflight.with_bar ~clock ~total_steps:10 f
   in
   (* Solve [pkg_names], assemble the consumer prefix, exec
        [bin/<binary_name>] if it exists; falls back to looking under a
@@ -269,13 +269,15 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
            ~override:toolchain_override ~toolchain
     in
     let layer_hashes =
-      with_preflight_bar
-      @@ fun ~on_phase ~on_text ~preflight_done ~shared_display ->
+      Progress_ui.with_ui ~target:binary_name
+        ~clock:(clock :> _ Eio.Resource.t)
+        ~enabled:(Tty.is_tty ())
+      @@ fun reporter ->
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~session:http_session ~dry_run ~extra_repos:all_extras
         ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
-        ?toolchain ~constraints:extra_constraints ?local_packages_dir ~on_phase
-        ~on_progress:on_text ~preflight_done ?shared_display names
+        ?toolchain ~constraints:extra_constraints ?local_packages_dir ~reporter
+        names
     in
     Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
     let prefix =
@@ -377,13 +379,13 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
     let layer_hashes =
       if dep_opam_names = [] then []
       else
-        with_preflight_bar
-        @@ fun ~on_phase ~on_text ~preflight_done ~shared_display ->
+        Progress_ui.with_ui ~target ~clock:(clock :> _ Eio.Resource.t)
+          ~enabled:(Tty.is_tty ())
+        @@ fun reporter ->
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~session:http_session ~dry_run ~extra_repos:all_extras
           ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
-          ?toolchain ~constraints ?local_packages_dir ~on_phase
-          ~on_progress:on_text ~preflight_done ?shared_display dep_opam_names
+          ?toolchain ~constraints ?local_packages_dir ~reporter dep_opam_names
     in
     if dry_run && dep_opam_names = [] then
       (* No deps to solve, but still in dry-run mode — just exit *)
@@ -443,11 +445,20 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
          known implementations" diagnostic. The [@handle/pkg] case from
          a [--with=@h/pkg] token already routed [pkg] into [extra_names],
          so step 0b handles it. *)
+    (* Step-fallback wrapper: only catches solve-time failures
+       ([No_solution]) so the caller can move on to the next lookup
+       strategy. Anything else — a build failure, a fetch failure,
+       a config error — must propagate, otherwise the user sees a
+       misleading "binary not found" message after a real error
+       further down the stack (e.g. a dep that didn't compile). *)
     let try_step label f =
       try f ()
-      with Oi.Error.E e ->
-        Logs.info (fun m -> m "%s failed: %a" label Oi.Error.pp e);
-        false
+      with Oi.Error.E e as exn -> (
+        match Oi.Error.kind e with
+        | K_no_solution | K_not_found ->
+            Logs.info (fun m -> m "%s failed: %a" label Oi.Error.pp e);
+            false
+        | _ -> Stdlib.raise exn)
     in
     let from_target =
       if not (package_exists target) then begin

@@ -212,28 +212,19 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
        run from [oi build]. Easy to over- or under-shoot — the bar
        caps at 100% — but lands close enough to give the user a
        useful sense of "how far am I". *)
-    Oi.Ui.Preflight.with_bar ~clock ~total_steps:18
-    @@ fun ~on_phase ~on_text ~preflight_done ~shared_display ->
     let prefix, tc =
       Sync.run ~quiet:false ~refresh ~with_repos ~with_deps ?jobs ?toolchain
-        ?envrc_mode ~bar_on_phase:on_phase ~bar_on_text:on_text
-        ?bar_display:shared_display ~proc_mgr ~fs ~clock ~sys ~platform ~os_key
-        ~cache ~data_dir ~registry ~use_registry ~session ~cwd ()
+        ?envrc_mode ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache ~data_dir
+        ~registry ~use_registry ~session ~cwd ()
     in
     match dune_target action with
-    | None ->
-        preflight_done ();
-        0
+    | None -> 0
     | Some target ->
         let dune_cache_root = Oi.Cache.dune_root cache in
         let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info tc in
         let env =
           Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
         in
-        (* Hand the screen to dune for the actual compile: clear the
-           spinner and stop animating it so dune's incremental output
-           shows on its own lines. *)
-        preflight_done ();
         Fmt.pr "@.%a %d package(s): %s@." Oi.Style.header_string (label ^ "ing")
           (List.length opams) (String.concat ", " order);
         let ec =

@@ -206,7 +206,7 @@ let list_oi_versions ~reporepo_path =
   let pkg_dir =
     Filename.concat
       (Filename.concat
-         (Filename.concat (Filename.concat reporepo_path "v1") "avsm")
+         (Filename.concat (Filename.concat reporepo_path "v2") "avsm")
          "packages")
       "oi"
   in
@@ -360,15 +360,15 @@ let update_cmd =
       Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain
         names
     in
-    let on_phase msg = Oi.Say.step "%s" msg in
-    let on_progress = Oi.Say.progress in
     let layer_hashes =
+      Progress_ui.with_ui ~target:"oi" ~clock:(clock :> _ Eio.Resource.t)
+        ~enabled:(Tty.is_tty ())
+      @@ fun reporter ->
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~session:http_session ~refresh ~extra_repos:all_extras
         ~pins:url_project.pins ~constraints:extra_constraints ?layer_remote
         ?source_remote ?jobs ?toolchain
-        ?local_packages_dir:url_project.packages_dir ~on_phase ~on_progress
-        names
+        ?local_packages_dir:url_project.packages_dir ~reporter names
     in
     let prefix =
       Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes

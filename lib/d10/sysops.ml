@@ -41,7 +41,7 @@ let native p = Eio.Path.native_exn p
    fiber with [Failure], the switch unwinds, the child is killed, and
    the rest of the [oi build --all] continues.
 
-   Build-step subprocesses (compile commands invoked by [Oi.Execute])
+   Build-step subprocesses (compile commands invoked by [D10ir.Direct])
    do NOT go through this path — those legitimately take longer for
    large native compiles and have their own bookkeeping. *)
 let default_cmd_timeout_s = 600.0

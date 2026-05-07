@@ -1,5 +1,15 @@
 let ( / ) = Filename.concat
 
+(* The [run.ml] caller has already built the [--with] deps via
+   [Pipeline.build] and assembled them into [prefix]. Here we read
+   the script file's [[\@\@\@opam …]] header, build any *additional*
+   deps the script declares (re-running [Pipeline.build] with the
+   merged dep set), reassemble a richer prefix, then compile the
+   script and exec.
+
+   All build paths inside this function go through [Pipeline.build],
+   so the d10ir pipeline (Recipe_emitter → archive prefetch →
+   D10ir.Direct.run) handles every layer build. *)
 let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
     ?toolchain ?source_remote script_path cli_deps args =
   let file_deps = Oi.Project.Script.parse_deps_from_file ~fs script_path in
@@ -20,7 +30,6 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
               ~dune_cache_root:(Oi.Cache.dune_root cache) ())
          (cached_bin :: args))
   else begin
-    let packages_dirs = Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir () in
     let ocaml_name = OpamPackage.Name.of_string "ocaml" in
     let dep_names =
       List.filter_map
@@ -29,44 +38,19 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
         all_deps
     in
     let constraints = Oi.Project.Script.constraints all_deps in
-    if dep_names <> [] then begin
-      let cache_root = Oi.Cache.root_s cache in
-      let build_prefix = cache_root / "build" / "prefix" in
-      let tc_ctx = Stdlib.Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
-      let ctx =
-        Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs ~conf
-          ?toolchain:tc_ctx ()
-      in
-      let pkgs =
-        match
-          Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs ~constraints
-            dep_names
-        with
-        | Ok pkgs -> pkgs
-        | Error msg ->
-            Fmt.epr "No solution: %s@." msg;
-            exit 1
-      in
-      let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
-      let plan =
-        try Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs
-        with Oi.Plan.Cycle cycles ->
-          Oi.Error.config_error
-            "dependency cycle in script's solved packages:@\n\
-             %a@\n\
-             Re-check the [@@@@@@opam ...] header — the cycle came from one of \
-             the listed deps' opam metadata."
-            Oi.Plan.pp_cycles cycles
-      in
-      let exec_plan =
-        Oi.Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
-          ~ocaml_version:conf.ocaml_version plan
-      in
-      let cache_urls = Oi.Pipeline.cache_urls ~cache ~source_remote in
-      Oi.Execute.run ~cache_urls ~proc_mgr ~fs
-        ~clock:(clock :> D10.Config.clk)
-        ~sys ~os_key exec_plan
-    end;
+    let prefix =
+      if dep_names = [] then prefix
+      else begin
+        Eio.Switch.run @@ fun sw ->
+        let session = D10.Sysops.Http.with_session ~sw sys (fun s -> s) in
+        let layer_hashes =
+          Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
+            ~os_key ~session ?source_remote ?toolchain ~constraints dep_names
+        in
+        Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key
+          ~layer_hashes
+      end
+    in
     let build_dir = run_dir_s in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / build_dir);
     Oi.Project.Script.generate_project ~script:script_path ~deps:all_deps

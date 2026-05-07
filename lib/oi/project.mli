@@ -16,7 +16,7 @@ type extra_repo = {
       (** When set, the entry resolves to this on-disk [packages/] directory and
           {!Source.Repo.ensure_many} returns it without cloning. Used for
           reporepo-handle overlays already materialised under
-          [<reporepo>/v1/<handle>/]. *)
+          [<reporepo>/v2/<handle>/]. *)
 }
 
 type pin = { pkg : OpamPackage.t; url : OpamUrl.t; declared_in : string }
@@ -114,12 +114,15 @@ module Url : sig
       via {!Script.parse_cli_dep} and returned as {!Dep}. *)
 
   val materialize :
+    ?reporter:Build_progress.reporter ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     sys:D10.Sysops.t ->
     cache:Cache.t ->
     ?refresh:bool ->
     string list ->
     t
+  (** [?reporter] receives [Status "Cloning <url>"] events as each [--with]
+      URL is fetched. *)
 
   val classify_all : string list -> string list * Script.dep list
 end

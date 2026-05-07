@@ -1,0 +1,134 @@
+(** Direct executor: builds plan nodes against the host filesystem
+    using d10 for layer storage and restore.
+
+    No sandbox, no container. Works on Linux and macOS.
+
+    Per-node procedure (each step emits a {!Node_phase} event so
+    callers can drive a progress UI without polling):
+    + If d10 already has the layer (succeeded), emit {!Node_cached}.
+    + [Stage_deps]: hardlink each [dep_layer_hash]'s [fs/] subtree
+      into a per-node staging dir.
+    + [Unpack_archive]: untar the source archive into a per-node
+      build dir.
+    + [Apply_substs]: walk [n.substs] and expand [%{var}%]
+      placeholders against [n.subst_vars] (rebased to staging).
+    + [Snapshot_pre]: snapshot the staging prefix for the post-build
+      diff.
+    + [Run_script]: rebase the script's prefix sentinel and run
+      [/bin/sh -e -c <script>] from build dir, capturing output to a
+      per-node log.
+    + [Apply_install_file]: if [<build_dir>/<package.name>.install]
+      exists, apply it.
+    + [Diff_layer]: diff staging vs. snapshot.
+    + [Store_layer]: tar the diff into a d10 layer.
+
+    Events are emitted from the same fiber that performs the work,
+    so they reflect the actual execution order on each node. *)
+
+(** A discrete step within a single node's build. Emitted both as a
+    transition marker ({!Node_phase}) and, on failure, attached to
+    {!Node_failed} so callers can tell e.g. an unpack failure from a
+    build-script failure. *)
+type phase =
+  | Stage_deps
+  | Unpack_archive
+  | Apply_substs
+  | Snapshot_pre
+  | Run_script
+  | Apply_install_file
+  | Diff_layer
+  | Store_layer
+
+val phase_to_string : phase -> string
+(** Short kebab-case name suitable for a status column (e.g.
+    ["stage-deps"], ["run-script"]). *)
+
+(** Structured progress events.
+
+    The lifecycle is:
+
+    {v
+      Plan_started
+      ├── Node_queued (one per node)
+      │     └── Node_started → Node_phase* → Node_{built,cached,failed}
+      │           or Node_skipped (deps failed)
+      │           or Node_cached (layer already present)
+      └── Plan_done
+    v}
+
+    [Node_queued] fires as soon as the fiber is forked, before any
+    dep wait. [Node_started] fires after the build slot is acquired,
+    immediately before [Stage_deps]. *)
+type event =
+  | Plan_started of { total : int }
+  | Plan_done of {
+      built : int;
+      cached : int;
+      failed : int;
+      skipped : int;
+    }
+  | Node_queued of { node : Plan.node }
+  | Node_started of { node : Plan.node }
+  | Node_phase of { node : Plan.node; phase : phase }
+  | Node_cached of { node : Plan.node }
+  | Node_built of {
+      node : Plan.node;
+      duration_s : float;
+      log_path : string;
+    }
+  | Node_failed of {
+      node : Plan.node;
+      phase : phase;
+      log_path : string;
+      error : string;
+    }
+  | Node_skipped of { node : Plan.node; reason : string }
+
+type reporter = { event : event -> unit }
+
+val null_reporter : reporter
+
+(** A single build failure as accumulated in {!result.failures}. *)
+type failure = {
+  package : Plan.package;
+  phase : phase;
+  log_path : string;
+  error : string;
+      (** Tidied human-readable summary of the underlying exception
+          (e.g. ["exit 1"], not the full [Printexc.to_string] dump
+          of [Eio.Io.E]). *)
+}
+
+val pp_failure : failure Fmt.t
+(** Pretty-print a single failure for a summary table:
+    [pkg.ver  phase=…  log=…\n      <error>]. *)
+
+val pp_failures : failure list Fmt.t
+(** Print a header [Build failures (N):] followed by each failure
+    via {!pp_failure}. Empty list prints nothing. *)
+
+type result = {
+  built : int;
+  cached : int;
+  failed : int;
+  skipped : int;
+  failures : failure list;
+      (** Per-package details for {!failed}, in the order they
+          finished. Empty when [failed = 0]. *)
+}
+
+val run :
+  config:Config.t ->
+  d10:D10.Config.t ->
+  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  proc_mgr:_ Eio.Process.mgr ->
+  clock:D10.Config.clk ->
+  ?reporter:reporter ->
+  ?plan_dir:string ->
+  Plan.t ->
+  result
+(** Execute every node in the plan. Returns aggregate counts.
+
+    [plan_dir] is the directory containing the plan (and its
+    [archive_root]); defaults to the current working directory. Used to
+    resolve [archive.path]. *)

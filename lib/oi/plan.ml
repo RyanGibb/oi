@@ -215,7 +215,7 @@ let of_solution ctx ?d10 ~packages_dirs pkgs =
   let g = { nodes_by_name; topo_order } in
   (* Detect cycles before returning. opam-0install will solve a
      cyclic dependency set without complaint (it only checks
-     satisfiability), but [Execute.run] then deadlocks because each
+     satisfiability), but [D10ir.Direct.run] then deadlocks because each
      package's fiber awaits a dep promise that never resolves. *)
   (match find_scc_cycles g with [] -> () | cycles -> raise (Cycle cycles));
   g
@@ -292,6 +292,7 @@ type package_plan = {
   opam_path : string option;
   pkgs_dir : string option;
   depexts : string list;
+  d10_archive : string option;
 }
 
 type t = {
@@ -378,12 +379,29 @@ let resolve_node ctx ~packages_dirs ~cache_root ~prefix g (node : node) :
                 if Sys.file_exists src then Some (basename, src) else None)
           xs
   in
+  (* Filter-evaluate per-OS conditional patches. Today's [apply_patches]
+     iterates [package_plan.patches] and applies anything whose patch
+     file exists on disk; the [filter] string was kept for reference
+     but never evaluated. That's fine when no package uses conditional
+     patches, but it produces wrong archives whenever a package ships
+     a [{os = "macos"}]-only patch (Linux builds end up with macOS
+     fixes baked in, and vice versa). Evaluate filters here against
+     the solver's platform env so [package_plan.patches] reflects only
+     the patches that actually apply on this target. *)
   let patches =
-    List.map
+    let pf_env = Solver.Ctx.platform_env ctx in
+    List.filter_map
       (fun (base, filter) ->
-        let file = OpamFilename.Base.to_string base in
-        let filter = Stdlib.Option.map OpamFilter.to_string filter in
-        { file; filter })
+        let keep =
+          match filter with
+          | None -> true
+          | Some f -> OpamFilter.eval_to_bool ~default:false pf_env f
+        in
+        if keep then
+          let file = OpamFilename.Base.to_string base in
+          let filter_str = Stdlib.Option.map OpamFilter.to_string filter in
+          Some { file; filter = filter_str }
+        else None)
       (OpamFile.OPAM.patches opam)
   in
   let substs =
@@ -434,6 +452,23 @@ let resolve_node ctx ~packages_dirs ~cache_root ~prefix g (node : node) :
     |> OpamSysPkg.Set.elements
     |> List.map OpamSysPkg.to_string
   in
+  (* Read x-d10-archive from the opam file's extension fields.
+     Currently supports a bare string (single sha for all OSes):
+       x-d10-archive: "deadbeef..."
+     Filtered-list variants (per-OS) are a planned extension once the
+     bake step lands; until then opam files with multiple OS entries
+     would need one opam variant per OS in the reporepo, which is what
+     [oi repo bump] should produce anyway. When absent, [None] — the
+     build runs the regular fetch / patches / extras / substs pipeline
+     and consolidates inline via {!Archive_builder}. *)
+  let d10_archive =
+    let exts = OpamFile.OPAM.extensions opam in
+    match OpamStd.String.Map.find_opt "x-d10-archive" exts with
+    | None -> None
+    | Some v -> (
+        let module V = OpamParserTypes.FullPos in
+        match v.V.pelem with V.String s -> Some s | _ -> None)
+  in
   {
     pkg = pkg_s;
     layer_hash;
@@ -455,15 +490,17 @@ let resolve_node ctx ~packages_dirs ~cache_root ~prefix g (node : node) :
     opam_path;
     pkgs_dir;
     depexts;
+    d10_archive;
   }
 
 let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
-    ?build_prefix g =
+    ?build_prefix ?(reporter = Build_progress.null) g =
   let build_prefix =
     match build_prefix with
     | Some p -> p
     | None -> cache_root / "build" / "prefix"
   in
+  reporter.Build_progress.event (Status "Elaborating plan");
   (* Non-relocatable toolchains live at a fixed prefix and are NOT
      built/installed into the consumer prefix — drop them from the
      plan so Execute never tries to restore or re-build them. Keeping
@@ -486,6 +523,7 @@ let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
      opam state so subsequent dependents see its provided variables.
      Topological ordering guarantees a node's deps are marked before
      it is resolved. *)
+  let all_nodes = nodes g in
   let packages =
     List.filter_map
       (fun (node : node) ->
@@ -499,12 +537,9 @@ let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
           Solver.Ctx.mark_installed ctx node.pkg node.opam config;
           Some p
         end)
-      (nodes g)
+      all_nodes
   in
   { packages; cache_root; os_key; ocaml_version; build_prefix }
-
-let staging_dir t (p : package_plan) =
-  t.cache_root / "build" / "staging" / p.layer_hash
 
 (* -- Pretty-printing ----------------------------------------------------- *)
 

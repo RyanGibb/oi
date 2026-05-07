@@ -3,7 +3,7 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 (* Best-effort handle name from a packages_dir path:
-   [.../v1/avsm/packages] → "avsm"; [.../packages] → "default". *)
+   [.../v2/avsm/packages] → "avsm"; [.../packages] → "default". *)
 let handle_of_packages_dir d =
   let parent = Filename.dirname d in
   let name = Filename.basename parent in
@@ -120,7 +120,7 @@ let copy_reporepo_subset ~packages_dirs ~bundle_repo (pkgs : OpamPackage.t list)
       | Some (d, name, full) ->
           let src = d / name / full in
           let dst =
-            bundle_repo / "v1" / handle_of_packages_dir d / "packages" / name
+            bundle_repo / "v2" / handle_of_packages_dir d / "packages" / name
             / full
           in
           if Sys.file_exists src && not (Sys.file_exists dst) then begin

@@ -331,10 +331,10 @@ let service_name d =
    the produced manifest would be all "cached" outcomes. The point of
    this flow is to re-validate every layer end-to-end.
 
-   [OI_BUILD_PARALLELISM=$(nproc)] overrides the [min cpu_count 4] cap
-   that {!Oi.Execute.default_build_parallelism} applies for macOS fd-limit
-   safety. Inside a Linux container with a high [nofile] ulimit (set on
-   the service below) we want to use every core on the host. *)
+   [OI_BUILD_PARALLELISM=$(nproc)] overrides the [min cpu_count 8] cap
+   that {!D10ir.Config.default} applies for macOS fd-limit safety. Inside
+   a Linux container with a high [nofile] ulimit (set on the service
+   below) we want to use every core on the host. *)
 let build_export_cmd () =
   "OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all --registry=archives \
    --export /out"

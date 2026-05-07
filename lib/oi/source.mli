@@ -18,6 +18,7 @@ module Repo : sig
   (** [dir ~data_dir name] is the local clone path for a repo named [name]. *)
 
   val ensure_many :
+    ?reporter:Build_progress.reporter ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     data_dir:string ->
     ?refresh:bool ->
@@ -27,16 +28,21 @@ module Repo : sig
       same age/force semantics as {!ensure}. Each entry is cloned into
       [data_dir/repos/<name>] — two entries with the same name collide by design
       (callers should deduplicate). Returns one [packages/] directory per entry
-      in input order. *)
+      in input order.
+
+      [?reporter] receives a [Status "Cloning <label>"] / [Status
+      "Updating <label>"] event for each repo it actually touches. *)
 
   val ensure :
+    ?reporter:Build_progress.reporter ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     refresh:bool ->
     label:string ->
     url:string ->
     dir:string ->
+    unit ->
     unit
-  (** [ensure ~url ~dir ~refresh] is the low-level clone/update primitive.
+  (** [ensure ~url ~dir ~refresh ()] is the low-level clone/update primitive.
       Clones [url] into [dir] if empty, otherwise refreshes when [refresh] is
       true or the clone is older than {!Cache.refresh_max_age}. *)
 end
@@ -124,7 +130,7 @@ module Reporepo : sig
 
   (** {2 v1 overlay layout}
 
-      The reporepo's [v1/] subtree carries one fully-materialised opam
+      The reporepo's [v2/] subtree carries one fully-materialised opam
       repository per handle. Each handle's [opam] files have had every [url{}]
       block rewritten to be content-addressed (sha-pinned git URL or
       tarball+checksum), turning the reporepo into a deterministic snapshot of
@@ -135,7 +141,7 @@ module Reporepo : sig
   (** [<reporepo>/v1]. *)
 
   val overlay_dir : path:string -> handle:string -> string
-  (** [<reporepo>/v1/<handle>]. *)
+  (** [<reporepo>/v2/<handle>]. *)
 
   val iter_opam_files :
     path:string ->
@@ -143,13 +149,13 @@ module Reporepo : sig
     ?skip_handles:string list ->
     (handle:string -> pkg:string -> version:string -> opam_path:string -> unit) ->
     unit
-  (** Visit every [<path>/v1/<handle>/packages/<pkg>/<pkg.version>/opam] in the
+  (** Visit every [<path>/v2/<handle>/packages/<pkg>/<pkg.version>/opam] in the
       reporepo. Empty [include_handles] means every overlay (including
       [default]); [skip_handles] is applied last. The meta-overlay [reporepo] is
       always skipped — it holds handle-registration entries, not archives. *)
 
   val overlay_packages_dir : path:string -> handle:string -> string
-  (** [<reporepo>/v1/<handle>/packages] — directly consumable as a solver
+  (** [<reporepo>/v2/<handle>/packages] — directly consumable as a solver
       [packages_dir]. *)
 
   val assert_overlay_dir : path:string -> handle:string -> string
@@ -176,8 +182,8 @@ module Reporepo : sig
   (** Clone [url] at [commit] into a scratch directory, walk every
       [packages/<pkg>/<pkg>.<ver>/opam] file, rewrite each [url{}] block and
       pin-depends entry to a content-addressed form, and write the result to
-      [<reporepo>/v1/<handle>/]. The write is atomic from the caller's POV: a
-      sibling [v1/<handle>.tmp/] is built first, then rotated into place at the
+      [<reporepo>/v2/<handle>/]. The write is atomic from the caller's POV: a
+      sibling [v2/<handle>.tmp/] is built first, then rotated into place at the
       end.
 
       Hard-errors on unsupported VCS backends (darcs, hg, rsync). Persistent
@@ -210,12 +216,13 @@ module Reporepo : sig
     sys:D10.Sysops.t ->
     data_dir:string ->
     ?refresh:bool ->
+    ?reporter:Build_progress.reporter ->
     unit ->
     string list
   (** Resolves the [relocatable] overlay (and its transitive deps) from the
-      reporepo and returns the [packages/] directories under [v1/<handle>/] in
+      reporepo and returns the [packages/] directories under [v2/<handle>/] in
       solver priority order. Auto-clones the reporepo itself if it doesn't
-      already exist on disk. Errors when any base handle's [v1/] tree is missing
+      already exist on disk. Errors when any base handle's [v2/] tree is missing
       — run [oi repo bump <handle>] to populate. *)
 
   val base_entries : unit -> entry list
@@ -233,12 +240,17 @@ module Reporepo : sig
   val env_url : unit -> string
 
   val ensure_clone :
+    ?reporter:Build_progress.reporter ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     sys:D10.Sysops.t ->
     refresh:bool ->
     path:string ->
     url:string ->
+    unit ->
     unit
+  (** [ensure_clone ~fs ~sys ~refresh ~path ~url ()] clones or refreshes the
+      reporepo. [?reporter] receives a [Status] event when the clone or refresh
+      runs. *)
 
   val set_push_url : sys:D10.Sysops.t -> path:string -> string -> unit
 
@@ -322,6 +334,7 @@ end
 
 module Pin : sig
   val materialize :
+    ?reporter:Build_progress.reporter ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->
     sys:D10.Sysops.t ->
     cache:Cache.t ->
@@ -329,7 +342,11 @@ module Pin : sig
     Project.pin list ->
     string option
   (** Returns [Some packages_dir] (an absolute path to a synthesized [packages/]
-      tree) when [pins] is non-empty, [None] when [pins = []]. *)
+      tree) when [pins] is non-empty, [None] when [pins = []].
+
+      [?reporter] receives a [Status "Materialising N pin(s)"] event followed by
+      one [Status "Fetching pin <pkg>"] per pin and an [Aggregate { phase =
+      Fetching; total; current }] tick after each pin is materialised. *)
 
   val resolve_pins :
     fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -350,7 +367,7 @@ end
 (** {1 Source tarball mirror}
 
     Static, content-addressed source mirror produced by
-    [oi registry mirror build] from the reporepo's [v1/] tree. The on-disk
+    [oi registry mirror build] from the reporepo's [v2/] tree. The on-disk
     layout is what opam expects for a [cache_url]:
 
     <mirror>/<algo>/<first-2-chars>/<full-hash>
@@ -389,6 +406,7 @@ module Mirror : sig
   type prewarm_summary = { fetched : int; cached : int; failed : int }
 
   val fetch_from_registry :
+    ?reporter:Build_progress.reporter ->
     clock:float Eio.Time.clock_ty Eio.Resource.t ->
     session:D10.Sysops.Http.session ->
     fs:Eio.Fs.dir_ty Eio.Path.t ->

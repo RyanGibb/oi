@@ -52,7 +52,10 @@ let toolchain_names_of_handle entries handle =
   in
   from_field @ from_self
 
-let pick_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
+let pick_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles
+    ?(reporter = Build_progress.null) () =
+  reporter.event (Status "Resolving toolchain");
+  let _ = reporter in
   let path = Source.Reporepo.env_path () in
   let entries =
     if Sys.file_exists path then
@@ -109,7 +112,7 @@ let pick_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles () =
                   path hint))
   in
   let info = Toolchain.resolve ~fs ~sys ~data_dir ~conf ~handle:(pick ()) in
-  if install then Toolchain.ensure_installed ~fs info;
+  if install then Toolchain.ensure_installed ~reporter ~fs info;
   Some info
 
 let strip_compiler_roots_for_override ~override ~toolchain names =
@@ -122,9 +125,15 @@ let strip_compiler_roots_for_override ~override ~toolchain names =
 
 (* -- Sources ------------------------------------------------------------- *)
 
-let classify_with_args ~fs ~sys ~cache ?refresh with_deps =
+let classify_with_args ~fs ~sys ~cache ?refresh
+    ?(reporter = Build_progress.null) with_deps =
+  if with_deps <> [] then
+    reporter.event (Status (Fmt.str "Loading %d --with arg(s)"
+      (List.length with_deps)));
   let urls, pkg_deps = Project.Url.classify_all with_deps in
-  let url_project = Project.Url.materialize ~fs ~sys ~cache ?refresh urls in
+  let url_project =
+    Project.Url.materialize ~reporter ~fs ~sys ~cache ?refresh urls
+  in
   (pkg_deps, url_project)
 
 let filter_compatible_overlays ~reporepo_path ~toolchain handles =
@@ -192,175 +201,74 @@ let fmt_mb n =
 
 (* -- Multi-bar fetch UI -------------------------------------------------- *)
 
-let to_int = Int64.to_int
 
-(* Layout constants live in [Ui]: the same widths drive the overall
-   [Preflight] row above and [Execute]'s per-package rows below, so
-   keeping one source of truth makes alignment changes a one-line
-   edit. *)
-
-(* Pretty-print bytes using Progress's standard byte unit
-   ([245.8 MiB]). Used as the static [total] anchor on every row. *)
-let bytes_const_of_int n =
-  Progress.Printer.to_to_string Progress.Units.Bytes.of_int n
-
-(* Aggregate row at the top of the multi-bar: bold "Pre-built"
-   header rpad'd to [Ui.row_label_width] so its bar lines up with the
-   per-layer bars below; [bar(24)] + total bytes + tight (pct).
-   No running-byte count or elapsed: the bar position + pct already
-   convey progress and elapsed-time stalls (registry slow, host CPU
-   saturated) lie about ETA more than they help. *)
-let aggregate_line ~total =
-  let open Progress.Line in
-  let header =
-    constf "%a"
-      Fmt.(styled `Bold string)
-      (Printf.sprintf "%-*s" Ui.row_label_width "Pre-built")
-  in
-  let bar_seg = Ui.Theme.bar ~width:(`Fixed Ui.row_bar_width) total in
-  let total_seg = const (bytes_const_of_int total) in
-  let pct_seg = sum ~pp:(Ui.Theme.pct_pp ~total) ~width:6 () in
-  list ~sep:(const " ") [ header; bar_seg; total_seg; pct_seg ]
-
-(* Per-layer row: [<pkg.ver col 32> [bar(24)] <total> (<pct>)]. *)
-let layer_line ~pkg ~size =
-  let open Progress.Line in
-  let bar_seg = Ui.Theme.bar ~width:(`Fixed Ui.row_bar_width) size in
-  let total_seg = const (bytes_const_of_int size) in
-  let pct_seg = sum ~pp:(Ui.Theme.pct_pp ~total:size) ~width:6 () in
-  list ~sep:(const " ")
-    [ const (Ui.fit_label Ui.row_label_width pkg); bar_seg; total_seg; pct_seg ]
-
-(* Drive the live multi-bar. When [shared_display] is supplied we
-   attach to it (overall bar above stays visible); otherwise we open
-   our own [Display]. Both paths use [add_line] / [Reporter.t] so the
-   [Display.t]'s type parameter stays unconstrained. *)
-let fetch_with_display ?jobs ?shared_display ~session ~remote ~d10 ~index
-    ~available ~pkg_of ~total_bytes_known ~clock () =
-  let n_total = List.length available in
+(* Pull every layer in [available] from [remote]. UI is decoupled —
+   we only emit typed events through [reporter]; the cmdliner layer
+   renders them as a multi-line bar (or text, or nothing). *)
+let fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available
+    ~pkg_of () =
   let bytes_received = ref 0L in
   let done_count = ref 0 in
-  let cfg = Progress.Config.v ~ppf:Format.err_formatter ~persistent:false () in
-  let owns_display, display =
-    match shared_display with
-    | Some d -> (false, d)
-    | None ->
-        let d = Progress.Display.start ~config:cfg Progress.Multi.blank in
-        (true, d)
-  in
-  let agg_handle =
-    Progress.Display.add_line display
-      (aggregate_line ~total:(to_int total_bytes_known))
-  in
-  let layer_handles : (string, int Progress.Reporter.t) Hashtbl.t =
-    Hashtbl.create n_total
-  in
-  let layer_size : (string, int) Hashtbl.t = Hashtbl.create n_total in
   let lock = Mutex.create () in
   let with_lock f = Mutex.protect lock f in
-  let stop_heartbeat = ref false in
-  Eio.Switch.run @@ fun hb_sw ->
-  if owns_display then
-    Eio.Fiber.fork_daemon ~sw:hb_sw (fun () ->
-        let rec loop () =
-          Eio.Time.sleep clock 0.1;
-          if !stop_heartbeat then `Stop_daemon
-          else begin
-            (try Progress.Display.tick display with _ -> ());
-            loop ()
-          end
-        in
-        loop ());
-  let ensure_line hash =
-    if not (Hashtbl.mem layer_handles hash) then begin
-      let my_size =
-        Stdlib.Option.value (Hashtbl.find_opt layer_size hash) ~default:0
+  let total = List.length available in
+  let progressed = ref 0 in
+  (* Initial Aggregate seeds the bar's denominator so the count
+     fraction is meaningful from the moment the phase begins. *)
+  reporter.Build_progress.event
+    (Aggregate { phase = Fetching; total; current = 0 });
+  Eio.Fiber.List.iter
+    ~max_fibers:(fetch_parallelism ?jobs ())
+    (fun hash ->
+      let sha256 =
+        Option.map
+          (fun (e : D10.Layer.index_entry) -> e.sha256)
+          (Hashtbl.find_opt index hash)
       in
-      (* Sort rows size-descending: biggest layers (which dominate
-         fetch time) pin near the top. [~above] counts existing rows
-         smaller than us; we land just above them. *)
-      let above =
-        Hashtbl.fold
-          (fun h _ acc ->
-            let s =
-              Stdlib.Option.value (Hashtbl.find_opt layer_size h) ~default:0
-            in
-            if s < my_size then acc + 1 else acc)
-          layer_handles 0
+      let size =
+        match Hashtbl.find_opt index hash with
+        | Some (e : D10.Layer.index_entry) -> e.size
+        | None -> 0L
       in
       let pkg =
         Stdlib.Option.value (Hashtbl.find_opt pkg_of hash) ~default:""
       in
-      let r =
-        Progress.Display.add_line ~above display (layer_line ~pkg ~size:my_size)
+      reporter.Build_progress.event
+        (Fetch_started { kind = Layer; key = hash; pkg; size });
+      let received_ref = ref 0L in
+      let on_progress ~received ~total =
+        with_lock (fun () ->
+            let prev = !received_ref in
+            received_ref := received;
+            bytes_received :=
+              Int64.add !bytes_received (Int64.sub received prev));
+        let total_known =
+          match total with Some t -> t | None -> size
+        in
+        reporter.event
+          (Fetch_progress
+             { kind = Layer; key = hash; bytes = received; total = total_known })
       in
-      Hashtbl.add layer_handles hash r
-    end
-  in
-  let report_to_layer hash delta =
-    match Hashtbl.find_opt layer_handles hash with
-    | None -> ()
-    | Some r -> ( try Progress.Reporter.report r delta with _ -> ())
-  in
-  let fiber_progress hash hash_ref ~received ~total:_ =
-    with_lock @@ fun () ->
-    let prev = !hash_ref in
-    hash_ref := received;
-    let delta = Int64.sub received prev in
-    bytes_received := Int64.add !bytes_received delta;
-    let delta_i = to_int delta in
-    (try Progress.Reporter.report agg_handle delta_i with _ -> ());
-    report_to_layer hash delta_i
-  in
-  let remove_line hash =
-    with_lock @@ fun () ->
-    match Hashtbl.find_opt layer_handles hash with
-    | None -> ()
-    | Some r ->
-        (try Progress.Reporter.finalise r with _ -> ());
-        (try Progress.Display.remove_line display r with _ -> ());
-        Hashtbl.remove layer_handles hash
-  in
-  Fun.protect
-    ~finally:(fun () ->
-      stop_heartbeat := true;
-      (* Always retire the aggregate row; finalise the display only
-         when we own it. *)
-      (try Progress.Reporter.finalise agg_handle with _ -> ());
-      (try Progress.Display.remove_line display agg_handle with _ -> ());
-      if owns_display then try Progress.Display.finalise display with _ -> ())
-    (fun () ->
-      Eio.Fiber.List.iter
-        ~max_fibers:(fetch_parallelism ?jobs ())
-        (fun hash ->
-          let sha256 =
-            Option.map
-              (fun (e : D10.Layer.index_entry) -> e.sha256)
-              (Hashtbl.find_opt index hash)
-          in
-          let size =
-            match Hashtbl.find_opt index hash with
-            | Some (e : D10.Layer.index_entry) -> e.size
-            | None -> 0L
-          in
-          with_lock (fun () ->
-              Hashtbl.replace layer_size hash (to_int size);
-              ensure_line hash);
-          let received_ref = ref 0L in
-          let on_progress = fiber_progress hash received_ref in
-          let ok =
-            D10.Layer.pull_remote d10 ~remote ~hash ~session ~on_progress
-              ?sha256 ()
-          in
-          remove_line hash;
-          if ok then begin
-            with_lock (fun () -> incr done_count);
-            Logs.info (fun m -> m "Fetched %s from registry" hash)
-          end)
-        available);
+      let ok =
+        D10.Layer.pull_remote d10 ~remote ~hash ~session ~on_progress ?sha256
+          ()
+      in
+      reporter.event (Fetch_finished { kind = Layer; key = hash });
+      let now =
+        with_lock (fun () ->
+            incr progressed;
+            !progressed)
+      in
+      reporter.event
+        (Aggregate { phase = Fetching; total; current = now });
+      if ok then begin
+        with_lock (fun () -> incr done_count);
+        Logs.info (fun m -> m "Fetched %s from registry" hash)
+      end)
+    available;
   (!done_count, !bytes_received)
 
-let fetch_remote_layers ?on_phase ?on_progress ?jobs ?shared_display ~session
+let fetch_remote_layers ?(reporter = Build_progress.null) ?jobs ~session
     ~layer_remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan =
   match layer_remote with
   | None -> build_plan
@@ -399,70 +307,25 @@ let fetch_remote_layers ?on_phase ?on_progress ?jobs ?shared_display ~session
               m "Fetching %d layer(s) from registry (%s, %d needed)..." n_total
                 (fmt_mb total_bytes_known)
                 (List.length source_hashes));
-          (* Build a hash → "pkg.version" lookup for the per-row labels.
-             Layers we don't have a node for fall through to "" and the
-             row shows blanks. *)
           let pkg_of : (string, string) Hashtbl.t = Hashtbl.create n_total in
           List.iter
             (fun (n : Plan.node) ->
               Hashtbl.replace pkg_of n.layer_hash (OpamPackage.to_string n.pkg))
             (Plan.nodes build_plan);
+          reporter.event
+            (Phase_started
+               {
+                 phase = Fetching;
+                 label = Fmt.str "Fetching %d layer(s) from registry" n_total;
+               });
           let done_count, bytes_received =
-            if Tty.is_tty () then
-              fetch_with_display ?jobs ?shared_display ~session ~remote:r ~d10
-                ~index ~available ~pkg_of ~total_bytes_known ~clock:d10.clock ()
-            else begin
-              (* Non-TTY: single-line text update routed through
-                 [on_progress] / [on_phase]. No multi-bar UI to corrupt. *)
-              let done_count = ref 0 in
-              let bytes_total = ref 0L in
-              let progress_sink =
-                match (on_progress, on_phase) with
-                | Some f, _ | None, Some f -> f
-                | None, None -> fun _ -> ()
-              in
-              let emit () =
-                progress_sink
-                  (Fmt.str "Fetching layers from registry (%d/%d, %s)"
-                     !done_count n_total (fmt_mb !bytes_total))
-              in
-              let fiber_progress hash_ref ~received ~total:_ =
-                let prev = !hash_ref in
-                hash_ref := received;
-                bytes_total := Int64.add !bytes_total (Int64.sub received prev);
-                emit ()
-              in
-              Eio.Fiber.List.iter
-                ~max_fibers:(fetch_parallelism ?jobs ())
-                (fun hash ->
-                  let sha256 =
-                    Option.map
-                      (fun (e : D10.Layer.index_entry) -> e.sha256)
-                      (Hashtbl.find_opt index hash)
-                  in
-                  let received_ref = ref 0L in
-                  let on_progress = fiber_progress received_ref in
-                  if
-                    D10.Layer.pull_remote d10 ~remote:r ~hash ~session
-                      ~on_progress ?sha256 ()
-                  then begin
-                    incr done_count;
-                    emit ();
-                    Logs.info (fun m -> m "Fetched %s from registry" hash)
-                  end)
-                available;
-              (!done_count, !bytes_total)
-            end
+            fetch_layers ?jobs ~reporter ~session ~remote:r ~d10 ~index
+              ~available ~pkg_of ()
           in
-          (match on_progress with
-          | Some _ -> Say.progress_clear ()
-          | None -> ());
-          (match on_phase with
-          | Some f ->
-              f
-                (Fmt.str "Fetched %d/%d layers from registry (%s)" done_count
-                   n_total (fmt_mb bytes_received))
-          | None -> ());
+          reporter.event (Phase_done Fetching);
+          Logs.info (fun m ->
+              m "Fetched %d/%d layers from registry (%s)" done_count n_total
+                (fmt_mb bytes_received));
           try Plan.of_solution ctx ~d10 ~packages_dirs pkgs
           with Plan.Cycle cycles ->
             Error.config_error
@@ -481,18 +344,19 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
     ?layer_remote ?source_remote ?jobs ?toolchain
     ?(constraints = OpamPackage.Name.Map.empty) ?project_root
-    ?local_packages_dir ?on_phase ?on_progress ?preflight_done ?shared_display
-    names =
-  let on_phase =
-    match on_phase with
-    | Some f -> f
-    | None -> fun s -> Logs.info (fun m -> m "%s" s)
+    ?local_packages_dir ?(reporter = Build_progress.null) ?emit_recipe names =
+  let phase ph label =
+    reporter.Build_progress.event (Phase_started { phase = ph; label });
+    Logs.info (fun m -> m "%s" label)
   in
+  let phase_done ph = reporter.event (Phase_done ph) in
   let extra_pkg_dirs =
-    Source.Repo.ensure_many ~fs ~data_dir ~refresh extra_repos
+    Source.Repo.ensure_many ~reporter ~fs ~data_dir ~refresh extra_repos
   in
   let pins = Source.Pin.resolve_pins ~fs ~sys ?project_root pins in
-  let pin_dir = Source.Pin.materialize ~fs ~sys ~cache ~refresh pins in
+  let pin_dir =
+    Source.Pin.materialize ~reporter ~fs ~sys ~cache ~refresh pins
+  in
   (* When a toolchain is active, its [info.packages_dirs] replaces the
      base set — stacking on top would re-add [relocatable], whose
      [ocaml-base-compiler.5.5.0] competes with the toolchain-pinned
@@ -500,7 +364,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
      both. *)
   let base_pkg_dirs =
     match toolchain with
-    | None -> Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ()
+    | None ->
+        Source.Reporepo.ensure_base ~reporter ~fs ~sys ~data_dir ~refresh ()
     | Some (info : Toolchain.info) -> info.packages_dirs
   in
   let packages_dirs =
@@ -531,32 +396,24 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
         ?toolchain:toolchain_ctx ()
   in
   let fast_hashes =
-    match layer_cache_key with
-    | None -> None
-    | Some k -> (
-        match Solver.Memo.lookup_layers ~cache_root ~key:k with
-        | None -> None
-        | Some hashes
-          when List.for_all (fun h -> D10.Layer.succeeded d10 ~hash:h) hashes ->
-            Some hashes
-        | Some _ ->
-            Logs.info (fun m ->
-                m "layer cache entry stale (layers missing), falling through");
-            None)
-  in
-  (* [preflight_done] used to be invoked here by [Pipeline.build] mid-flow,
-     to let the caller clear its own preflight bar before [Execute.run]
-     opened a separate [Progress.Display]. With the shared-display
-     architecture introduced by {!Ui.Preflight} that's no longer
-     necessary — [Pipeline.build]'s subsystems attach their multi-bar
-     lines to the caller's display via [add_line], so the display
-     stays open the entire time. The parameter is kept on the
-     signature for backwards-compatibility with the few callers that
-     still pass it; it's only fired at the {i very} end of this
-     function (after [Execute.run] returns), so the display isn't
-     finalised while inner code is still trying to drive it. *)
-  let fire_preflight_done () =
-    match preflight_done with Some f -> f () | None -> ()
+    if emit_recipe <> None then
+      (* emit_recipe needs the full plan (Plan.elaborate) to produce the
+         recipe — the cached fast-path returns layer hashes only. *)
+      None
+    else
+      match layer_cache_key with
+      | None -> None
+      | Some k -> (
+          match Solver.Memo.lookup_layers ~cache_root ~key:k with
+          | None -> None
+          | Some hashes
+            when List.for_all (fun h -> D10.Layer.succeeded d10 ~hash:h) hashes
+            ->
+              Some hashes
+          | Some _ ->
+              Logs.info (fun m ->
+                  m "layer cache entry stale (layers missing), falling through");
+              None)
   in
   match fast_hashes with
   | Some hashes ->
@@ -564,36 +421,39 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
           m "layer cache hit %s (%d layers), skipping solve"
             (String.sub (Stdlib.Option.get layer_cache_key) 0 12)
             (List.length hashes));
-      fire_preflight_done ();
       hashes
   | None ->
-      (* Phase narration funneled through [on_phase] so the caller picks
-         the visual: [oi run] feeds into a TTY-only spinner that clears
-         on exit; [oi sync] / [oi build] feeds into [Say.step] for a
-         visible audit trail. *)
-      on_phase
+      phase Solving
         (Fmt.str "Building solver context (%d package dirs)"
            (List.length packages_dirs));
       let build_prefix = cache_root / "build" / "prefix" in
       let ctx =
         Solver.Ctx.create ~prefix:build_prefix ~packages_dirs ~conf
-          ?toolchain:toolchain_ctx ()
+          ?toolchain:toolchain_ctx ~reporter ()
       in
-      on_phase
+      phase Solving
         (Fmt.str "Solving for %d root%s" (List.length names)
            (if List.length names = 1 then "" else "s"));
       let pkgs =
         match
-          Solver.solve ~fs ~cache_root ctx ~packages_dirs ~constraints names
+          Solver.solve ~reporter ~fs ~cache_root ctx ~packages_dirs ~constraints
+            names
         with
         | Ok pkgs -> pkgs
         | Error msg -> Error.no_solution msg
       in
-      on_phase
+      phase_done Solving;
+      phase Building
         (Fmt.str "Planning %d package%s" (List.length pkgs)
            (if List.length pkgs = 1 then "" else "s"));
       let build_plan =
-        try Plan.of_solution ctx ~d10 ~packages_dirs pkgs
+        (* When emit_recipe is set, don't consult the d10 cache during
+           planning: every package needs to be classified as [Source]
+           so [Recipe_emitter.emit] materialises an archive for it.
+           Otherwise bake against a fully-warm cache produces an empty
+           recipe and writes nothing. *)
+        let plan_d10 = if emit_recipe = None then Some d10 else None in
+        try Plan.of_solution ctx ?d10:plan_d10 ~packages_dirs pkgs
         with Plan.Cycle cycles ->
           Error.config_error
             "dependency cycle in solved packages:@\n\
@@ -617,11 +477,20 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
       end;
       let build_plan =
         match layer_remote with
+        | _ when emit_recipe <> None ->
+            (* emit-only path: don't pull pre-built binary layers from
+               the registry. The emitter produces archives for every
+               Source package; any layer that isn't already locally
+               cached as Binary becomes a Source node in the recipe.
+               The recipe is then self-contained against whatever is
+               already in the local d10 store, with no implicit
+               registry dep. *)
+            build_plan
         | None -> build_plan
         | Some _ ->
-            on_phase "Checking registry for prebuilt layers";
-            fetch_remote_layers ~on_phase ?on_progress ?jobs ?shared_display
-              ~session ~layer_remote ~d10 ~packages_dirs ~ctx ~pkgs build_plan
+            phase Fetching "Checking registry for prebuilt layers";
+            fetch_remote_layers ~reporter ?jobs ~session ~layer_remote ~d10
+              ~packages_dirs ~ctx ~pkgs build_plan
       in
       let hashes = Plan.layer_hashes build_plan in
       (* Every layer in the plan must be cached (Binary method) to skip
@@ -639,10 +508,9 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
         | None -> ()
         | Some k -> Solver.Memo.store_layers ~fs ~cache_root ~key:k hashes
       in
-      if all_layers_cached then begin
+      if all_layers_cached && emit_recipe = None then begin
         Logs.info (fun m -> m "Layers cached, skipping build");
         persist_layer_cache ();
-        fire_preflight_done ();
         hashes
       end
       else begin
@@ -725,8 +593,46 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
         end;
         let exec_plan =
           Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
-            ~ocaml_version:conf.ocaml_version build_plan
+            ~ocaml_version:conf.ocaml_version ~reporter build_plan
         in
+        (* Emit-recipe path: serialise a d10ir recipe and stop, no
+           Execute.run, no source-mirror prewarm — archives are already
+           materialised inline by [Recipe_emitter.emit] via
+           [Archive_builder.build] which goes through the standard
+           [Source.Mirror] cache. *)
+        (match emit_recipe with
+        | Some out_dir ->
+            let d10 =
+              make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
+            in
+            let toolchain_name =
+              match toolchain with
+              | Some (i : Toolchain.info) -> i.handle
+              | None -> "system"
+            in
+            let toolchain_layer =
+              match exec_plan.packages with
+              | p :: _ -> p.layer_hash
+              | [] -> ""
+            in
+            let cache_urls = cache_urls ~cache ~source_remote in
+            let recipe =
+              Recipe_emitter.emit ~proc_mgr ~fs ~d10 ~cache_urls
+                ~cli_invocation:(Array.to_list Sys.argv)
+                ~toolchain_name ~toolchain_layer exec_plan
+            in
+            Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+              Eio.Path.(fs / out_dir);
+            let out_recipe = Filename.concat out_dir "recipe.json" in
+            D10ir.Plan.save Eio.Path.(fs / out_recipe) recipe;
+            Say.ok "emitted recipe to %s" out_recipe;
+            Say.info "%d nodes, %d archives at %s/d10ir/archives/"
+              (List.length recipe.nodes)
+              (List.length recipe.nodes)
+              (Eio.Path.native_exn d10.root);
+            persist_layer_cache ();
+            hashes
+        | None ->
         (* Prewarm the local source mirror from the registry's [/sources/]
            tree via the shared HTTP session. Skips packages already
            covered by the layer cache (those don't run the source fetch
@@ -761,7 +667,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             in
             if archives <> [] then begin
               let s =
-                Source.Mirror.fetch_from_registry
+                Source.Mirror.fetch_from_registry ~reporter
                   ~clock:(clock :> _ Eio.Time.clock_ty Eio.Resource.t)
                   ~session ~fs ~cache_root ~registry
                   ~max_fibers:(fetch_parallelism ?jobs ())
@@ -773,9 +679,182 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             end
         | _ -> ());
         let urls = cache_urls ~cache ~source_remote in
-        Execute.run ?shared_display ~cache_urls:urls ~proc_mgr ~fs ?jobs
-          ~clock:(clock :> D10.Config.clk)
-          ~sys ~os_key exec_plan;
+        let _ = urls in
+        (* d10ir Direct executor:
+           - Recipe_emitter.emit walks exec_plan, materialises a
+             consolidated source archive per Source package via
+             Archive_builder, and produces a D10ir.Plan.t.
+           - Direct.run schedules every node on an Eio fiber pool,
+             waiting on dep promises, restoring transitive dep layers
+             into a per-node staging dir, running the (sh-escaped,
+             prefix-rebased) build script, and storing the result back
+             into d10. Cached layers (Binary in plan, restored from
+             registry above) short-circuit. *)
+        let toolchain_name =
+          match toolchain with Some i -> i.handle | None -> "system"
+        in
+        let toolchain_layer =
+          match exec_plan.packages with
+          | p :: _ -> p.layer_hash
+          | [] -> ""
+        in
+        let recipe =
+          Recipe_emitter.emit ~proc_mgr ~fs ~d10 ~cache_urls:urls
+            ~cli_invocation:(Array.to_list Sys.argv)
+            ~toolchain_name ~toolchain_layer exec_plan
+        in
+        reporter.event (Plan_ready recipe);
+        (* Pre-fetch every consolidated source archive the recipe
+           references. By the time [D10ir.Direct.run] takes over, all
+           archives must be present locally — Direct itself does no
+           network I/O. Resolution order per archive:
+
+           1. Already in [<cache>/d10ir/archives/<sha>.tar.zst]? Done.
+           2. Configured archive registry has it
+              (HTTP GET [<registry>/d10ir-archives/<sha>.tar.zst])?
+              Pull, verify sha, install.
+           3. Fall back to inline bake — find the package_plan that
+              produced this sha, run [Archive_builder.build_no_solve]
+              against its opam file. This makes fresh clones work
+              without an explicit pre-bump as long as upstream URLs
+              are reachable. *)
+        let cache_root_str = Cache.root_s cache in
+        let archive_dir_for sha =
+          Filename.concat
+            (Filename.concat
+               (Filename.concat cache_root_str "d10ir")
+               "archives")
+            (sha ^ ".tar.zst")
+        in
+        let missing_locally =
+          List.filter
+            (fun (n : D10ir.Plan.node) ->
+              not (Sys.file_exists (archive_dir_for n.archive.sha256)))
+            recipe.nodes
+        in
+        if missing_locally <> [] then begin
+          (* Step 2: try the registry for whatever it has. *)
+          let after_registry =
+            match source_remote with
+            | Some (`Http_remote registry) ->
+                Logs.info (fun m ->
+                    m "fetching %d archive(s) from %s/d10ir-archives/"
+                      (List.length missing_locally) registry);
+                let shas =
+                  List.map
+                    (fun (n : D10ir.Plan.node) -> n.archive.sha256)
+                    missing_locally
+                in
+                let s =
+                  D10ir.Registry.prefetch
+                    ~clock:(clock :> _ Eio.Time.clock_ty Eio.Resource.t)
+                    ~fs ~session ~cache_root:cache_root_str
+                    ~remote:(`Http_remote registry)
+                    ~max_fibers:(fetch_parallelism ?jobs ()) shas
+                in
+                Logs.info (fun m ->
+                    m "archive prefetch: %d new, %d cached, %d failed"
+                      s.fetched s.cached s.failed);
+                let still_missing = ref [] in
+                List.iter
+                  (fun (n : D10ir.Plan.node) ->
+                    if not (Sys.file_exists (archive_dir_for n.archive.sha256))
+                    then still_missing := n :: !still_missing)
+                  missing_locally;
+                List.rev !still_missing
+            | None -> missing_locally
+          in
+          (* Step 3: inline-bake any archive the registry doesn't
+             have. We look up the [package_plan] on [exec_plan] (a
+             [Plan.t]) by name, since [Recipe_emitter.emit] consumed
+             the same exec_plan and the [archive.sha256] in the
+             recipe came from its [d10_archive] field. *)
+          if after_registry <> [] then begin
+            let plan_by_pkg = Hashtbl.create 32 in
+            List.iter
+              (fun (p : Plan.package_plan) -> Hashtbl.replace plan_by_pkg p.pkg p)
+              exec_plan.packages;
+            let baked = ref 0 in
+            let bake_failed = ref [] in
+            List.iter
+              (fun (n : D10ir.Plan.node) ->
+                let pkg_str =
+                  Fmt.str "%s.%s" n.package.name n.package.version
+                in
+                match Hashtbl.find_opt plan_by_pkg pkg_str with
+                | None ->
+                    bake_failed :=
+                      (pkg_str, "no matching package_plan") :: !bake_failed
+                | Some p -> (
+                    try
+                      Logs.info (fun m ->
+                          m "inline bake fallback for %s" pkg_str);
+                      let _ : Archive_builder.built =
+                        Archive_builder.build ~reporter ~proc_mgr ~fs ~d10
+                          ~cache_root:cache_root_str ~cache_urls:urls p
+                      in
+                      incr baked
+                    with exn ->
+                      bake_failed :=
+                        (pkg_str, Printexc.to_string exn) :: !bake_failed))
+              after_registry;
+            if !bake_failed <> [] then
+              Error.config_error
+                "d10ir build needs %d archive(s) the registry doesn't \
+                 have and inline bake failed for them:@\n  %s"
+                (List.length !bake_failed)
+                (String.concat "\n  "
+                   (List.map (fun (p, e) -> Fmt.str "%s: %s" p e)
+                      !bake_failed));
+            Logs.info (fun m -> m "inline bake completed: %d archive(s)" !baked)
+          end
+        end;
+        let direct_cfg =
+          let base = D10ir.Config.default in
+          let base = D10ir.Config.with_env_overrides base in
+          {
+            base with
+            build_parallelism =
+              (match jobs with Some j -> j | None -> base.build_parallelism);
+          }
+        in
+        let plan_dir = Eio.Path.native_exn d10.root in
+        (* d10ir.Direct emits typed [Direct.event]s; we wrap them as
+           [Build_progress.Build _] events through the caller's
+           reporter. No bar UI here — the cmdliner layer renders. *)
+        phase Building "Running d10ir build";
+        let direct_reporter : D10ir.Direct.reporter =
+          { event = (fun e -> reporter.event (Build e)) }
+        in
+        let result =
+          D10ir.Direct.run ~config:direct_cfg ~d10 ~fs ~proc_mgr
+            ~clock:(clock :> D10.Config.clk)
+            ~reporter:direct_reporter ~plan_dir recipe
+        in
+        reporter.event (Build_summary result);
+        phase_done Building;
+        if result.failed > 0 then begin
+          (* Stuff the structured failure summary into the [output]
+             field. [Error.pp] prints it as part of the [error:]
+             message — i.e. AFTER the bar has been finalised by the
+             enclosing [Fun.protect], avoiding a mid-bar interject /
+             print / resume that left the bar visible above the
+             summary in the terminal. *)
+          let pkg_summary =
+            match result.failures with
+            | [ f ] ->
+                Fmt.str "package %s.%s in phase %s" f.package.name
+                  f.package.version
+                  (D10ir.Direct.phase_to_string f.phase)
+            | fs -> Fmt.str "%d packages" (List.length fs)
+          in
+          let output =
+            Fmt.str "%a@,@,%d built, %d cached, %d skipped"
+              D10ir.Direct.pp_failures result.failures result.built
+              result.cached result.skipped
+          in
+          Error.build_failed ~pkg:pkg_summary ~cmd:"d10ir.direct" ~output
+        end;
         let prefix_hash = D10.Prefix.solve_hash hashes in
         let prefix_dir =
           Eio.Path.native_exn Eio.Path.(d10.root / "prefixes" / prefix_hash)
@@ -783,8 +862,7 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
         (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix_dir)
          with _ -> ());
         persist_layer_cache ();
-        fire_preflight_done ();
-        hashes
+        hashes)
       end
 
 let assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes =

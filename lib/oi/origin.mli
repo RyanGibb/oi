@@ -9,7 +9,7 @@
 type kind =
   | Reporepo
       (** Materialised reporepo overlay tree at
-          [<reporepo>/v1/<handle>/packages]. The [overlay] field is set. *)
+          [<reporepo>/v2/<handle>/packages]. The [overlay] field is set. *)
   | Pin
       (** Synthesised pin-depends tree at [<cache>/pins/sets/<hash>/packages].
       *)
@@ -26,7 +26,7 @@ type t = {
           [handle] is set — callers fall back to an unversioned overlay. *)
   path_in_repo : string;
       (** Filesystem path of the opam file relative to the source repo root
-          (e.g. [v1/avsm/packages/bsky/bsky.dev/opam] for a reporepo entry,
+          (e.g. [v2/avsm/packages/bsky/bsky.dev/opam] for a reporepo entry,
           [packages/foo/foo.1.0.0/opam] for a pin or local entry). *)
 }
 
@@ -35,8 +35,8 @@ val of_packages_dir : pkgs_dir:string -> name:string -> full:string -> t
     [packages/] directory the opam file lives in, plus the package's [name] and
     [full] ([name.version]) for path reconstruction. The path-shape rules are:
 
-    - [<root>/v1/<handle>/packages] → [Reporepo (Some handle)]
-    - [<root>/v1/reporepo/packages] → [Reporepo (Some "reporepo")]
+    - [<root>/v2/<handle>/packages] → [Reporepo (Some handle)]
+    - [<root>/v2/reporepo/packages] → [Reporepo (Some "reporepo")]
     - [<root>/pins/sets/<hash>/packages] → [Pin]
     - everything else → [Local] *)
 

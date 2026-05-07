@@ -47,6 +47,7 @@ val pick_toolchain :
   install:bool ->
   override:string option ->
   handles:string list ->
+  ?reporter:Build_progress.reporter ->
   unit ->
   Toolchain.info option
 (** [pick_toolchain ~override ~handles ()] is the single source of truth for
@@ -90,6 +91,7 @@ val classify_with_args :
   sys:D10.Sysops.t ->
   cache:Cache.t ->
   ?refresh:bool ->
+  ?reporter:Build_progress.reporter ->
   string list ->
   Project.Script.dep list * Project.Url.t
 (** [classify_with_args tokens] partitions every [--with=…] token in one pass:
@@ -114,10 +116,8 @@ val cache_urls :
     [source_remote], also the registry's [sources/] subtree. *)
 
 val fetch_remote_layers :
-  ?on_phase:(string -> unit) ->
-  ?on_progress:(string -> unit) ->
+  ?reporter:Build_progress.reporter ->
   ?jobs:int ->
-  ?shared_display:(unit, unit) Progress.Display.t ->
   session:D10.Sysops.Http.session ->
   layer_remote:D10.Layer.remote option ->
   d10:D10.Config.t ->
@@ -135,14 +135,9 @@ val fetch_remote_layers :
     {!D10.Sysops.Http.with_session}, so an [oi build --all] over [N] solve
     groups does one TLS handshake and one [OINDEX.txt] fetch instead of [N].
 
-    Progress reporting is split:
-    - [on_phase] receives one-shot milestones (e.g. the final "Fetched N/M
-      layers" summary).
-    - [on_progress] receives the high-frequency byte/count updates, throttled to
-      ~20Hz. Typically wired to an in-place line sink like {!Say.progress}.
-
-    When only [on_phase] is supplied, byte updates fall through to it so
-    spinner-style callers ([oi run]) keep showing live activity. *)
+    [reporter] receives typed {!Build_progress.event}s — [Phase_started
+    Fetching], [Fetch_started/_progress/_finished], [Phase_done]. The
+    cmdliner layer renders them; defaults to {!Build_progress.null}. *)
 
 val build :
   sys:D10.Sysops.t ->
@@ -165,10 +160,8 @@ val build :
   ?constraints:OpamFormula.version_constraint OpamTypes.name_map ->
   ?project_root:string ->
   ?local_packages_dir:string ->
-  ?on_phase:(string -> unit) ->
-  ?on_progress:(string -> unit) ->
-  ?preflight_done:(unit -> unit) ->
-  ?shared_display:(unit, unit) Progress.Display.t ->
+  ?reporter:Build_progress.reporter ->
+  ?emit_recipe:string ->
   OpamPackage.Name.t list ->
   string list
 (** [build] solves for [names], ensures every needed layer exists (building from
@@ -179,16 +172,20 @@ val build :
     supplied, every pin's URL is sha-pinned via [_oi/oi.lock] before fetch. The
     lock is transient build state, regenerated as needed.
 
-    [on_phase] is invoked once per slow preflight step ("Building solver
-    context", "Solving for N roots", "Planning M packages", "Checking
-    registry"). [oi sync] / [oi build] route this to [Say.step] for visible
-    narration; [oi run] routes it to a TTY spinner that auto-clears. Defaults to
-    a [Logs.info] dispatcher.
+    [reporter] receives every progress event from this build: phase
+    transitions ([Solving] → [Fetching] → [Building]), per-archive fetch
+    progress, per-layer build events from [D10ir.Direct.run], and a
+    final [Build_summary]. The library never opens or drives a UI
+    itself; the cmdliner layer constructs whatever rendering it wants
+    on top of {!Build_progress.event}s.
 
-    [preflight_done] is called exactly once just before the build phase starts
-    (i.e. before [Execute.run] takes over the cursor) — the cue for callers to
-    clear their own preflight progress bar so it doesn't fight the per-package
-    build bar.
+    [emit_recipe] when set, after the plan has been elaborated, writes a
+    serialised d10ir recipe to that directory and returns without running
+    [Execute.run]. The archives that the recipe references are
+    materialised as a side-effect of [Recipe_emitter.emit] and live under
+    [<cache>/d10ir/archives/]; the recipe references them by relative
+    path. Mutually exclusive with the build path — when [emit_recipe] is
+    set, no layers are built.
 
     When [dry_run] is [true] the function prints the build plan and calls
     [Stdlib.exit 0] — same behaviour as [oi show]. *)

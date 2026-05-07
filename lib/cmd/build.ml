@@ -92,7 +92,11 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       let padded = Fmt.str "%-*s" handle_width h in
       Fmt.str "%a" Oi.Style.info_string padded
   in
-  Oi.Say.newline ();
+  (* No leading [Say.newline] here: the progress bar's tear-down
+     ([Preflight_bar.run]'s finally) leaves the cursor on the blank row
+     where the bar was rendered. Adding another newline would
+     produce a double-blank gap between the bar's old position and
+     the header. *)
   Oi.Say.header "Build summary";
   List.iter
     (fun (target, handle, r) ->
@@ -123,9 +127,19 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       | _ -> ())
     rows;
   Oi.Say.newline ();
-  Fmt.pr "  %a %d  %a %d  %a %d  %a %d@." Oi.Style.ok_string "ok" n_ok
-    Oi.Style.error_string "failed" n_failed Oi.Style.warn_string "depext-fail"
-    n_depext Oi.Style.warn_string "skipped" n_skipped;
+  (* Style each [label N] pair brightly only when N > 0, so the eye
+     skips past zeros (no failures, no skips) and lands on whatever
+     actually happened. Otherwise even a clean run shows [failed 0]
+     in bright red, which reads as "something's wrong". *)
+  let pair styled_when_active label n =
+    if n = 0 then Fmt.str "%a %d" Oi.Style.dim_string label n
+    else Fmt.str "%a %d" styled_when_active label n
+  in
+  Fmt.pr "  %s  %s  %s  %s@."
+    (pair Oi.Style.ok_string "ok" n_ok)
+    (pair Oi.Style.error_string "failed" n_failed)
+    (pair Oi.Style.warn_string "depext-fail" n_depext)
+    (pair Oi.Style.warn_string "skipped" n_skipped);
   (* Dump per-target build-failure output at debug level so `-v` still
      shows the reason, without dumping a compiler transcript by
      default. *)
@@ -155,7 +169,7 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
      a non-empty clone (i.e. [url <> ""]). [oi build --all] handles this
      case by fanning out to "every package in the overlay's clone"
      ([build.ml:691-703]); we mirror that here by treating every package
-     in [v1/<handle>/packages/] as its own depext source — no solve.
+     in [v2/<handle>/packages/] as its own depext source — no solve.
      Without this, an overlay like [@oxcaml] (no [x-root-packages] set)
      contributes zero depexts to the docker pre-install, and the only
      thing covering the gap is [registry_docker.ml]'s hardcoded
@@ -204,7 +218,7 @@ let all_packages_in_dir pkgs_dir =
               else try Some (OpamPackage.of_string pv) with _ -> None))
 
 (* Resolve the effective [packages_dirs] for a single overlay handle:
-   its own materialised v1/ tree plus every overlay it depends on (via
+   its own materialised v2/ tree plus every overlay it depends on (via
    the reporepo's [depends:] entries), followed by the base
    opam/relocatable trees. First-wins ordering. *)
 let packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle =
@@ -246,7 +260,7 @@ let packages_dirs_for_overlay ~base_packages_dirs ~reporepo_entries handle =
      and are reused across every per-distro depext evaluation, since
      opam filter variables (os, os-family, …) don't influence the
      solver picks here.
-   - [Walk_clone]: every [opam] file in [v1/<handle>/packages/] is
+   - [Walk_clone]: every [opam] file in [v2/<handle>/packages/] is
      listed verbatim — no solve. The overlay's [packages_dirs] is still
      the toolchain-aware closure from {!packages_dirs_for_overlay} so
      {!Oi.Solver.find_opam_file} resolves each version against the right
@@ -259,7 +273,7 @@ let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
   in
   let path = Terms.reporepo_path () in
   Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
-    ~url:(Terms.reporepo_url ());
+    ~url:(Terms.reporepo_url ()) ();
   let reporepo_entries = try Oi.Source.Reporepo.load ~path with _ -> [] in
   let inputs =
     let all = overlay_inputs reporepo_entries in
@@ -502,13 +516,13 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
   end
   else begin
     let layer_hashes =
-      let on_phase msg = Oi.Say.step "%s" msg in
-      let on_progress = Oi.Say.progress in
+      Progress_ui.with_ui ~target ~clock:(clock :> _ Eio.Resource.t)
+        ~enabled:(Tty.is_tty ())
+      @@ fun reporter ->
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~session ~extra_repos:all_extras ~pins:url_project.pins ~refresh
         ~constraints:extra_constraints ?layer_remote ?source_remote ?jobs
-        ?toolchain ?local_packages_dir:url_project.packages_dir ~on_phase
-        ~on_progress names
+        ?toolchain ?local_packages_dir:url_project.packages_dir ~reporter names
     in
     match
       find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes
@@ -674,7 +688,7 @@ let cmd =
     if every_version then begin
       let path = Terms.reporepo_path () in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
-        ~url:(Terms.reporepo_url ());
+        ~url:(Terms.reporepo_url ()) ();
       let archives =
         let seen : (string, unit) Hashtbl.t = Hashtbl.create 4096 in
         let acc = ref [] in
@@ -731,8 +745,51 @@ let cmd =
        "transient fetch errors" listing. Any [fetch-*.log] with mtime
        older than this was left over by a previous invocation. *)
     let run_start_time = Unix.time () in
+    let target_label =
+      if all then "all"
+      else
+        match targets with
+        | [] -> "."
+        | xs -> String.concat ", " xs
+    in
+    (* [cache_root] needed by both the in-bar phases and the
+       post-bar [print_build_summary] / log-listing logic. *)
+    let cache_root = Oi.Cache.root_s cache in
+    (* Hoisted out of [with_ui] so [print_build_summary] (called
+       AFTER [with_ui] returns) can read them on a clean terminal. *)
+    let targets_ref : string list ref = ref [] in
+    let target_handle : (string, string) Hashtbl.t = Hashtbl.create 16 in
+    let solve_failures : (string, string * string) Hashtbl.t =
+      Hashtbl.create 8
+    in
+    let target_group : (string, int) Hashtbl.t = Hashtbl.create 16 in
+    let group_results :
+        ( int,
+          [ `Ok of int * int * int
+          | `Fail of int * int * int * string * (string * string) list
+          | `Depext_fail of
+            int
+            * int
+            * int
+            * OpamSysPkg.Set.t
+            * (string * OpamSysPkg.Set.t) list
+            * string ] )
+        Hashtbl.t =
+      Hashtbl.create 16
+    in
+    (* One [Progress_ui] covers slow setup ([ensure_base],
+       classify_with_args, pick_toolchain) AND the build itself.
+       The body returns [unit] — the build_summary print fires
+       OUTSIDE [with_ui] so the display is finalised first and the
+       summary lands on a clean terminal. *)
+    Progress_ui.with_ui ~target:target_label
+      ~clock:(clock :> _ Eio.Resource.t)
+      ~enabled:(Tty.is_tty ())
+      (fun ui_reporter ->
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
-    ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+    ignore
+      (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh
+         ~reporter:ui_reporter ());
     let conf =
       Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
     in
@@ -758,7 +815,7 @@ let cmd =
       else begin
         let path = Terms.reporepo_path () in
         Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
-          ~url:(Terms.reporepo_url ());
+          ~url:(Terms.reporepo_url ()) ();
         let entries = Oi.Source.Reporepo.load ~path in
         let only_set =
           if only = [] then None else Some (List.sort_uniq compare only)
@@ -849,7 +906,8 @@ let cmd =
       with_repos @ handles
     in
     let extra_cli, url_project =
-      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
+      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh
+        ~reporter:ui_reporter with_deps
     in
     (* Split handles into two scopes:
        - [global_handles] apply to every solve (explicit [--with-repo]
@@ -917,12 +975,7 @@ let cmd =
           |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
           |> List.sort String.compare
     in
-    (* Remember which handle each target came from so the summary
-       table can render a column for it. Targets from plain PKG
-       arguments have no handle. If two overlays contribute the same
-       bare package name the later one wins for display purposes; the
-       solver still sees them as a single target. *)
-    let target_handle : (string, string) Hashtbl.t = Hashtbl.create 16 in
+    (* [target_handle] hoisted to outer scope. *)
     (* Expand each raw group into package-name groups. A group
        containing just an [@handle] fallback (no [x-root-packages])
        fans out into one singleton group per package the overlay
@@ -1153,7 +1206,8 @@ let cmd =
       | None ->
           let info =
             Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
-              ~override:toolchain_override ~handles:key ()
+              ~override:toolchain_override ~handles:key
+              ~reporter:ui_reporter ()
           in
           Hashtbl.add resolved_toolchains key info;
           info
@@ -1251,15 +1305,14 @@ let cmd =
       target_groups @ List.map (fun r -> ([ r ], [])) url_project.roots
     in
     let targets = List.concat_map fst target_groups in
+    targets_ref := targets;
     (* Per-target result tracking; the final summary walks [targets] in
        order and looks each name up here. A target either fails to
        solve (status stored directly), or lands in some group. Groups
        are keyed by index; their build result (ok / failed, with the
        package counts) is written into [group_results] when the group
        finishes. *)
-    let solve_failures : (string, string * string) Hashtbl.t =
-      Hashtbl.create 16
-    in
+    (* [solve_failures] hoisted to outer scope. *)
     (* Dump the solver's diagnostic so the user can grep for conflicting
        version constraints. The file name's short hash comes from the
        (targets, handles) tuple so two solve groups whose first target
@@ -1288,21 +1341,7 @@ let cmd =
       Oi.Cache.Logs.write ~fs ~cache_root path body;
       path
     in
-    let target_group : (string, int) Hashtbl.t = Hashtbl.create 16 in
-    let group_results :
-        ( int,
-          [ `Ok of int * int * int
-          | `Fail of int * int * int * string * (string * string) list
-          | `Depext_fail of
-            int
-            * int
-            * int
-            * OpamSysPkg.Set.t
-            * (string * OpamSysPkg.Set.t) list
-            * string ] )
-        Hashtbl.t =
-      Hashtbl.create 16
-    in
+    (* [target_group] and [group_results] hoisted to outer scope. *)
     (* 1. Solve each solve-group against that group's scoped
        [packages_dirs] — handles from the group's own tokens plus any
        global [--with-repo] ones. Different groups see different
@@ -1426,18 +1465,18 @@ let cmd =
       else
         let acc = ref [] in
         Eio.Switch.run @@ fun sw ->
-        Oi.Ui.run ~status_lines:0 ~sw
+        Preflight_bar.run ~status_lines:0 ~sw
           ~clock:(clock :> _ Eio.Time.clock)
           ~total:n_groups ~title:"solve"
           (fun ui ->
             List.iter
               (fun ((g, _) as group_and_handles) ->
                 let label = group_label g in
-                Oi.Ui.with_msg ui (Fmt.str "solve %s" label);
+                Preflight_bar.with_msg ui (Fmt.str "solve %s" label);
                 (match solve_one group_and_handles with
                 | Some s -> acc := s :: !acc
                 | None -> ());
-                Oi.Ui.tick ui)
+                Preflight_bar.tick ui)
               target_groups);
         List.rev !acc
     in
@@ -1491,7 +1530,7 @@ let cmd =
        counts of each outcome so the user can see at a glance how
        many are built vs. cached vs. failing to build vs. skipped
        because a dep failed. *)
-    let total_pkgs_estimate =
+    let _total_pkgs_estimate =
       List.fold_left
         (fun acc (_, _, _, pkgs, _, _, _) -> acc + List.length pkgs)
         0 solutions
@@ -1520,42 +1559,27 @@ let cmd =
             n_groups ok cached build_failed dep_failed cur_pkg
       end
     in
-    let make_reporter ui =
-      Oi.Execute.
+    (* Grouped flow: keep narration as plain [Logs.info] / [Say.step]
+       so the [Build summary] block prints clean. Each individual
+       group's [D10ir.Direct.run] still gets a unified [Progress_ui]
+       wrapper further down (where the recipe is known), so per-build
+       multi-line progress is preserved. *)
+    let make_reporter () =
+      Oi.Build_report.
         {
           pkg_event =
             (fun e ->
-              (match e with
+              match e with
               | Started { pkg; _ } -> counters#set_pkg pkg
               | Cached _ -> counters#incr_cached
               | Built _ -> counters#incr_ok
-              | Build_failed { pkg; log } ->
-                  counters#incr_build_failed;
-                  Oi.Ui.suspend ui (fun () ->
-                      Fmt.epr "  %a %s → %s@." Oi.Style.error_string "FAIL" pkg
-                        log)
-              | Install_failed { pkg; log } ->
-                  counters#incr_build_failed;
-                  Oi.Ui.suspend ui (fun () ->
-                      Fmt.epr "  %a %s (install) → %s@." Oi.Style.error_string
-                        "FAIL" pkg log)
+              | Build_failed _ -> counters#incr_build_failed
+              | Install_failed _ -> counters#incr_build_failed
               | Dep_failed _ -> counters#incr_dep_failed);
-              match e with
-              | Started _ -> Oi.Ui.with_msg ui counters#status
-              | Cached _ | Built _ | Build_failed _ | Install_failed _
-              | Dep_failed _ ->
-                  Oi.Ui.tick ~msg:counters#status ui);
         }
     in
     let in_progress_reporter f =
-      if dry_run then f None
-      else begin
-        Eio.Switch.run @@ fun sw ->
-        Oi.Ui.run ~status_lines:0 ~sw
-          ~clock:(clock :> _ Eio.Time.clock)
-          ~total:total_pkgs_estimate ~title:"build"
-          (fun ui -> f (Some (make_reporter ui)))
-      end
+      if dry_run then f None else f (Some (make_reporter ()))
     in
     in_progress_reporter @@ fun reporter ->
     List.iteri
@@ -1626,7 +1650,7 @@ let cmd =
                 List.iter
                   (fun pkg ->
                     r.pkg_event
-                      (Oi.Execute.Dep_failed
+                      (Oi.Build_report.Dep_failed
                          { pkg = OpamPackage.to_string pkg; upstream_log = "" }))
                   sorted_pkgs)
         | Ok build_plan ->
@@ -1656,12 +1680,11 @@ let cmd =
             else if n_build = 0 then begin
               (* Fast path for fully-cached groups: every layer is already
              in the d10 cache, so there's no reason to pay for
-             [Plan.create] (resolves commands / install files),
-             [Execute.run] (prefix wipe + layer restore), or the
-             source-mirror promotion pass. Just emit Cached events for
-             the reporter counters and call it done. This is the
-             common case when re-running [oi build --all] against an
-             already-populated cache. *)
+             [Plan.create] (resolves commands / install files), the
+             archive prefetch, or [D10ir.Direct.run]. Just emit Cached
+             events for the reporter counters and call it done. This
+             is the common case when re-running [oi build --all]
+             against an already-populated cache. *)
               Log.info (fun m -> m "all %d packages cached" n_cached);
               (match reporter with
               | None -> ()
@@ -1669,13 +1692,14 @@ let cmd =
                   List.iter
                     (fun (n : Oi.Plan.node) ->
                       r.pkg_event
-                        (Oi.Execute.Cached { pkg = OpamPackage.to_string n.pkg }))
+                        (Oi.Build_report.Cached { pkg = OpamPackage.to_string n.pkg }))
                     (Oi.Plan.nodes build_plan));
               (* Append one Audit event per cached pkg so the manifest's
-             [callers[]] list sees this group's contribution — the fast path
-             skips Execute.run (which is where audit lines normally get
-             appended). Overlay is resolved from [pkg_dirs] so the event
-             attributes the right handle whether or not Execute.run ran. *)
+             [callers[]] list sees this group's contribution — the
+             fast path skips the d10ir Direct executor (which is where
+             audit lines normally get appended). Overlay is resolved
+             from [pkg_dirs] so the event attributes the right handle
+             whether or not the executor ran. *)
               let now = Unix.gettimeofday () in
               let toolchain_handle =
                 Option.map (fun (i : Oi.Toolchain.info) -> i.handle) toolchain
@@ -1835,12 +1859,19 @@ let cmd =
                     | _ -> None)
                   exec_plan.packages
               in
+              (* Drive the same outer [Progress_ui]'s reporter
+                 through this group's fetch + bake + Direct.run.
+                 No nested [Progress_ui.with_ui] — that would
+                 double-register on [Logs_progress] and tear down
+                 the outer bar when the inner cleanup runs. *)
               let build_outcome :
                   [ `Ok | `Fail of string * (string * string) list ] =
+                ignore group_targets;
                 let build_plan =
-                  Oi.Pipeline.fetch_remote_layers ?jobs ~session:http_session
-                    ~layer_remote ~d10 ~packages_dirs:pkg_dirs ~ctx:group_ctx
-                    ~pkgs:sorted_pkgs build_plan
+                  Oi.Pipeline.fetch_remote_layers ~reporter:ui_reporter ?jobs
+                    ~session:http_session ~layer_remote ~d10
+                    ~packages_dirs:pkg_dirs ~ctx:group_ctx ~pkgs:sorted_pkgs
+                    build_plan
                 in
                 let exec_plan_ref = ref None in
                 try
@@ -1862,10 +1893,245 @@ let cmd =
                           toolchain;
                     }
                   in
-                  Oi.Execute.run ~cache_urls ?jobs ~failed_layers ?reporter
-                    ~audit_base ~proc_mgr ~fs
-                    ~clock:(clock :> D10.Config.clk)
-                    ~sys ~os_key exec_plan;
+                  let _ = audit_base in
+                  let _ = failed_layers in
+                  let d10_cfg : D10.Config.t =
+                    {
+                      sys;
+                      fs;
+                      clock = (clock :> D10.Config.clk);
+                      root = Eio.Path.(fs / Oi.Cache.root_s cache);
+                      os_key;
+                    }
+                  in
+                  let toolchain_name =
+                    match toolchain with
+                    | Some i -> i.handle
+                    | None -> "system"
+                  in
+                  let toolchain_layer =
+                    match exec_plan.packages with
+                    | p :: _ -> p.layer_hash
+                    | [] -> ""
+                  in
+                  let recipe =
+                    Oi.Recipe_emitter.emit ~proc_mgr ~fs ~d10:d10_cfg
+                      ~cache_urls
+                      ~cli_invocation:(Array.to_list Sys.argv)
+                      ~toolchain_name ~toolchain_layer exec_plan
+                  in
+                  (* Pre-fetch archives from the configured registry
+                     (and fall back to inline bake against upstream
+                     URLs if the registry doesn't have them) so
+                     [D10ir.Direct.run] doesn't need network access. *)
+                  let cache_root_str = Oi.Cache.root_s cache in
+                  let archive_dir_for sha =
+                    Filename.concat
+                      (Filename.concat
+                         (Filename.concat cache_root_str "d10ir")
+                         "archives")
+                      (sha ^ ".tar.zst")
+                  in
+                  let missing_locally =
+                    List.filter
+                      (fun (n : D10ir.Plan.node) ->
+                        not
+                          (Sys.file_exists
+                             (archive_dir_for n.archive.sha256)))
+                      recipe.nodes
+                  in
+                  if missing_locally <> [] then begin
+                    let after_registry =
+                      match source_remote with
+                      | Some (`Http_remote registry) ->
+                          let shas =
+                            List.map
+                              (fun (n : D10ir.Plan.node) -> n.archive.sha256)
+                              missing_locally
+                          in
+                          let _s =
+                            D10ir.Registry.prefetch
+                              ~clock:
+                                (clock :> _ Eio.Time.clock_ty Eio.Resource.t)
+                              ~fs ~session:http_session
+                              ~cache_root:cache_root_str
+                              ~remote:(`Http_remote registry) shas
+                          in
+                          List.filter
+                            (fun (n : D10ir.Plan.node) ->
+                              not
+                                (Sys.file_exists
+                                   (archive_dir_for n.archive.sha256)))
+                            missing_locally
+                      | None -> missing_locally
+                    in
+                    if after_registry <> [] then begin
+                      let plan_by_pkg = Hashtbl.create 32 in
+                      List.iter
+                        (fun (p : Oi.Plan.package_plan) ->
+                          Hashtbl.replace plan_by_pkg p.pkg p)
+                        exec_plan.packages;
+                      let bake_failed = ref [] in
+                      List.iter
+                        (fun (n : D10ir.Plan.node) ->
+                          let pkg_str =
+                            Fmt.str "%s.%s" n.package.name n.package.version
+                          in
+                          match Hashtbl.find_opt plan_by_pkg pkg_str with
+                          | None ->
+                              bake_failed :=
+                                (pkg_str, "no matching package_plan")
+                                :: !bake_failed
+                          | Some p -> (
+                              try
+                                let _ : Oi.Archive_builder.built =
+                                  Oi.Archive_builder.build ~reporter:ui_reporter
+                                    ~proc_mgr ~fs ~d10:d10_cfg
+                                    ~cache_root:cache_root_str
+                                    ~cache_urls p
+                                in
+                                ()
+                              with exn ->
+                                bake_failed :=
+                                  (pkg_str, Printexc.to_string exn)
+                                  :: !bake_failed))
+                        after_registry;
+                      if !bake_failed <> [] then
+                        Oi.Error.config_error
+                          "d10ir build needs %d archive(s) the registry \
+                           doesn't have and inline bake failed: %s"
+                          (List.length !bake_failed)
+                          (String.concat ", "
+                             (List.map fst !bake_failed))
+                    end
+                  end;
+                  let direct_cfg =
+                    let base = D10ir.Config.default in
+                    let base = D10ir.Config.with_env_overrides base in
+                    {
+                      base with
+                      build_parallelism =
+                        (match jobs with
+                        | Some j -> j
+                        | None -> base.build_parallelism);
+                    }
+                  in
+                  let plan_dir = Eio.Path.native_exn d10_cfg.root in
+                  (* The [oi build --all] flow drives its own nox-tty
+                     bar via [Preflight_bar.run]; we don't have a shared
+                     [Progress.Display] to attach to here. Pass
+                     [shared_display:None] so the d10ir bar stays
+                     silent (no per-package line spam fighting the
+                     nox-tty bar). Build_report counters drive the
+                     end-of-run summary independently.
+
+                     Adapter below translates [D10ir.Direct.event]s
+                     into [Build_report.pkg_event]s so the outer
+                     nox-tty bar's counters/messages advance live —
+                     without it the bar sat at 0/N until the run
+                     finished. *)
+                  let total = List.length recipe.nodes in
+                  let pkg_event_of (e : D10ir.Direct.event) =
+                    let pkg_str (n : D10ir.Plan.node) =
+                      Fmt.str "%s.%s" n.package.name n.package.version
+                    in
+                    match e with
+                    | Plan_started _ | Plan_done _ | Node_queued _
+                    | Node_phase _ ->
+                        None
+                    | Node_started { node } ->
+                        Some
+                          (Oi.Build_report.Started
+                             { pkg = pkg_str node; phase = "build" })
+                    | Node_cached { node } ->
+                        Some (Oi.Build_report.Cached { pkg = pkg_str node })
+                    | Node_built { node; _ } ->
+                        Some (Oi.Build_report.Built { pkg = pkg_str node })
+                    | Node_failed { node; log_path; _ } ->
+                        Some
+                          (Oi.Build_report.Build_failed
+                             { pkg = pkg_str node; log = log_path })
+                    | Node_skipped { node; _ } ->
+                        Some
+                          (Oi.Build_report.Dep_failed
+                             { pkg = pkg_str node; upstream_log = "" })
+                  in
+                  let direct_reporter ui_reporter : D10ir.Direct.reporter =
+                    {
+                      event =
+                        (fun e ->
+                          (match (reporter, pkg_event_of e) with
+                          | Some r, Some pe -> r.pkg_event pe
+                          | _ -> ());
+                          ui_reporter.Oi.Build_progress.event (Build e));
+                    }
+                  in
+                  (* [Recipe_emitter.emit] strips [Binary] packages
+                     from the recipe (they're already-cached layers
+                     that just need restore, not a build). The d10ir
+                     reporter therefore won't emit any Cached events
+                     for them — without this loop the outer nox-tty
+                     bar would only count the Source builds and sit
+                     near 0% for any mostly-cached run. *)
+                  (match reporter with
+                  | None -> ()
+                  | Some r ->
+                      List.iter
+                        (fun (n : Oi.Plan.node) ->
+                          if n.method_ = Oi.Identity.Binary then
+                            r.pkg_event
+                              (Oi.Build_report.Cached
+                                 { pkg = OpamPackage.to_string n.pkg }))
+                        (Oi.Plan.nodes build_plan));
+                  ignore total;
+                  ui_reporter.event (Plan_ready recipe);
+                  ui_reporter.event
+                    (Phase_started { phase = Building; label = "build" });
+                  let result =
+                    D10ir.Direct.run ~config:direct_cfg ~d10:d10_cfg ~fs
+                      ~proc_mgr
+                      ~clock:(clock :> D10.Config.clk)
+                      ~reporter:(direct_reporter ui_reporter)
+                      ~plan_dir recipe
+                  in
+                  (* Record per-failure log paths so [collect_failures]
+                     can surface [↳ log pkg: …] lines under the failed
+                     row in the build summary. The exec_plan stores
+                     [package_plan]s keyed by [layer_hash], same key
+                     [failed_layers] uses. *)
+                  List.iter
+                    (fun (f : D10ir.Direct.failure) ->
+                      (* Find the matching exec_plan package and use
+                         its layer_hash. The Direct failure carries
+                         [package] (pkg.ver) but not the layer hash;
+                         look it up in [exec_plan] by pkg name. *)
+                      let pkg_str =
+                        Fmt.str "%s.%s" f.package.name f.package.version
+                      in
+                      List.iter
+                        (fun (p : Oi.Plan.package_plan) ->
+                          if p.pkg = pkg_str then
+                            Hashtbl.replace failed_layers p.layer_hash
+                              f.log_path)
+                        exec_plan.packages)
+                    result.failures;
+                  if result.failed > 0 then begin
+                    let pkg_summary =
+                      match result.failures with
+                      | [ f ] ->
+                          Fmt.str "package %s.%s in phase %s" f.package.name
+                            f.package.version
+                            (D10ir.Direct.phase_to_string f.phase)
+                      | fs -> Fmt.str "%d packages" (List.length fs)
+                    in
+                    let output =
+                      Fmt.str "%a@,@,%d built, %d cached, %d skipped"
+                        D10ir.Direct.pp_failures result.failures result.built
+                        result.cached result.skipped
+                    in
+                    Oi.Error.build_failed ~pkg:pkg_summary
+                      ~cmd:"d10ir.direct" ~output
+                  end;
                   `Ok
                 with
                 | Oi.Error.E e ->
@@ -1889,10 +2155,12 @@ let cmd =
                 | `Fail (msg, failures) ->
                     `Fail (n_pkgs, n_build, n_cached, msg, failures))
             end)
-      solutions;
+      solutions);
+    (* Progress_ui closed; the summary block prints on a clean
+       terminal. *)
     if not dry_run then begin
-      print_build_summary ~targets ~target_handle ~solve_failures ~target_group
-        ~group_results;
+      print_build_summary ~targets:!targets_ref ~target_handle ~solve_failures
+        ~target_group ~group_results;
       (* Point at any fetch-retry logs collected during the run so
          the user can investigate transient errors (git fetch
          failures, opam archive 500s) without them polluting the

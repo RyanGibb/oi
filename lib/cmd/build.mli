@@ -22,7 +22,7 @@ val compute_overlay_depexts_for_conf :
       closure's depexts — picks up compiler-stack depexts (libgmp-dev for
       [zarith.+ox], etc.);
     - else if it has its own clone (non-toolchain overlay with a [url{}]), walk
-      every [opam] in [v1/<handle>/packages/] and union their depexts directly —
+      every [opam] in [v2/<handle>/packages/] and union their depexts directly —
       mirrors [oi build --all]'s "fan out to every package" fallback for
       overlays without explicit roots.
 

@@ -84,9 +84,16 @@ let load_meta path =
 let dir (c : Config.t) ~hash = Eio.Path.(c.root / "layers" / c.os_key / hash)
 let json_path c ~hash = Eio.Path.(dir c ~hash / "layer.json")
 let fs_path c ~hash = Eio.Path.(dir c ~hash / "fs")
+let recipe_path c ~hash = Eio.Path.(dir c ~hash / "recipe.json")
 let native p = Eio.Path.native_exn p
 let dir_s c ~hash = native (dir c ~hash)
 let exists c ~hash = Sysops.file_exists (json_path c ~hash)
+let has_recipe c ~hash = Sysops.file_exists (recipe_path c ~hash)
+
+let load_recipe_json c ~hash =
+  if has_recipe c ~hash then
+    try Some (Eio.Path.load (recipe_path c ~hash)) with _ -> None
+  else None
 
 let succeeded c ~hash =
   match load_meta (json_path c ~hash) with
@@ -94,7 +101,7 @@ let succeeded c ~hash =
   | None -> false
 
 let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
-    ~exit_status =
+    ~exit_status ?recipe_json () =
   let d = dir_s c ~hash in
   let fs_dir = d / "fs" in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(c.fs / fs_dir);
@@ -129,7 +136,10 @@ let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
       deps;
       hashes = parent_hashes;
       created = Eio.Time.now c.clock;
-    }
+    };
+  match recipe_json with
+  | None -> ()
+  | Some s -> Eio.Path.save ~create:(`Or_truncate 0o644) (recipe_path c ~hash) s
 
 let restore (c : Config.t) ~hash ~prefix =
   let fs_dir = fs_path c ~hash in

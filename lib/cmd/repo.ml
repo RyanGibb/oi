@@ -244,7 +244,7 @@ module Ls = struct
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       match Oi.Source.Reporepo.load ~path:reporepo with
       | [] -> Fmt.pr "Reporepo %s is empty.@." reporepo
       | entries ->
@@ -383,7 +383,7 @@ module Show = struct
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       let entries = Oi.Source.Reporepo.load ~path:reporepo in
       let matches =
         List.filter
@@ -468,7 +468,7 @@ module Add = struct
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       let depends =
         match depend_specs with
         | [] -> None
@@ -491,7 +491,7 @@ module Add = struct
           e.depends
       end;
       if e.url <> "" then begin
-        Fmt.pr "Materialising v1/%s/ from %s @ %s@." e.handle e.url
+        Fmt.pr "Materialising v2/%s/ from %s @ %s@." e.handle e.url
           (String.sub e.commit 0 (min 7 (String.length e.commit)));
         let summary =
           Oi.Source.Reporepo.materialise_handle ~fs ~sys ~path:reporepo
@@ -568,6 +568,158 @@ module Add = struct
 end
 
 module Bump = struct
+  (* -- Source identity for incremental bake -------------------------------
+
+     Each opam file in v2/<handle>/ has a "source identity": the
+     [(url, sorted checksums)] pair plus a sorted list of
+     [(extra_name, url, sorted checksums)]. Two opam files with the
+     same source identity will fetch the same source bytes, so they
+     can share an [x-d10-archive] sha — the bake step short-circuits
+     when the post-materialise opam matches a snapshot from the
+     pre-materialise tree.
+
+     [materialise_handle] always rewrites v2/<handle>/ from scratch
+     (so opam files lose [x-d10-archive] in the rewrite). The bump
+     flow takes a snapshot before materialise, restores shas after,
+     and only fetches+tars for packages whose source identity is
+     genuinely new or changed. *)
+
+  (* Source identity: optional [(url, sorted checksums)] +
+     a sorted list of [(extra_name, url, sorted checksums)]. Pure
+     comparison: two identical tuples mean two opam files agree on
+     what bytes they fetch. *)
+  let read_source_identity_and_sha opam_path =
+    try
+      let opam =
+        OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
+      in
+      let url =
+        OpamFile.OPAM.url opam
+        |> Stdlib.Option.map (fun urlf ->
+               let u = OpamUrl.to_string (OpamFile.URL.url urlf) in
+               let cks =
+                 OpamFile.URL.checksum urlf
+                 |> List.map OpamHash.to_string
+                 |> List.sort String.compare
+               in
+               (u, cks))
+      in
+      let extras =
+        OpamFile.OPAM.extra_sources opam
+        |> List.map (fun (b, urlf) ->
+               let n = OpamFilename.Base.to_string b in
+               let u = OpamUrl.to_string (OpamFile.URL.url urlf) in
+               let cks =
+                 OpamFile.URL.checksum urlf
+                 |> List.map OpamHash.to_string
+                 |> List.sort String.compare
+               in
+               (n, u, cks))
+        |> List.sort compare
+      in
+      let sha =
+        match
+          OpamStd.String.Map.find_opt "x-d10-archive"
+            (OpamFile.OPAM.extensions opam)
+        with
+        | Some v -> (
+            match v.OpamParserTypes.FullPos.pelem with
+            | OpamParserTypes.FullPos.String s -> Some s
+            | _ -> None)
+        | None -> None
+      in
+      Some ((url, extras), sha)
+    with _ -> None
+
+  let iter_handle_opams ~reporepo ~handle f =
+    let pkgs_dir = reporepo / "v2" / handle / "packages" in
+    if not (Sys.file_exists pkgs_dir) then ()
+    else
+      Sys.readdir pkgs_dir
+      |> Array.iter (fun pkg ->
+             let pkg_dir = pkgs_dir / pkg in
+             if Sys.is_directory pkg_dir then
+               Sys.readdir pkg_dir
+               |> Array.iter (fun ver_dir ->
+                      let opam_path = pkg_dir / ver_dir / "opam" in
+                      if Sys.file_exists opam_path then
+                        let prefix = pkg ^ "." in
+                        if String.starts_with ~prefix ver_dir then
+                          let version =
+                            String.sub ver_dir (String.length prefix)
+                              (String.length ver_dir - String.length prefix)
+                          in
+                          f ~pkg ~version ~pkg_dir:(pkg_dir / ver_dir)
+                            ~opam_path))
+
+  (* Capture (pkg, ver_dir) -> (source_identity, baked sha) for every
+     opam file in v2/<handle>/ that already has an x-d10-archive set.
+     Called BEFORE materialise wipes the tree. *)
+  let snapshot_handle ~reporepo ~handle =
+    let snap = Hashtbl.create 256 in
+    iter_handle_opams ~reporepo ~handle (fun ~pkg ~version ~pkg_dir:_ ~opam_path ->
+        match read_source_identity_and_sha opam_path with
+        | Some (id, Some sha) ->
+            Hashtbl.replace snap (pkg, version) (id, sha)
+        | _ -> ());
+    snap
+
+  (* Walk the post-materialise v2/<handle>/ tree. For every opam file
+     whose new source identity matches a snapshot entry, write the
+     snapshot's sha back as x-d10-archive. Returns the count of
+     restored entries. *)
+  let restore_unchanged_archives ~reporepo ~handle ~snap =
+    let restored = ref 0 in
+    iter_handle_opams ~reporepo ~handle (fun ~pkg ~version ~pkg_dir:_ ~opam_path ->
+        match
+          ( read_source_identity_and_sha opam_path,
+            Hashtbl.find_opt snap (pkg, version) )
+        with
+        | Some (new_id, _), Some (prior_id, prior_sha)
+          when new_id = prior_id ->
+            (match Ir.opam_set_x_d10_archive ~path:opam_path ~sha:prior_sha with
+            | `Added -> incr restored
+            | `Already -> ())
+        | _ -> ());
+    !restored
+
+  (* Walk v2/<handle>/ and fetch+tar every package whose opam still
+     lacks x-d10-archive (i.e. wasn't restored from the snapshot).
+     Returns (baked, failed) counts. *)
+  let bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform ~reporepo
+      ~handle =
+    let baked = ref 0 in
+    let failed = ref 0 in
+    iter_handle_opams ~reporepo ~handle (fun ~pkg ~version ~pkg_dir ~opam_path ->
+        match read_source_identity_and_sha opam_path with
+        | Some (_, Some _) -> ()  (* already has x-d10-archive *)
+        | _ -> (
+            try
+              let built =
+                Oi.Archive_builder.build_no_solve ~proc_mgr ~fs ~d10
+                  ~cache_root ~platform ~name:pkg ~version ~pkg_dir ~opam_path
+                  ()
+              in
+              (match
+                 Ir.opam_set_x_d10_archive ~path:opam_path ~sha:built.sha256
+               with
+              | `Added | `Already -> ());
+              incr baked;
+              Fmt.pr "  %a %s.%s@." Oi.Style.ok_string "baked" pkg version
+            with exn ->
+              incr failed;
+              Fmt.pr "  %a %s.%s: %s@." Oi.Style.warn_string "skip" pkg version
+                (Printexc.to_string exn)));
+    (!baked, !failed)
+
+  let count_packages_missing_archive ~reporepo ~handle =
+    let n = ref 0 in
+    iter_handle_opams ~reporepo ~handle (fun ~pkg:_ ~version:_ ~pkg_dir:_ ~opam_path ->
+        match read_source_identity_and_sha opam_path with
+        | Some (_, Some _) -> ()
+        | _ -> incr n);
+    !n
+
   let bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
       ~default =
     let effective_toolchain =
@@ -614,7 +766,7 @@ module Bump = struct
     if entry.url = "" then ()
     else begin
       Fmt.pr
-        "Materialising v1/%s/ from %s @ %s — this resolves every package's url \
+        "Materialising v2/%s/ from %s @ %s — this resolves every package's url \
          and may take a while.@."
         entry.handle entry.url
         (String.sub entry.commit 0 (min 7 (String.length entry.commit)));
@@ -632,25 +784,79 @@ module Bump = struct
           Fmt.pr "    %a %s: %s@." Oi.Style.warn_string "unavailable" pkg reason)
         summary.unavailable
     end;
-    auto_commit ~sys ~reporepo ~op:(Fmt.str "bump %s" handle)
+    (* Whether we materialised or not, return the entry so the
+       caller can decide what to commit with. *)
+    entry
 
   let cmd =
-    let run () reporepo reporepo_url handle_opt all url ref_ toolchain
-        depend_specs default =
-      Harness.run @@ fun ~sw:_ env ->
-      let proc_mgr = Eio.Stdenv.process_mgr env in
-      let fs = Eio.Stdenv.fs env in
-      let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
-          ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
-          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
+    let run (c : Terms.common) reporepo reporepo_url handle_opt all url ref_
+        toolchain depend_specs default no_bake rebake =
+      Harness.run @@ fun ~sw env ->
+      let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache; _ } =
+        Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+          c.cache_dir
       in
+      let data_dir = c.data_dir in
+      if rebake && no_bake then begin
+        Fmt.epr
+          "oi repo bump: --rebake and --no-bake are mutually exclusive.@.";
+        exit 1
+      end;
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       let depends =
         match depend_specs with
         | [] -> None
         | _ -> Some (List.map parse_depend_spec depend_specs)
+      in
+      let d10 =
+        Oi.Pipeline.make_d10 ~sys ~fs
+          ~clock:(clock :> D10.Config.clk)
+          ~cache ~os_key
+      in
+      let cache_root = Oi.Cache.root_s cache in
+      ignore data_dir;
+      let bump_and_bake handle =
+        (* Snapshot the pre-materialise source identity + baked sha for
+           every package version, so the post-materialise pass can
+           preserve [x-d10-archive] for any package whose source URL +
+           checksums are unchanged — even with [--no-bake].
+
+           [--rebake] forces every package to re-bake by feeding an
+           empty snapshot, so [restore_unchanged_archives] is a no-op
+           and [bake_changed_archives] sees every opam without
+           x-d10-archive. *)
+        let snap =
+          if rebake then Hashtbl.create 0
+          else snapshot_handle ~reporepo ~handle
+        in
+        let entry =
+          bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
+            ~default
+        in
+        if entry.url <> "" then begin
+          if rebake then
+            Fmt.pr "@.--rebake: discarding previous x-d10-archive shas, will \
+                    re-bake every package@."
+          else begin
+            Fmt.pr "@.Restoring x-d10-archive for unchanged sources ...@.";
+            let restored = restore_unchanged_archives ~reporepo ~handle ~snap in
+            Fmt.pr "  %d restored from previous bump@." restored
+          end;
+          if not no_bake then begin
+            Fmt.pr "Baking x-d10-archive for new or changed sources ...@.";
+            let baked, failed =
+              bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform
+                ~reporepo ~handle
+            in
+            Fmt.pr "  %d baked, %d failed@." baked failed
+          end
+          else
+            Fmt.pr "  --no-bake: skipping fresh bakes; %d package(s) without \
+                    x-d10-archive will be left unbaked@."
+              (count_packages_missing_archive ~reporepo ~handle)
+        end;
+        auto_commit ~sys ~reporepo ~op:(Fmt.str "bump %s" handle)
       in
       match (all, handle_opt) with
       | false, None ->
@@ -679,16 +885,12 @@ module Bump = struct
           List.iter
             (fun h ->
               Fmt.pr "@.%a@." Oi.Style.header_string ("== " ^ h ^ " ==");
-              try
-                bump_one ~fs ~sys ~reporepo ~handle:h ~url:None ~ref_:None
-                  ~toolchain:None ~depends:None ~default:None
+              try bump_and_bake h
               with exn ->
                 Fmt.pr "  %a %s: %s@." Oi.Style.error_string "error" h
                   (Printexc.to_string exn))
             handles
-      | false, Some handle ->
-          bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
-            ~default
+      | false, Some handle -> bump_and_bake handle
     in
     let handle =
       Arg.(
@@ -757,11 +959,11 @@ module Bump = struct
               "Re-fetch the upstream commit on $(b,HANDLE)'s tracked branch \
                and record a new $(b,YYYYMMDD.N) meta-entry. Then walk the \
                upstream's packages, sha-pin every URL, and write the result to \
-               $(b,<reporepo>/v1/<HANDLE>/). Pass $(b,--all) to bump every \
+               $(b,<reporepo>/v2/<HANDLE>/). Pass $(b,--all) to bump every \
                overlay.";
             `P
               "Idempotent on the meta-entry: prints $(b,No change) when \
-               nothing in commit/URL/ref/depends/flags has moved. The $(b,v1/) \
+               nothing in commit/URL/ref/depends/flags has moved. The $(b,v2/) \
                tree is rebuilt either way to catch upstream tag drift.";
             `P
               "Non-base overlays auto-relock against the current \
@@ -773,10 +975,40 @@ module Bump = struct
                other.";
           ]
     in
+    let no_bake =
+      Arg.(
+        value & flag
+        & info
+            ~doc:
+              "Skip the post-bump bake step that writes \
+               $(b,x-d10-archive: \"<sha>\") into every opam file in the \
+               freshly materialised overlay. The bake is what makes the \
+               consolidated source archive sha part of the bump commit; \
+               disabling it leaves the opam files referencing only the \
+               original $(b,url{src; checksum}). Useful when iterating on \
+               metadata without paying the source-fetch cost."
+            [ "no-bake" ])
+    in
+    let rebake =
+      Arg.(
+        value & flag
+        & info
+            ~doc:
+              "Force a full re-bake: discard the previous bump's \
+               $(b,x-d10-archive) shas and regenerate the consolidated \
+               source archive (and its sha) for every package, even those \
+               whose upstream URL + checksums are unchanged. Use this when \
+               the archive contents themselves change shape — e.g. a new \
+               bake-time transform like dune-project version injection — \
+               so that downstream layer-hashes pick up the new shas. \
+               Mutually exclusive with $(b,--no-bake)."
+            [ "rebake" ])
+    in
     Cmd.v info
       Term.(
-        const run $ Terms.log $ reporepo_term $ reporepo_url_term $ handle $ all
-        $ url $ ref_term $ toolchain_repo_term $ depend_term $ default)
+        const run $ Terms.common $ reporepo_term $ reporepo_url_term $ handle
+        $ all $ url $ ref_term $ toolchain_repo_term $ depend_term $ default
+        $ no_bake $ rebake)
 end
 
 module Set_roots = struct
@@ -799,7 +1031,7 @@ module Set_roots = struct
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       let groups =
         List.filter_map
           (fun t -> match parse_group t with [] -> None | g -> Some g)
@@ -882,7 +1114,7 @@ module Remove = struct
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       let handle, version = parse_handle_version handle_spec in
       Oi.Source.Reporepo.remove ~fs ~path:reporepo ~handle ?version ();
       Fmt.pr "Removed %s%s from %s@." handle
@@ -939,7 +1171,7 @@ module Push = struct
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       Fmt.pr "%a %s@." Oi.Style.header_string "reporepo:" reporepo;
       (match push_url with
       | None -> ()
@@ -1139,7 +1371,7 @@ module Lint = struct
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
-        ~url:reporepo_url;
+        ~url:reporepo_url ();
       let entries = Oi.Source.Reporepo.load ~path:reporepo in
       let problems = collect_problems entries in
       if problems = [] then begin

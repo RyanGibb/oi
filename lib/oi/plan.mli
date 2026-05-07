@@ -138,13 +138,23 @@ type package_plan = {
   pkgs_dir : string option;
       (** The [<packages_dir>] root that contained [opam_path]. Distinct from
           [opam_path] so {!Origin.of_packages_dir} can examine the directory
-          shape (v1/<handle>/packages, pins/sets/<hash>/packages, …). [None] iff
+          shape (v2/<handle>/packages, pins/sets/<hash>/packages, …). [None] iff
           [opam_path] is. *)
   depexts : string list;
       (** Declared system packages active under the build's filter env. Names
           are taken straight from [OpamFile.OPAM.depexts] and only retained for
           the entries whose filter evaluates true. Empty if the package declares
           none. *)
+  d10_archive : string option;
+      (** Pre-baked d10ir source archive sha256, if the opam file declares
+          [x-d10-archive] (filter-evaluated for the current OS). When [Some sha],
+          the consolidated archive at
+          [<cache>/d10ir/archives/<sha>.tar.zst] is the build input — fetch it
+          instead of running the source/extras/patches/substs pipeline. The
+          archive contains pre-applied patches and substituted [.in] files
+          using the planning-prefix sentinel; d10ir's per-node rebase still
+          runs. [None] for packages without [x-d10-archive] (pre-bake
+          fallback to the regular fetch flow). *)
 }
 
 type t = {
@@ -165,13 +175,6 @@ type t = {
           shared-prefix mutex and let restores / installs run in parallel. *)
 }
 
-val staging_dir : t -> package_plan -> string
-(** [staging_dir t p] is [<cache_root>/build/staging/<p.layer_hash>] — the
-    per-package directory the executor materialises by hardlink-copying [p]'s
-    in-plan deps and then running [p]'s build / install commands against. The
-    path is deterministic from the layer hash so concurrent fibers never
-    collide. *)
-
 val elaborate :
   Solver.Ctx.t ->
   packages_dirs:string list ->
@@ -179,16 +182,22 @@ val elaborate :
   os_key:string ->
   ocaml_version:string ->
   ?build_prefix:string ->
+  ?reporter:Build_progress.reporter ->
   graph ->
   t
 (** [elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
-     ?build_prefix g] turns an action graph into a fully-resolved execution
-    plan.
+     ?build_prefix ?reporter g] turns an action graph into a fully-resolved
+    execution plan.
 
     [packages_dirs] is the same list passed to the solver, used to attribute
     each package to its source directory so the resulting plan (and any layer
     built from it) can be tagged with the overlay that contributed the opam
     file. [?build_prefix] defaults to [{cache_root}/build/prefix]; pass a
-    different path to build into a fixed location (e.g. a toolchain prefix). *)
+    different path to build into a fixed location (e.g. a toolchain prefix).
+
+    [?reporter] receives a [Status "Elaborating plan"] event when work
+    begins. Plan elaboration is fast (in-memory walk), so no per-node
+    [Aggregate] events are emitted — the count fraction belongs to the
+    actual layer-build phase that follows. Defaults to {!Build_progress.null}. *)
 
 val pp : t Fmt.t

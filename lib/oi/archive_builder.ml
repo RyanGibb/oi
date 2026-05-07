@@ -1,0 +1,496 @@
+let ( / ) = Filename.concat
+let log_src = Logs.Src.create "oi.archive_builder"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
+type built = {
+  path : string;
+  sha256 : string;
+  strip_components : int;
+  subst_files : string list;
+}
+
+
+let archives_dir ~(d10 : D10.Config.t) =
+  Eio.Path.native_exn d10.root / "d10ir" / "archives"
+
+let tmp_dir ~(d10 : D10.Config.t) = Eio.Path.native_exn d10.root / "d10ir" / "tmp"
+
+let sha256_of_file path =
+  OpamHash.contents (OpamHash.compute ~kind:`SHA256 path)
+
+(* Transient state that opam (or our own pipeline) leaves in the
+   build_dir but that has no business being in the consolidated
+   source archive. The hidden-file group ([.DS_Store], editor swap
+   files, …) catches stray cruft that can land in a source tree if
+   a user inspected the build dir locally before bake.
+
+   [.git] is fully excluded — opam's git fetch records the wall-
+   clock time of the fetch in [.git/logs/HEAD], so two bakes of the
+   same url+commit produce different archive bytes. Dev packages
+   that need [dune subst] to compute a [%%VERSION%%] placeholder are
+   handled at archive-bake time by {!ensure_dune_project_version},
+   which injects an opam-known version into [dune-project] before
+   tar; see that function for the conditions under which it acts. *)
+let exclude_patterns =
+  [
+    (* VCS metadata. *)
+    ".git"; ".hg"; ".svn";
+    (* build/cache dirs *)
+    "_build"; "_oi"; ".opam-switch"; ".merlin"; "__pycache__";
+    (* editor / OS cruft *)
+    ".DS_Store"; "*.swp"; "*.swo"; "*~"; "*.bak";
+    ".idea"; ".vscode";
+  ]
+
+(* If the source URL is a git URL with a fragment (commit / branch /
+   tag), return the fragment. Otherwise [None]. Used by
+   {!ensure_dune_project_version} to suffix the injected version
+   with a vcs-identifying tag, mirroring what [git describe] would
+   produce if [.git] were present. *)
+let git_fragment_of_url url_s =
+  match OpamUrl.parse_opt ~handle_suffix:true url_s with
+  | None -> None
+  | Some u -> (
+      match u.OpamUrl.backend with
+      | `git -> (
+          match u.OpamUrl.hash with
+          | Some h when h <> "" -> Some h
+          | _ -> None)
+      | _ -> None)
+
+(* Sanitise a fragment so it's safe inside a dune-project [(version
+   "...")] string and short enough to be useful. For commit hashes,
+   keep the first 7 hex chars (git short form); for branch/tag names,
+   keep at most 32 chars and replace anything outside [A-Za-z0-9._-]
+   with [-]. *)
+let short_vcs_tag s =
+  let is_hex c =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+  in
+  let is_pure_hex = String.for_all is_hex s && String.length s >= 7 in
+  if is_pure_hex then String.sub s 0 (min 7 (String.length s))
+  else
+    let buf = Buffer.create (min 32 (String.length s)) in
+    let n = min 32 (String.length s) in
+    for i = 0 to n - 1 do
+      let c = s.[i] in
+      if
+        (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+        || c = '.' || c = '_' || c = '-'
+      then Buffer.add_char buf c
+      else Buffer.add_char buf '-'
+    done;
+    Buffer.contents buf
+
+(* Inject a [(version "...")] field into [dune-project] when:
+   - [build_dir/dune-project] exists (the package actually uses dune)
+   - dune-project has no existing [(version ...)] field
+   The injected version is the package's opam version, suffixed with
+   [+<short-vcs-tag>] when the source URL is a git URL with a hash.
+
+   Without this, [dune subst] errors out on dev-pinned packages whose
+   source uses [%%VERSION%%] placeholders (because we strip [.git]
+   from the archive for reproducibility). Doing this once at bake
+   time keeps the build script clean — same effect as if the upstream
+   dune-project had carried [(version)] in the first place. *)
+let ensure_dune_project_version ~build_dir ~opam_version ~url_opt =
+  let path = build_dir / "dune-project" in
+  if not (Sys.file_exists path) then ()
+  else
+    let content =
+      try
+        let ic = open_in path in
+        Fun.protect
+          ~finally:(fun () -> close_in_noerr ic)
+          (fun () -> really_input_string ic (in_channel_length ic))
+      with _ -> ""
+    in
+    let already_has_version =
+      let n = String.length content in
+      let rec at_start_of_line i =
+        if i + 9 > n then false
+        else if String.sub content i 9 = "(version " then true
+        else
+          (* find next newline *)
+          let rec find_nl j =
+            if j >= n then n else if content.[j] = '\n' then j + 1 else find_nl (j + 1)
+          in
+          at_start_of_line (find_nl i)
+      in
+      at_start_of_line 0
+    in
+    if already_has_version then ()
+    else
+      let suffix =
+        match Stdlib.Option.bind url_opt git_fragment_of_url with
+        | None -> ""
+        | Some frag -> "+" ^ short_vcs_tag frag
+      in
+      let v = opam_version ^ suffix in
+      let injected = Fmt.str "\n(version \"%s\")\n" v in
+      let new_content = content ^ injected in
+      (try
+         let oc = open_out path in
+         Fun.protect
+           ~finally:(fun () -> close_out_noerr oc)
+           (fun () -> output_string oc new_content)
+       with _ -> ())
+
+(* Bake requires GNU tar. Reporepo bumps must run on Linux where GNU
+   tar is the default; macOS users with [gtar] from Homebrew can
+   set [TAR=gtar] in the environment. The deterministic flags
+   ([--sort=name], [--mtime=@0], [--owner=0], [--numeric-owner]) are
+   not all available in BSD tar, and silently falling back changes
+   the archive bytes — which would break the cross-machine
+   portability invariant the IR relies on. *)
+let make_tar_zst ~proc_mgr ~src_dir ~dst_path =
+  let exclude_args =
+    List.concat_map (fun p -> [ "--exclude"; p ]) exclude_patterns
+  in
+  let tar = match Sys.getenv_opt "TAR" with Some s -> s | None -> "tar" in
+  let argv =
+    [
+      tar;
+      "--zstd";
+      "--sort=name";
+      "--mtime=@0";
+      "--owner=0";
+      "--group=0";
+      "--numeric-owner";
+    ]
+    @ exclude_args
+    @ [ "-cf"; dst_path; "-C"; src_dir; "." ]
+  in
+  try Eio.Process.run proc_mgr argv
+  with exn ->
+    Fmt.failwith
+      "tar failed for %s: %s\n\
+       Bake requires GNU tar (the Linux default). On macOS install \
+       gtar via Homebrew and set [TAR=gtar] in the environment, or \
+       run bumps on a Linux host."
+      src_dir (Printexc.to_string exn)
+
+let build ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10 ~cache_root
+    ?(cache_urls = []) (p : Plan.package_plan) =
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+    Eio.Path.(fs / archives_dir ~d10);
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / tmp_dir ~d10);
+  reporter.Build_progress.event
+    (Status (Fmt.str "Baking archive for %s" p.pkg));
+  (* x-d10-archive short-circuit: when the opam file declares a
+     pre-baked source sha (typically populated by [oi ir bake] /
+     [oi repo bump]), skip the fetch/patches/extras/substs dance and
+     reuse the cached archive directly. The recipe emitter passes the
+     same sha through to the d10ir node; the executor handles per-build
+     sentinel rebasing of substituted files.
+
+     If the declared archive is *missing* locally (e.g. fresh machine
+     after a clone, or after [oi clean]), we don't refuse — we fall
+     through to the regular fetch path. Inputs are deterministic, so
+     the regenerated archive should hash to the same sha; the bake
+     side will overwrite [x-d10-archive] with the new value if it
+     diverges. *)
+  let archive_hit =
+    match p.d10_archive with
+    | None -> None
+    | Some sha ->
+        let path = archives_dir ~d10 / Fmt.str "%s.tar.zst" sha in
+        if Sys.file_exists path then Some (sha, path) else None
+  in
+  match archive_hit with
+  | Some (sha, final_path) ->
+      Log.debug (fun m -> m "archive %s (x-d10-archive) -> %s" p.pkg final_path);
+      {
+        path = final_path;
+        sha256 = sha;
+        strip_components = 0;
+        subst_files = p.substs;
+      }
+  | None ->
+  (* Clean any prior build_dir so patches don't run twice over the
+     same already-patched tree. fetch_source skips when build_dir
+     exists, so leftover state would otherwise short-circuit fetch
+     and then re-apply patches against a tree that already has them.
+
+     We deliberately do NOT apply opam [substs:] here — the archive
+     contains raw [.in] files and is portable across machines.
+     [D10ir.Direct] applies substs at build time using the
+     [subst_vars] threaded through the recipe. *)
+  Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / p.build_dir);
+  Execute.fetch_phase ~cache_urls ~fs ~cache_root p;
+  Execute.copy_extra_files p;
+  Execute.apply_patches p;
+  let pkg_version =
+    match String.index_opt p.pkg '.' with
+    | None -> p.pkg
+    | Some i -> String.sub p.pkg (i + 1) (String.length p.pkg - i - 1)
+  in
+  let url_opt =
+    Stdlib.Option.map (fun (s : Plan.source_info) -> s.url) p.source
+  in
+  ensure_dune_project_version ~build_dir:p.build_dir
+    ~opam_version:pkg_version ~url_opt;
+  let layer_short =
+    if String.length p.layer_hash >= 8 then String.sub p.layer_hash 0 8
+    else p.layer_hash
+  in
+  let tmp_path = tmp_dir ~d10 / Fmt.str "%s-%s.tar.zst" p.pkg layer_short in
+  (try Sys.remove tmp_path with _ -> ());
+  make_tar_zst ~proc_mgr ~src_dir:p.build_dir ~dst_path:tmp_path;
+  let sha = sha256_of_file tmp_path in
+  (match p.d10_archive with
+  | Some declared when declared <> sha ->
+      Log.warn (fun m ->
+          m
+            "x-d10-archive divergence for %s: declared %s, regenerated %s. \
+             Re-run [oi ir bake @%s/<pkg>] to update the opam file." p.pkg
+            (String.sub declared 0 12) (String.sub sha 0 12)
+            (match p.overlay with
+            | Some o -> o.handle
+            | None -> "<handle>"))
+  | _ -> ());
+  let final_path = archives_dir ~d10 / Fmt.str "%s.tar.zst" sha in
+  if not (Sys.file_exists final_path) then begin
+    try Sys.rename tmp_path final_path
+    with Sys_error _ ->
+      (* Cross-fs move? fall back to copy. *)
+      let ic = open_in_bin tmp_path in
+      Fun.protect
+        ~finally:(fun () -> close_in_noerr ic)
+        (fun () ->
+          let oc = open_out_bin final_path in
+          Fun.protect
+            ~finally:(fun () -> close_out_noerr oc)
+            (fun () ->
+              let buf = Bytes.create 65536 in
+              let rec loop () =
+                let n = input ic buf 0 (Bytes.length buf) in
+                if n > 0 then begin
+                  output oc buf 0 n;
+                  loop ()
+                end
+              in
+              loop ()))
+  end
+  else (try Sys.remove tmp_path with _ -> ());
+  Log.debug (fun m -> m "archive %s -> %s" p.pkg final_path);
+  {
+    path = final_path;
+    sha256 = sha;
+    strip_components = 0;
+    subst_files = p.substs;
+  }
+
+(* -- No-solve bake ------------------------------------------------------ *)
+
+(* The fields we extract directly from an opam file to drive a bake
+   without going through the solver. Mirrors a stripped-down
+   [Plan.package_plan] but without [subst_vars] (which we synthesise),
+   [build_commands], [install_commands], or any solve-derived state. *)
+type bake_inputs = {
+  pkg : string;
+  build_dir : string;
+  source : Plan.source_info option;
+  extra_sources : (string * Plan.source_info) list;
+  extra_files : (string * string) list;
+  patches : Plan.patch list;
+  substs : Plan.subst list;
+}
+
+(* Read an opam file and produce the bake inputs. Patches are
+   filter-evaluated against a minimal platform_env derived from
+   [conf]. extra_files are looked up under [pkg_dir/files/]. *)
+let inputs_of_opam_file ~platform_env ~name ~version ~build_dir ~pkg_dir
+    opam_path =
+  let opam_file = OpamFile.make (OpamFilename.raw opam_path) in
+  let opam = OpamFile.OPAM.read opam_file in
+  let source =
+    OpamFile.OPAM.url opam
+    |> Stdlib.Option.map (fun urlf ->
+           let url = OpamUrl.to_string (OpamFile.URL.url urlf) in
+           let checksums =
+             List.map OpamHash.to_string (OpamFile.URL.checksum urlf)
+           in
+           Plan.{ url; checksums })
+  in
+  let extra_sources =
+    List.map
+      (fun (basename, urlf) ->
+        let n = OpamFilename.Base.to_string basename in
+        let url = OpamUrl.to_string (OpamFile.URL.url urlf) in
+        let checksums =
+          List.map OpamHash.to_string (OpamFile.URL.checksum urlf)
+        in
+        (n, Plan.{ url; checksums }))
+      (OpamFile.OPAM.extra_sources opam)
+  in
+  let extra_files =
+    match OpamFile.OPAM.extra_files opam with
+    | None -> []
+    | Some xs ->
+        List.filter_map
+          (fun (base, _hash) ->
+            let basename = OpamFilename.Base.to_string base in
+            let src = Filename.concat (Filename.concat pkg_dir "files") basename in
+            if Sys.file_exists src then Some (basename, src) else None)
+          xs
+  in
+  let patches =
+    List.filter_map
+      (fun (base, filter) ->
+        let keep =
+          match filter with
+          | None -> true
+          | Some f -> OpamFilter.eval_to_bool ~default:false platform_env f
+        in
+        if keep then
+          let file = OpamFilename.Base.to_string base in
+          let filter_str = Stdlib.Option.map OpamFilter.to_string filter in
+          Some Plan.{ file; filter = filter_str }
+        else None)
+      (OpamFile.OPAM.patches opam)
+  in
+  let substs =
+    List.map OpamFilename.Base.to_string (OpamFile.OPAM.substs opam)
+  in
+  let pkg_str = Fmt.str "%s.%s" name version in
+  {
+    pkg = pkg_str;
+    build_dir;
+    source;
+    extra_sources;
+    extra_files;
+    patches;
+    substs;
+  }
+
+(* Reuses [Execute.{fetch_phase,copy_extra_files,apply_patches}] by
+   building a minimal [Plan.package_plan] adapter — all those helpers
+   only read source/extras/files/patches/build_dir. We avoid
+   [Execute.apply_substs] (which needs [subst_vars]) and instead use
+   our local [apply_substs_synth]. *)
+let to_min_plan ~prefix (b : bake_inputs) : Plan.package_plan =
+  {
+    pkg = b.pkg;
+    layer_hash = "";
+    method_ = Identity.Source;
+    dep_layers = [];
+    source = b.source;
+    extra_sources = b.extra_sources;
+    extra_files = b.extra_files;
+    patches = b.patches;
+    substs = b.substs;
+    subst_vars = [];
+    build_commands = [];
+    install_commands = [];
+    install_file = "";
+    env = [||];
+    build_dir = b.build_dir;
+    prefix;
+    overlay = None;
+    opam_path = None;
+    pkgs_dir = None;
+    depexts = [];
+    d10_archive = None;
+  }
+
+(* Bake one opam file into a content-addressed [.tar.zst] under
+   [<d10.root>/d10ir/archives/]. Solver-free: takes only an opam file
+   path, package identity, and a platform_env for filter evaluation.
+   Designed to be called per-package by [oi repo bump] right after
+   materialise_handle, so a single bump produces every overlay
+   archive in one pass without going near the solver. *)
+(* A minimal opam filter env for evaluating [{os = "macos"}] /
+   [{arch = "arm64"}] etc. Only resolves the well-known platform
+   variables; any solver/dep-derived variable returns None. Same set
+   that [Solver.Ctx.platform_env] populates, but constructed without
+   instantiating an opam state. *)
+let bake_platform_env ~(platform : Osrel.t) =
+  let os_str = Osrel.OS.os_to_string platform.os.kind in
+  let os_distribution = Osrel.OS.kind_to_string platform.os.kind in
+  let arch_str = Osrel.Arch.to_string platform.arch in
+  fun var ->
+    let key = OpamVariable.Full.to_string var in
+    match key with
+    | "os" -> Some (OpamTypes.S os_str)
+    | "os-distribution" -> Some (OpamTypes.S os_distribution)
+    | "os-family" -> Some (OpamTypes.S platform.os.family)
+    | "arch" -> Some (OpamTypes.S arch_str)
+    | _ -> None
+
+let build_no_solve ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10
+    ~cache_root ?(cache_urls = []) ~platform ~name ~version ~pkg_dir
+    ~opam_path () =
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+    Eio.Path.(fs / archives_dir ~d10);
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / tmp_dir ~d10);
+  reporter.Build_progress.event
+    (Status (Fmt.str "Baking archive for %s.%s" name version));
+  let platform_env = bake_platform_env ~platform in
+  let build_dir =
+    Filename.concat cache_root
+      (Filename.concat "build/_build" (Fmt.str "%s.%s-bake" name version))
+  in
+  (* Use the same prefix string [Plan.elaborate] would produce
+     (cache_root/build/prefix). Substituted .in files end up
+     embedding this string; d10ir Direct's rebase replaces it with a
+     per-node staging dir at build time. Same machine = same archive
+     content as the solver-driven path; cross-machine portability of
+     archives is a v2 concern. *)
+  let prefix = Filename.concat cache_root (Filename.concat "build" "prefix") in
+  let b =
+    inputs_of_opam_file ~platform_env ~name ~version ~build_dir ~pkg_dir
+      opam_path
+  in
+  Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / build_dir);
+  let p = to_min_plan ~prefix b in
+  Execute.fetch_phase ~cache_urls ~fs ~cache_root p;
+  Execute.copy_extra_files p;
+  Execute.apply_patches p;
+  (* No apply_substs at bake time. Archive contains raw .in files;
+     [D10ir.Direct] applies substs at build time so archive content
+     is independent of any per-machine path values. *)
+  let url_opt =
+    Stdlib.Option.map (fun (s : Plan.source_info) -> s.url) b.source
+  in
+  ensure_dune_project_version ~build_dir ~opam_version:version ~url_opt;
+  let tmp_path =
+    tmp_dir ~d10 / Fmt.str "%s.%s-bake.tar.zst" name version
+  in
+  (try Sys.remove tmp_path with _ -> ());
+  make_tar_zst ~proc_mgr ~src_dir:build_dir ~dst_path:tmp_path;
+  let sha = sha256_of_file tmp_path in
+  let final_path = archives_dir ~d10 / Fmt.str "%s.tar.zst" sha in
+  if not (Sys.file_exists final_path) then begin
+    try Sys.rename tmp_path final_path
+    with Sys_error _ ->
+      let ic = open_in_bin tmp_path in
+      Fun.protect
+        ~finally:(fun () -> close_in_noerr ic)
+        (fun () ->
+          let oc = open_out_bin final_path in
+          Fun.protect
+            ~finally:(fun () -> close_out_noerr oc)
+            (fun () ->
+              let buf = Bytes.create 65536 in
+              let rec loop () =
+                let n = input ic buf 0 (Bytes.length buf) in
+                if n > 0 then begin
+                  output oc buf 0 n;
+                  loop ()
+                end
+              in
+              loop ()))
+  end
+  else (try Sys.remove tmp_path with _ -> ());
+  Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / build_dir);
+  Log.debug (fun m -> m "no-solve bake %s -> %s" b.pkg final_path);
+  {
+    path = final_path;
+    sha256 = sha;
+    strip_components = 0;
+    subst_files = b.substs;
+  }

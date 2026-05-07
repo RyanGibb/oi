@@ -63,9 +63,14 @@ module Ctx : sig
     packages_dirs:string list ->
     conf:conf ->
     ?toolchain:toolchain ->
+    ?reporter:Build_progress.reporter ->
     unit ->
     t
-  (** [?toolchain] pins a fixed-prefix OCaml toolchain (compiler, ocamlfind,
+  (** [?reporter] receives [Status] events bracketing the opam state load (one
+      [Status "Loading opam state"] before the [packages_dirs] walk, one
+      [Status "Loaded N packages …"] after). Defaults to {!Build_progress.null}.
+
+      [?toolchain] pins a fixed-prefix OCaml toolchain (compiler, ocamlfind,
       ocamlbuild, ...) to this context. When set:
       - the switch env prepends toolchain [bin], [lib], and [lib/stublibs] to
         [PATH], [OCAMLPATH], and [CAML_LD_LIBRARY_PATH] so consumer builds
@@ -227,6 +232,7 @@ end
 val solve :
   ?test:OpamPackage.Name.Set.t ->
   ?doc:OpamPackage.Name.Set.t ->
+  ?reporter:Build_progress.reporter ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   cache_root:string ->
   Ctx.t ->

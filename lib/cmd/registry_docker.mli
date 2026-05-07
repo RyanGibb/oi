@@ -71,8 +71,8 @@ val docker_compose_yaml :
 
     Each service is generated with [OI_BUILD_PARALLELISM=$(nproc)] in its
     command and a high [nofile] ulimit so the in-container build uses every
-    available CPU rather than the [min cpu_count 4] default that
-    {!Oi.Execute.default_build_parallelism} applies for macOS fd-limit safety.
+    available CPU rather than the [min cpu_count 8] default that
+    {!D10ir.Config.default} applies for macOS fd-limit safety.
     Suitable for many-core hosts. *)
 
 val write_dockerfile : string -> Dockerfile.t -> unit

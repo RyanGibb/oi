@@ -357,12 +357,14 @@ module Ctx = struct
           ("OCAML_TOPLEVEL_PATH", prefix / "lib" / "toplevel");
         ]
 
-  let create ~prefix ~packages_dirs ~conf ?toolchain () =
+  let create ~prefix ~packages_dirs ~conf ?toolchain
+      ?(reporter = Build_progress.null) () =
     let loaded_gt =
       match !_global_state with
       | Some gt -> gt
       | None -> Fmt.failwith "Solver.Ctx.init_opam must be called before create"
     in
+    reporter.Build_progress.event (Status "Loading opam state");
     let prefix = try Unix.realpath prefix with Unix.Unix_error _ -> prefix in
     let switch_parent = Filename.dirname prefix in
     let switch_name = Filename.basename prefix in
@@ -410,6 +412,11 @@ module Ctx = struct
         OpamPackage.Map.empty packages_dirs
     in
     let all_packages = OpamPackage.keys all_opams in
+    reporter.Build_progress.event
+      (Status
+         (Fmt.str "Loaded %d packages from %d source(s)"
+            (OpamPackage.Set.cardinal all_packages)
+            (List.length packages_dirs)));
     let global_variables =
       let open OpamTypes in
       let var s value desc =
@@ -756,7 +763,7 @@ module Memo = struct
      Bumped to v7: v6 keys were silently stale because the
      [compute_git_signature] precondition assumed [<packages_dir>/../
      .git] existed, which is false for reporepo overlays nested under
-     [<repo>/v1/<handle>/packages/]. Those entries fell back to a
+     [<repo>/v2/<handle>/packages/]. Those entries fell back to a
      path-only signature that never changed across [oi repo bump]. *)
   let schema_version = Stamp.solver_cache_schema
   let signature_memo : (string, string option) Hashtbl.t = Hashtbl.create 16
@@ -781,12 +788,12 @@ module Memo = struct
      [git rev-parse HEAD] (the committed tip) with a hash of
      [git status --porcelain] (tracked + untracked working-tree state)
      scoped to [packages_dir]. This catches reporepo working-tree edits
-     that bumps make to [v1/<handle>/packages/] without committing —
+     that bumps make to [v2/<handle>/packages/] without committing —
      reusing the previous "tip-only" key cached stale solves once those
      edits stopped moving the parent commit.
 
      We don't pre-check for a [.git] in [Filename.dirname packages_dir]:
-     the reporepo layout nests packages under [<repo>/v1/<handle>/packages]
+     the reporepo layout nests packages under [<repo>/v2/<handle>/packages]
      so the [.git] is several levels up. [git -C <dir>] walks up to find
      the repo root for us; the [WEXITED 0] gate in [read_process_output]
      is what tells us we're inside a git tree at all. *)
@@ -1163,7 +1170,8 @@ let log_package_sources ~packages_dirs pkgs =
       end)
     packages_dirs
 
-let solve ?test ?doc ~fs ~cache_root ctx ~packages_dirs ~constraints names =
+let solve ?test ?doc ?(reporter = Build_progress.null) ~fs ~cache_root ctx
+    ~packages_dirs ~constraints names =
   let conf = Ctx.conf ctx in
   let names =
     match Ctx.toolchain ctx with
@@ -1176,6 +1184,10 @@ let solve ?test ?doc ~fs ~cache_root ctx ~packages_dirs ~constraints names =
         in
         names @ extra
   in
+  reporter.Build_progress.event
+    (Status
+       (Fmt.str "Solving for %d root%s" (List.length names)
+          (if List.length names = 1 then "" else "s")));
   let log_selected_versions pkgs =
     let by_name =
       List.fold_left

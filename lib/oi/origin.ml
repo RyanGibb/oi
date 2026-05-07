@@ -12,17 +12,17 @@ let of_packages_dir ~pkgs_dir ~name ~full =
   let leaf = Fmt.str "%s/%s/opam" name full in
   let path_in_repo prefix = Fmt.str "%s/%s" prefix leaf in
   match (parent, base) with
-  | "v1", "reporepo" ->
+  | "v2", "reporepo" ->
       {
         kind = Reporepo;
         overlay = Some { handle = "reporepo"; version = "" };
-        path_in_repo = path_in_repo "v1/reporepo/packages";
+        path_in_repo = path_in_repo "v2/reporepo/packages";
       }
-  | "v1", handle ->
+  | "v2", handle ->
       {
         kind = Reporepo;
         overlay = Some { handle; version = "" };
-        path_in_repo = path_in_repo (Fmt.str "v1/%s/packages" handle);
+        path_in_repo = path_in_repo (Fmt.str "v2/%s/packages" handle);
       }
   | "sets", _ when grandparent = "pins" ->
       { kind = Pin; overlay = None; path_in_repo = path_in_repo "packages" }

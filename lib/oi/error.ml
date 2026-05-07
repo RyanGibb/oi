@@ -67,8 +67,15 @@ let pp fmt = function
       Fmt.pf fmt "%a no solution found@,%s" Style.error_string "error:" msg
   | Config_error { msg } -> Fmt.pf fmt "%a %s" Style.error_string "error:" msg
   | Build_failed { pkg; cmd; output } ->
-      Fmt.pf fmt "%a package %s failed@,  command: %s@,@,%s" Style.error_string
-        "error:" pkg cmd output
+      (* [pkg] is the full noun phrase ("foo.1.0 in phase build", or
+         "3 packages") so the format string just appends "failed".
+         Avoids "package 3 packages failed" pluralisation accidents.
+
+         Wrap in [@[<v>...@]] so [@,] becomes a real newline — without
+         the vertical box [@,] is a no-op separator and the whole
+         message collapses onto one line. *)
+      Fmt.pf fmt "@[<v>%a %s failed@,  command: %s@,@,%s@]"
+        Style.error_string "error:" pkg cmd output
   | Fetch_failed { url; msg } ->
       Fmt.pf fmt "%a fetch %s: %s" Style.error_string "error:" url msg
   | Msg s -> Fmt.pf fmt "%a %s" Style.error_string "error:" s
@@ -85,7 +92,7 @@ let message = function
   | Not_found { target; msg } -> Fmt.str "%s: %s" target msg
   | No_solution { msg } -> msg
   | Config_error { msg } -> msg
-  | Build_failed { pkg; _ } -> Fmt.str "package %s failed" pkg
+  | Build_failed { pkg; _ } -> Fmt.str "%s failed" pkg
   | Fetch_failed { url; msg } -> Fmt.str "fetch %s: %s" url msg
   | Msg s -> s
 

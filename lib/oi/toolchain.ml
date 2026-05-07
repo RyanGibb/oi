@@ -250,7 +250,7 @@ let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
      now, not in oi's binary. *)
   let path = Source.Reporepo.env_path () in
   Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path
-    ~url:(Source.Reporepo.env_url ());
+    ~url:(Source.Reporepo.env_url ()) ();
   let entry =
     match find_entry_by_toolchain_name ~name:handle with
     | Some e -> e
@@ -432,7 +432,7 @@ let with_opam_root ~root_dir f =
   OpamStateConfig.update ~root_dir ();
   Fun.protect ~finally:(fun () -> OpamStateConfig.update ~root_dir:saved ()) f
 
-let ensure_installed ~fs (info : info) =
+let ensure_installed ?(reporter = Build_progress.null) ~fs (info : info) =
   if info.relocatable then
     Log.debug (fun m ->
         m
@@ -443,6 +443,8 @@ let ensure_installed ~fs (info : info) =
     Log.debug (fun m ->
         m "toolchain %s already installed at %s" info.handle info.install_prefix)
   else begin
+    reporter.Build_progress.event
+      (Status (Fmt.str "Installing toolchain %s" info.handle));
     let switch_dir = Filename.dirname info.install_prefix in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / switch_dir);
     (* Frame what's about to happen so the user understands why opam

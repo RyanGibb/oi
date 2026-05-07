@@ -5,7 +5,15 @@ let ( / ) = Filename.concat
 let setup_log style_renderer level verbose_http =
   Fmt_tty.setup_std_outputs ?style_renderer ();
   Logs.set_level level;
-  Logs.set_reporter (Tty.Progress.logs_reporter (Logs_fmt.reporter ()));
+  (* Wrap [Logs] emission with both [Tty.Progress.logs_reporter]
+     (suspends nox-tty bars) and [Logs_progress.wrap_reporter]
+     (suspends [progress] library [Display]s like the d10ir build
+     bar and the registry-fetch bar). Without the second wrapper,
+     warnings during a long build land mid-line and corrupt the
+     bar's redraw. *)
+  Logs.set_reporter
+    (Logs_progress.wrap_reporter
+       (Tty.Progress.logs_reporter (Logs_fmt.reporter ())));
   Requests.Cmd.setup_log_sources ~verbose_http level;
   (* Quiet the HTTP-stack sources unless the user explicitly asks for
      protocol-level chatter. [Requests.Cmd.setup_log_sources] only sets a

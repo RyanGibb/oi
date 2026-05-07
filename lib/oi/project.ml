@@ -15,7 +15,7 @@ type extra_repo = {
   local_packages_dir : string option;
       (* When [Some d], [d] is an existing on-disk packages/ directory and
          [Source.Repo.ensure_many] returns it without cloning. Used for
-         reporepo-handle overlays that live in [<reporepo>/v1/<handle>/]. *)
+         reporepo-handle overlays that live in [<reporepo>/v2/<handle>/]. *)
 }
 
 type pin = { pkg : OpamPackage.t; url : OpamUrl.t; declared_in : string }
@@ -439,7 +439,7 @@ module Url = struct
 
   let sentinel_path src_dir = src_dir / ".oi-pin-ok"
 
-  let fetch ~fs ~cache ~refresh url =
+  let fetch ?(reporter = Build_progress.null) ~fs ~cache ~refresh url =
     let root = Cache.pins_dir cache in
     let src_dir = root / "sources" / url_key url in
     let sentinel = sentinel_path src_dir in
@@ -447,6 +447,8 @@ module Url = struct
       src_dir
     else begin
       Log.info (fun m -> m "Cloning URL project %s" (OpamUrl.to_string url));
+      reporter.Build_progress.event
+        (Status (Fmt.str "Cloning %s" (OpamUrl.to_string url)));
       if Sys.file_exists src_dir then
         Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / src_dir);
       let dst = OpamFilename.Dir.of_string src_dir in
@@ -529,9 +531,10 @@ module Url = struct
           else pin
     | _ -> pin
 
-  let materialize_one ~fs ~sys:_ ~cache ~refresh url_s =
+  let materialize_one ?(reporter = Build_progress.null) ~fs ~sys:_ ~cache
+      ~refresh url_s =
     let url = to_opam_url url_s in
-    let src_dir = fetch ~fs ~cache ~refresh url in
+    let src_dir = fetch ~reporter ~fs ~cache ~refresh url in
     let project = load ~fs src_dir in
     let synth_pins, synth_roots =
       match project.local_packages with
@@ -562,9 +565,12 @@ module Url = struct
         | None -> b.packages_dir);
     }
 
-  let materialize ~fs ~sys ~cache ?(refresh = false) urls =
+  let materialize ?(reporter = Build_progress.null) ~fs ~sys ~cache
+      ?(refresh = false) urls =
     List.fold_left
-      (fun acc url -> merge acc (materialize_one ~fs ~sys ~cache ~refresh url))
+      (fun acc url ->
+        merge acc
+          (materialize_one ~reporter ~fs ~sys ~cache ~refresh url))
       empty urls
 end
 

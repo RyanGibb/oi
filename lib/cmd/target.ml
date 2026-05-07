@@ -26,7 +26,7 @@ let overlay_extras_of_handles ?toolchain ~fs ~sys handles =
   else begin
     let path = Terms.reporepo_path () in
     let url = Terms.reporepo_url () in
-    Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path ~url;
+    Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path ~url ();
     log_overlay "resolving handles %s against reporepo %s"
       (String.concat ", " handles)
       path;

@@ -148,8 +148,15 @@ val is_ready : info -> bool
     (non-relocatable toolchains) or unconditionally for relocatable ones, which
     need no on-disk preparation. *)
 
-val ensure_installed : fs:Eio.Fs.dir_ty Eio.Path.t -> info -> unit
+val ensure_installed :
+  ?reporter:Build_progress.reporter ->
+  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  info ->
+  unit
 (** Build the toolchain into its fixed prefix when {!is_ready} is false. No-op
     for relocatable toolchains and for already-prepared non-relocatable ones. On
     failure for a non-relocatable toolchain the install_prefix is left partial
-    and {!is_ready} continues to return false. *)
+    and {!is_ready} continues to return false.
+
+    [?reporter] receives a [Status "Installing toolchain <handle>"] event
+    when the install actually runs. *)

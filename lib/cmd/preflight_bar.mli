@@ -134,7 +134,3 @@ val log : t -> string -> unit
 val suspend : t -> (unit -> 'a) -> 'a
 (** Clear the bar, run [f ()], then redraw. Use when emitting permanent output
     (errors, warnings) that must not be overwritten by the next redraw. *)
-
-val finish : ?msg:string -> t -> unit
-(** Render at 100% and emit a newline. Optionally replaces the message with a
-    summary. *)

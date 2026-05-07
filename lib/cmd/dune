@@ -3,6 +3,7 @@
  (libraries
   oi
   d10
+  d10ir
   osrel
   cmdliner
   dune-build-info
@@ -18,6 +19,7 @@
   nox-xdg
   nox-tty
   nox-tty-eio
+  progress
   dockerfile-opam
   jsont
   jsont.bytesrw

@@ -61,23 +61,36 @@ let error_of_exn = function
   | Failure msg -> Oi.Error.Msg msg
   | exn -> Oi.Error.Msg (Printexc.to_string exn)
 
+(* All top-level prints route through [Logs_progress.interject] in
+   case any [Progress.Display] is still alive on the active-display
+   slot when an exception escapes the inner [Fun.protect]s. The slot
+   should have been cleared before reaching here, but defensive
+   pause/resume here means a stray uncaught exception during
+   tear-down doesn't leave the error message buried inside a half-
+   rendered bar. *)
+let eprintf_raw fmt = Fmt.kstr (fun s -> Fmt.epr "%s@." s) fmt
+
+let eprintf fmt =
+  Fmt.kstr (fun s -> Logs_progress.interject (fun () -> eprintf_raw "%s" s)) fmt
+
 let exit_for_exn exn =
   match !error_format with
   | Json ->
-      print_string (Oi.Error.to_json (error_of_exn exn));
+      Logs_progress.interject (fun () ->
+          print_string (Oi.Error.to_json (error_of_exn exn)));
       exit (Oi.Error.code (error_of_exn exn))
   | Text ->
-      Fmt.epr "%a@." pp_one_exn exn;
+      eprintf "%a" pp_one_exn exn;
       exit (Oi.Error.code (error_of_exn exn))
 
 let with_error_handling f =
   try f () with
   | exn when is_interrupt exn ->
-      Fmt.epr "Interrupted.@.";
+      eprintf "Interrupted.";
       exit 130
   | Eio.Exn.Multiple exns when List.exists (fun (e, _) -> is_interrupt e) exns
     ->
-      Fmt.epr "Interrupted.@.";
+      eprintf "Interrupted.";
       exit 130
   | (Oi.Error.E _ | Failure _) as exn -> exit_for_exn exn
   | Eio.Exn.Multiple exns -> (
@@ -92,7 +105,7 @@ let with_error_handling f =
           in
           exit_for_exn exn
       | Text ->
-          List.iter (fun (e, _bt) -> Fmt.epr "%a@." pp_one_exn e) exns;
+          List.iter (fun (e, _bt) -> eprintf "%a" pp_one_exn e) exns;
           exit 1)
 
 (* Forced to the POSIX backend rather than [Eio_main.run] so builds under

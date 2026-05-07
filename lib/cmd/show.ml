@@ -434,7 +434,7 @@ let render_state =
     in
     (label, bins)
 
-(* Walk [<reporepo>/v1/<handle>/packages/<name>/<name.version>/] to
+(* Walk [<reporepo>/v2/<handle>/packages/<name>/<name.version>/] to
    enumerate every package the overlay declares, then cross-reference
    the d10 index for cached layers + binaries. One row per
    (package, latest-version): cached packages show their binaries;
@@ -608,7 +608,8 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
 
 let cmd =
   let run (c : Terms.common) refresh skip_local registry toolchain_override
-      targets with_repos with_deps tree only_depexts os_override show_all =
+      targets with_repos with_deps tree plan_view summary only_depexts
+      os_override show_all =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr = _proc_mgr;
@@ -769,9 +770,33 @@ let cmd =
     in
     let url_names = List.map OpamPackage.Name.of_string url_project.roots in
     let project_dep_names = List.map OpamPackage.Name.of_string project_deps in
+    (* [pkg.version] is a common shorthand at the CLI ("show me uchar
+       at exactly 0.0.2"). Split each [TARGET] via [parse_pkg_target]
+       so a dotted name routes its version into [extra_constraints],
+       leaving [names] as the bare package names the solver expects.
+       Bare names ([uchar]) come back as [(name, None)] and pass
+       through unchanged. *)
+    let target_names, target_constraints =
+      List.fold_left
+        (fun (names, cs) s ->
+          let name, vc = Target.parse_pkg_target s in
+          let cs =
+            match vc with
+            | None -> cs
+            | Some vc -> OpamPackage.Name.Map.add name vc cs
+          in
+          (name :: names, cs))
+        ([], OpamPackage.Name.Map.empty)
+        targets
+    in
+    let target_names = List.rev target_names in
+    let extra_constraints =
+      OpamPackage.Name.Map.union
+        (fun existing _ -> existing)
+        extra_constraints target_constraints
+    in
     let names =
-      List.map OpamPackage.Name.of_string targets
-      @ project_dep_names @ extra_names @ url_names
+      target_names @ project_dep_names @ extra_names @ url_names
       |> Oi.Pipeline.strip_compiler_roots_for_override
            ~override:toolchain_override ~toolchain
     in
@@ -952,14 +977,78 @@ let cmd =
         render_json_plan ();
         exit 0
     | Text -> ());
-    if tree then begin
+    (* Default view selection.
+
+       The user-visible defaults are:
+         no flag         → tree (this is the most useful skim view)
+         --plan          → verbose per-package plan
+         --summary       → metadata + depexts (the historical default)
+         --only-depexts  → bare depext list (script-friendly)
+         --tree          → tree (explicit; same as no flag)
+
+       [only_depexts] and [show_all] are higher-precedence than the
+       view picker — they suppress everything else. *)
+    let view =
+      if only_depexts || show_all then `Existing
+      else if plan_view then `Plan
+      else if summary then `Summary
+      else `Tree (* default *)
+    in
+    let _ = tree in
+    if view = `Plan then begin
       let plan =
         Oi.Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
           ~ocaml_version:conf.ocaml_version action_plan
       in
       Fmt.pr "%a@." Oi.Plan.pp plan
     end
-    else
+    else if view = `Tree then begin
+      (* Render the action graph as a Unicode dep tree. The graph
+         keys nodes by [OpamPackage.Name.t]; we follow [n.deps] for
+         children and use [layer_hash] as the dedup key (so two
+         identical packages from different solve groups collapse to
+         one back-reference). Roots are nodes with no in-plan
+         consumer. *)
+      let nodes = Oi.Plan.nodes action_plan in
+      let by_name =
+        let h = Hashtbl.create 64 in
+        List.iter
+          (fun (n : Oi.Plan.node) ->
+            Hashtbl.replace h (OpamPackage.name n.pkg) n)
+          nodes;
+        h
+      in
+      let consumed = Hashtbl.create 64 in
+      List.iter
+        (fun (n : Oi.Plan.node) ->
+          List.iter (fun d -> Hashtbl.replace consumed d ()) n.deps)
+        nodes;
+      let roots =
+        List.filter
+          (fun (n : Oi.Plan.node) ->
+            not (Hashtbl.mem consumed (OpamPackage.name n.pkg)))
+          nodes
+      in
+      let label_first (n : Oi.Plan.node) =
+        let h = n.layer_hash in
+        let short = if String.length h > 12 then String.sub h 0 12 else h in
+        Fmt.str "%s  %s" (OpamPackage.to_string n.pkg) short
+      in
+      let label_ref (n : Oi.Plan.node) =
+        OpamPackage.to_string n.pkg
+      in
+      let key_of (n : Oi.Plan.node) = n.layer_hash in
+      let children (n : Oi.Plan.node) =
+        List.filter_map (fun d -> Hashtbl.find_opt by_name d) n.deps
+      in
+      Fmt.pr "%a@.@." Oi.Style.header_string "Dependency tree";
+      Oi.Dep_tree.render ~label_first ~label_ref ~key_of ~children roots;
+      Fmt.pr "@.%d packages, %d root(s); \u{21B0} marks a \
+              back-reference to a layer expanded earlier in the tree@."
+        (List.length nodes) (List.length roots)
+    end
+    else (* `Existing or `Summary — both fall through to the original
+            metadata + depexts listing. *)
       let all_depexts, dep_status =
         show_depexts ~ctx ~packages_dirs ~action_plan ~os_override
       in
@@ -1015,7 +1104,34 @@ let cmd =
   let tree =
     Arg.(
       value & flag
-      & info ~doc:"Print the full per-package build plan." [ "tree" ])
+      & info
+          ~doc:
+            "Render the dependency graph as a Unicode tree. Each layer is \
+             shown once at its first occurrence (with its short layer hash); \
+             subsequent visits are dim back-references prefixed with \
+             $(b,\u{21B0})."
+          [ "tree"; "graph" ])
+  in
+  let plan_view =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Print the full per-package build plan: layer hashes, source \
+             URLs, and resolved build / install commands. Several screens \
+             of output for a non-trivial target."
+          [ "plan"; "details" ])
+  in
+  let summary =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Print the metadata + depexts summary (target version, package \
+             counts, depexts with missing ones marked, pinned overlays). \
+             This was the historical default before $(b,--tree) became the \
+             default view."
+          [ "summary"; "meta" ])
   in
   let only_depexts =
     Arg.(
@@ -1061,12 +1177,20 @@ let cmd =
           `S "MODES";
           `I
             ( "(default)",
-              "Metadata, package counts, binaries, depexts (with missing ones \
-               marked), pinned overlays." );
+              "Dependency graph as a Unicode tree (deduplicated; back-refs \
+               marked with $(b,\u{21B0}))." );
           `I
             ( "$(b,--tree)",
+              "Same as the default — explicit form." );
+          `I
+            ( "$(b,--summary)",
+              "Metadata, package counts, binaries, depexts (with missing \
+               ones marked), pinned overlays. Was the default in earlier \
+               oi versions." );
+          `I
+            ( "$(b,--plan)",
               "Full per-package build plan: layer hashes, source URLs, \
-               build/install commands." );
+               resolved build/install commands." );
           `I
             ( "$(b,--only-depexts)",
               "Depexts only, one per line. Pipe to a package manager." );
@@ -1092,7 +1216,8 @@ let cmd =
     Term.(
       const run $ Terms.common $ Terms.refresh $ Terms.skip_local
       $ Terms.registry $ Terms.toolchain $ targets $ Terms.with_repos
-      $ Terms.with_deps $ tree $ only_depexts $ os_override $ show_all)
+      $ Terms.with_deps $ tree $ plan_view $ summary $ only_depexts
+      $ os_override $ show_all)
 
 (* -- env ----------------------------------------------------------------- *)
 
