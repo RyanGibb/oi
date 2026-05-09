@@ -623,7 +623,7 @@ let cmd =
   let run (c : Terms.common) refresh locked skip_local dry_run all only skip
       registry use_registry with_repos with_deps jobs toolchain_override
       depext_only export envrc_mode deps_only archives_only every_version
-      targets =
+      save_d10ir targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -1601,7 +1601,7 @@ let cmd =
         let merged_pkgs = solution_pkgs in
         let group_ctx =
           Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkg_dirs
-            ~conf:group_conf ?toolchain:tc_ctx ()
+            ~conf:group_conf ?toolchain:tc_ctx ~reporter:ui_reporter ()
         in
         let sorted_pkgs =
           Oi.Solver.topo_sort ~packages_dirs:pkg_dirs
@@ -1920,6 +1920,31 @@ let cmd =
                       ~cli_invocation:(Array.to_list Sys.argv)
                       ~toolchain_name ~toolchain_layer exec_plan
                   in
+                  (match save_d10ir with
+                  | None -> ()
+                  | Some dir ->
+                      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+                        Eio.Path.(fs / dir);
+                      let stem =
+                        match group_targets_list with
+                        | t :: _ ->
+                            String.map
+                              (fun c ->
+                                if (c >= 'a' && c <= 'z')
+                                   || (c >= 'A' && c <= 'Z')
+                                   || (c >= '0' && c <= '9')
+                                   || c = '.' || c = '-' || c = '_'
+                                then c
+                                else '_')
+                              t
+                        | [] -> "recipe"
+                      in
+                      let dst =
+                        Filename.concat dir (stem ^ ".d10ir.json")
+                      in
+                      D10ir.Plan.save Eio.Path.(fs / dst) recipe;
+                      Logs.info (fun m ->
+                          m "Saved d10ir recipe to %s" dst));
                   (* Pre-fetch archives from the configured registry
                      (and fall back to inline bake against upstream
                      URLs if the registry doesn't have them) so
@@ -2282,6 +2307,19 @@ let cmd =
              still filter overlays."
           [ "every-version" ])
   in
+  let save_d10ir =
+    Arg.(
+      value
+      & opt (some string) None
+      & info ~docv:"DIR"
+          ~doc:
+            "Save the d10ir recipe(s) generated for each solve group into \
+             $(b,DIR) alongside running the build. One $(b,<root-pkg>.d10ir.json) \
+             file is written per group; for $(b,@HANDLE) / $(b,--all) builds \
+             that produces multiple recipes. Unlike $(b,oi ir bake), this \
+             does not skip the build."
+          [ "save-d10ir" ])
+  in
   let info =
     Cmd.info "build" ~doc:"Build a project, package, overlay, or every overlay"
       ~man:
@@ -2326,7 +2364,7 @@ let cmd =
       $ dry_run $ all $ only $ skip $ Terms.registry $ Terms.use_registry
       $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
       $ depext_only $ export $ Sync.envrc_mode_arg $ deps_only $ archives_only
-      $ every_version $ targets)
+      $ every_version $ save_d10ir $ targets)
 
 (* -- oi test ------------------------------------------------------------ *)
 

@@ -405,18 +405,27 @@ module Ctx = struct
       { sc with env }
     in
     OpamStateConfig.update ~root_dir:root ();
-    let all_opams =
+    let n_dirs = List.length packages_dirs in
+    reporter.Build_progress.event
+      (Aggregate { phase = Solving; total = n_dirs; current = 0 });
+    let all_opams, _ =
       List.fold_left
-        (fun acc dir ->
-          OpamPackage.Map.union (fun a _ -> a) acc (load_opams_from_dir dir))
-        OpamPackage.Map.empty packages_dirs
+        (fun (acc, idx) dir ->
+          let acc' =
+            OpamPackage.Map.union (fun a _ -> a) acc (load_opams_from_dir dir)
+          in
+          let idx' = idx + 1 in
+          reporter.Build_progress.event
+            (Aggregate { phase = Solving; total = n_dirs; current = idx' });
+          (acc', idx'))
+        (OpamPackage.Map.empty, 0) packages_dirs
     in
     let all_packages = OpamPackage.keys all_opams in
     reporter.Build_progress.event
       (Status
          (Fmt.str "Loaded %d packages from %d source(s)"
             (OpamPackage.Set.cardinal all_packages)
-            (List.length packages_dirs)));
+            n_dirs));
     let global_variables =
       let open OpamTypes in
       let var s value desc =

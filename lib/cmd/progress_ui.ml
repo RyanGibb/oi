@@ -501,13 +501,25 @@ type state = {
   fetches : (string, int64) Hashtbl.t;  (* keyed by Fetch_* key, value=bytes *)
   fetch_sizes : (string, int64) Hashtbl.t;  (* declared total per Fetch_* key *)
   fetch_rows : (string, fetch_row) Hashtbl.t;  (* keyed by Fetch_* key *)
-  (* Per-phase counters. The displayed [N/T] is their sum so the bar
-     advances smoothly across the fetch → build boundary instead of
-     resetting. *)
+  (* Per-phase counters for the in-progress group. The displayed
+     [N/T] is the sum of these plus the [*_base] committed totals
+     from any groups that already finished (committed at
+     [Plan_done] for [oi build @overlay] / [oi build --all] which
+     run multiple solve groups back-to-back). The bar therefore
+     advances monotonically across both phase boundaries within a
+     group AND group boundaries — total only ever grows. *)
+  mutable solve_total : int;
+  mutable solve_done : int;
   mutable fetch_total : int;
   mutable fetch_done : int;
   mutable build_total : int;
   mutable build_done : int;
+  mutable solve_total_base : int;
+  mutable solve_done_base : int;
+  mutable fetch_total_base : int;
+  mutable fetch_done_base : int;
+  mutable build_total_base : int;
+  mutable build_done_base : int;
   mutable running : int;  (* in-flight fetches + in-flight builds *)
   mutable phase_label : string;
   mutable phase_id : string;  (* short phase tag, used to detect transitions *)
@@ -526,8 +538,33 @@ type state = {
   target_label : string;  (* user's target, set once at with_ui time *)
 }
 
-let total_of s = s.fetch_total + s.build_total
-let current_of s = s.fetch_done + s.build_done
+let total_of s =
+  s.solve_total_base + s.solve_total
+  + s.fetch_total_base + s.fetch_total
+  + s.build_total_base + s.build_total
+let current_of s =
+  s.solve_done_base + s.solve_done
+  + s.fetch_done_base + s.fetch_done
+  + s.build_done_base + s.build_done
+
+(* Commit the in-progress group's per-phase counts into the [*_base]
+   accumulators and zero the working slots. Called at the end of a
+   solve group (D10ir.Plan_done) so subsequent groups in [oi build
+   --all] / [oi build @overlay] don't replace the previous group's
+   numbers — they ADD on top. *)
+let commit_group s =
+  s.solve_total_base <- s.solve_total_base + s.solve_total;
+  s.solve_done_base <- s.solve_done_base + s.solve_done;
+  s.fetch_total_base <- s.fetch_total_base + s.fetch_total;
+  s.fetch_done_base <- s.fetch_done_base + s.fetch_done;
+  s.build_total_base <- s.build_total_base + s.build_total;
+  s.build_done_base <- s.build_done_base + s.build_done;
+  s.solve_total <- 0;
+  s.solve_done <- 0;
+  s.fetch_total <- 0;
+  s.fetch_done <- 0;
+  s.build_total <- 0;
+  s.build_done <- 0
 
 let with_lock s f = Mutex.protect s.mutex f
 
@@ -737,7 +774,14 @@ let handle_build_event s (e : D10ir.Direct.event) =
          so the user sees a single combined progress bar. *)
       if s.build_total = 0 then s.build_total <- total;
       push_agg s
-  | Plan_done _ | Node_queued _ -> ()
+  | Plan_done _ ->
+      (* End of this solve group's d10ir build. Commit per-phase
+         counters into the [*_base] accumulators so the bar's
+         denominator stays monotonic when the next group begins
+         under [oi build @overlay] / [oi build --all]. *)
+      commit_group s;
+      push_agg s
+  | Node_queued _ -> ()
   | Node_started { node } -> add_row s ~now node
   | Node_phase { node; phase } ->
       update_phase s ~now node (D10ir.Direct.phase_to_string phase)
@@ -823,13 +867,16 @@ let handle_event s (e : Oi.Build_progress.event) =
   | Aggregate { phase; current; total } ->
       with_lock s (fun () ->
           (match phase with
+           | Solving ->
+               s.solve_total <- total;
+               s.solve_done <- current
            | Fetching ->
                s.fetch_total <- total;
                s.fetch_done <- current
            | Building ->
                s.build_total <- total;
                s.build_done <- current
-           | Solving | Baking | Assembling -> ());
+           | Baking | Assembling -> ());
           push_agg s)
   | Fetch_started { key; pkg; size; _ } ->
       with_lock s (fun () ->
@@ -931,10 +978,18 @@ let with_ui ?(target = "") ~clock ~enabled f =
         fetches = Hashtbl.create 16;
         fetch_sizes = Hashtbl.create 16;
         fetch_rows = Hashtbl.create 16;
+        solve_total = 0;
+        solve_done = 0;
         fetch_total = 0;
         fetch_done = 0;
         build_total = 0;
         build_done = 0;
+        solve_total_base = 0;
+        solve_done_base = 0;
+        fetch_total_base = 0;
+        fetch_done_base = 0;
+        build_total_base = 0;
+        build_done_base = 0;
         running = 0;
         running_hist = Array.make agg_spark_w 0;
         (* Empty phase_label until the first [Phase_started] fires;

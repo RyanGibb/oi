@@ -162,6 +162,7 @@ val build :
   ?local_packages_dir:string ->
   ?reporter:Build_progress.reporter ->
   ?emit_recipe:string ->
+  ?save_recipe:string ->
   OpamPackage.Name.t list ->
   string list
 (** [build] solves for [names], ensures every needed layer exists (building from
@@ -186,6 +187,14 @@ val build :
     [<cache>/d10ir/archives/]; the recipe references them by relative
     path. Mutually exclusive with the build path — when [emit_recipe] is
     set, no layers are built.
+
+    [save_recipe] is the build-and-also-save companion: when set, the
+    recipe is serialised into the supplied directory before
+    [D10ir.Direct.run] takes over, with a filename derived from the
+    plan's first root package so multiple groups in an [oi build
+    --all] / [oi build @overlay] flow each leave a distinct recipe.
+    The build itself continues normally. Different from [emit_recipe]
+    which is mutually exclusive with the build.
 
     When [dry_run] is [true] the function prints the build plan and calls
     [Stdlib.exit 0] — same behaviour as [oi show]. *)

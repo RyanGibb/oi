@@ -3,7 +3,8 @@ open Cmdliner
 let ( / ) = Filename.concat
 
 let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
-    use_registry toolchain_override target with_deps with_repos jobs args =
+    use_registry toolchain_override target with_deps with_repos jobs save_d10ir
+    args =
   Harness.run @@ fun ~sw env ->
   let {
     Harness.proc_mgr;
@@ -276,8 +277,8 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
       Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
         ~session:http_session ~dry_run ~extra_repos:all_extras
         ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
-        ?toolchain ~constraints:extra_constraints ?local_packages_dir ~reporter
-        names
+        ?toolchain ~constraints:extra_constraints ?local_packages_dir
+        ?save_recipe:save_d10ir ~reporter names
     in
     Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
     let prefix =
@@ -385,7 +386,8 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
         Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
           ~os_key ~session:http_session ~dry_run ~extra_repos:all_extras
           ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
-          ?toolchain ~constraints ?local_packages_dir ~reporter dep_opam_names
+          ?toolchain ~constraints ?local_packages_dir ?save_recipe:save_d10ir
+          ~reporter dep_opam_names
     in
     if dry_run && dep_opam_names = [] then
       (* No deps to solve, but still in dry-run mode — just exit *)
@@ -615,6 +617,17 @@ let args =
     value & pos_right 0 string []
     & info ~docv:"ARG" ~doc:"Arguments passed through to $(b,TARGET)." [])
 
+let save_d10ir =
+  Arg.(
+    value
+    & opt (some string) None
+    & info ~docv:"DIR"
+        ~doc:
+          "Save the d10ir recipe generated for the solve into $(b,DIR) \
+           alongside running. A file $(b,<root-pkg>.d10ir.json) is written; \
+           does not skip the build."
+        [ "save-d10ir" ])
+
 let info_run =
   Cmd.info "run" ~doc:"Run an OCaml script or any opam-packaged binary"
     ~man:
@@ -771,7 +784,7 @@ let term ~skip_local =
   Term.(
     const run_impl $ Terms.common $ Terms.refresh $ Terms.locked $ skip_local
     $ dry_run $ Terms.registry $ Terms.use_registry $ Terms.toolchain $ target
-    $ Terms.with_deps $ Terms.with_repos $ Terms.jobs $ args)
+    $ Terms.with_deps $ Terms.with_repos $ Terms.jobs $ save_d10ir $ args)
 
 let cmd = Cmd.v info_run (term ~skip_local:Terms.skip_local)
 let cmd_x = Cmd.v info_oix (term ~skip_local:(Term.const true))

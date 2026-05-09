@@ -344,7 +344,8 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
     ?(dry_run = false) ?(extra_repos = []) ?(pins = []) ?(refresh = false)
     ?layer_remote ?source_remote ?jobs ?toolchain
     ?(constraints = OpamPackage.Name.Map.empty) ?project_root
-    ?local_packages_dir ?(reporter = Build_progress.null) ?emit_recipe names =
+    ?local_packages_dir ?(reporter = Build_progress.null) ?emit_recipe
+    ?save_recipe names =
   let phase ph label =
     reporter.Build_progress.event (Phase_started { phase = ph; label });
     Logs.info (fun m -> m "%s" label)
@@ -703,6 +704,19 @@ let build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key ~session
             ~cli_invocation:(Array.to_list Sys.argv)
             ~toolchain_name ~toolchain_layer exec_plan
         in
+        (match save_recipe with
+        | None -> ()
+        | Some dir ->
+            Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+              Eio.Path.(fs / dir);
+            let stem =
+              match names with
+              | [] -> "recipe"
+              | n :: _ -> OpamPackage.Name.to_string n
+            in
+            let dst = Filename.concat dir (stem ^ ".d10ir.json") in
+            D10ir.Plan.save Eio.Path.(fs / dst) recipe;
+            Logs.info (fun m -> m "Saved d10ir recipe to %s" dst));
         reporter.event (Plan_ready recipe);
         (* Pre-fetch every consolidated source archive the recipe
            references. By the time [D10ir.Direct.run] takes over, all
