@@ -328,8 +328,8 @@ let split_handle_targets ~with_repos ~with_deps targets =
 (* -- Main flow ---------------------------------------------------------- *)
 
 let cmd =
-  let run (c : Terms.common) refresh registry use_registry with_repos with_deps
-      _jobs toolchain_override targets output =
+  let run (c : Terms.common) refresh _registry _use_registry with_repos
+      with_deps _jobs toolchain_override targets output =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; sys; platform; cache; _ } =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
@@ -353,7 +353,6 @@ let cmd =
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / bundle_repo);
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-    let _ = Terms.remotes_of ~url:registry ~mode:use_registry in
     let conf =
       Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
     in

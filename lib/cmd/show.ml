@@ -28,15 +28,22 @@ let show_overlay_label ~with_repos =
   | h :: _ when not (Target.is_url_like h) -> Some ("@" ^ h)
   | _ -> None
 
-(* Split the action plan's nodes into (cached, source) counts. *)
-let show_counts action_plan =
+(* Split the elaborated plan's packages into (cached, source) counts. *)
+let show_counts (plan : Oi.Plan.t) =
   List.fold_left
-    (fun (c, s) (n : Oi.Plan.node) ->
-      match n.method_ with
+    (fun (c, s) (p : Oi.Plan.package_plan) ->
+      match p.method_ with
       | Oi.Identity.Binary -> (c + 1, s)
       | Source -> (c, s + 1))
-    (0, 0)
-    (Oi.Plan.nodes action_plan)
+    (0, 0) plan.packages
+
+let opam_pkg_of_package_plan (p : Oi.Plan.package_plan) =
+  match OpamPackage.of_string_opt p.pkg with
+  | Some op -> op
+  | None ->
+      OpamPackage.create
+        (OpamPackage.Name.of_string p.pkg)
+        (OpamPackage.Version.of_string "0")
 
 (* Compute the depexts declared by every package in the plan (both
    cached and source), along with the host installation status. The
@@ -44,16 +51,10 @@ let show_counts action_plan =
    answer for scripting use ("what would this need from apt if I were
    building from scratch?"). When [--os] is set the host check isn't
    meaningful and we return [None] for the status. *)
-let show_depexts ~ctx ~packages_dirs ~action_plan ~os_override =
-  let all_pkgs =
-    List.map (fun (n : Oi.Plan.node) -> n.pkg) (Oi.Plan.nodes action_plan)
-  in
+let show_depexts ~conf ~packages_dirs ~(plan : Oi.Plan.t) ~os_override =
+  let all_pkgs = List.map opam_pkg_of_package_plan plan.packages in
   let entries =
-    match os_override with
-    | None -> Oi.Depexts.compute ctx ~packages_dirs all_pkgs
-    | Some _ ->
-        let conf = Oi.Solver.Ctx.conf ctx in
-        Oi.Depexts.compute_for_conf ~conf ~packages_dirs all_pkgs
+    Oi.Depexts.compute_for_conf ~conf ~packages_dirs all_pkgs
   in
   let all =
     List.fold_left
@@ -98,24 +99,27 @@ let read_local_opams ~cwd =
    dependency, which is misleading). Anything else falls through to
    the first plan node as a last-ditch option. *)
 type show_meta_source =
-  | From_node of Oi.Plan.node
+  | From_pkg of Oi.Plan.package_plan
   | From_project_opams of (OpamPackage.t * OpamFile.OPAM.t) list
 
-let show_primary_meta ~action_plan ~targets ~project_deps ~cwd =
+let show_primary_meta ~(plan : Oi.Plan.t) ~targets ~project_deps ~cwd =
   let find_name name =
-    try Some (Oi.Plan.find_node action_plan (OpamPackage.Name.of_string name))
-    with _ -> None
+    List.find_opt
+      (fun (p : Oi.Plan.package_plan) ->
+        let opam_pkg = opam_pkg_of_package_plan p in
+        OpamPackage.Name.to_string (OpamPackage.name opam_pkg) = name)
+      plan.packages
   in
   match targets with
   | first :: _ -> (
-      match find_name first with Some n -> Some (From_node n) | None -> None)
+      match find_name first with Some p -> Some (From_pkg p) | None -> None)
   | [] -> (
       match read_local_opams ~cwd with
       | _ :: _ as opams -> Some (From_project_opams opams)
       | [] -> (
           match project_deps with
           | first :: _ ->
-              Stdlib.Option.map (fun n -> From_node n) (find_name first)
+              Stdlib.Option.map (fun p -> From_pkg p) (find_name first)
           | [] -> None))
 
 (* Collapse a multi-line synopsis to its first line so the info page
@@ -439,6 +443,321 @@ let render_state =
    the d10 index for cached layers + binaries. One row per
    (package, latest-version): cached packages show their binaries;
    uncached ones show as "declared". *)
+(* Solve every root group that the overlay declares (or every package
+   it ships when [x-root-packages] is empty), elaborate each into an
+   exec plan, dedup the resulting [package_plan]s by layer hash, and
+   render the union as a Unicode dependency tree.
+
+   This is the [oi show @HANDLE] companion to [oi build @HANDLE]:
+   same solver inputs, same per-group elaboration, but no recipe
+   emission, no fetch, no build. We merge at the [Oi.Plan.t] level
+   rather than via [D10ir.Plan.merge] so the view includes every
+   layer the build would touch — including [Binary] cache hits, which
+   [Recipe_emitter.emit] strips because [D10ir.Direct.run] doesn't
+   need to rebuild them.
+
+   The dedup key is the layer hash, so a package like [uucp.17.0.0]
+   resolved into N distinct layer hashes across the overlay's roots
+   surfaces as N nodes (one per unique dep set), not one collapsed
+   row. That is the whole point of the merged view.
+
+   Per-group failures (solver errors etc.) are logged and the group
+   is dropped from the merge — partial output is more useful than no
+   output for a 50-root overlay where one root has a conflict. *)
+let show_merged_plan ~(harness : Harness.env) ~handle ~refresh =
+  let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache;
+        data_dir; http_session; _ } = harness in
+  let env : Oi.Build_pipeline.env =
+    {
+      proc_mgr;
+      fs;
+      clock;
+      sys;
+      os_key;
+      cache;
+      data_dir;
+      http_session;
+    }
+  in
+  let conf_host =
+    Oi.Pipeline.make_conf ~platform
+      ~ocaml_version:Workspace.ocaml_version
+  in
+  let req : Oi.Build_pipeline.request =
+    {
+      targets = [ Overlay_all handle ];
+      with_repos = [];
+      pins = [];
+      extra_repos = [];
+      constraints = OpamPackage.Name.Map.empty;
+      toolchain_override = None;
+      toolchain = None;
+      conf = conf_host;
+      local_packages_dir = None;
+      project_root = None;
+        force_source = false;
+      refresh;
+    }
+  in
+  let solved =
+    Progress_ui.with_ui ~target:("@" ^ handle)
+      ~clock:(clock :> _ Eio.Resource.t)
+      ~enabled:(Tty.is_tty ())
+    @@ fun ui_reporter ->
+    Oi.Build_pipeline.solve env ~reporter:ui_reporter req
+  in
+  (* Log per-group failures from the unified pipeline. *)
+  List.iter
+    (fun (gr : Oi.Build_pipeline.group_result) ->
+      match gr.error with
+      | Ok () -> ()
+      | Error e ->
+          let msg =
+            match e with
+            | Solve_failed { msg; _ } -> Fmt.str "solve: %s" msg
+            | Cycle _ -> "dependency cycle"
+            | Empty_after_strip -> "empty after toolchain strip"
+            | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
+            | Emit_failed { msg } -> Fmt.str "recipe emit: %s" msg
+          in
+          Logs.warn (fun m -> m "skip %s: %s" gr.group.label msg))
+    solved.groups;
+  let all_plans =
+    List.concat_map
+      (fun (gr : Oi.Build_pipeline.group_result) ->
+        match gr.exec_plan with
+        | Some p -> p.packages
+        | None -> [])
+      solved.groups
+  in
+  let n_groups_solved =
+    List.fold_left
+      (fun acc (gr : Oi.Build_pipeline.group_result) ->
+        if Result.is_ok gr.error then acc + 1 else acc)
+      0 solved.groups
+  in
+  if all_plans = [] then begin
+    Fmt.pr "No solvable groups for @%s.@." handle;
+    exit 1
+  end;
+  (* Dedup [package_plan]s by layer hash. Same hash from different
+     groups → same logical node; first occurrence wins (preserves the
+     overlay attribution we'd otherwise lose). *)
+  let by_hash : (string, Oi.Plan.package_plan) Hashtbl.t =
+    Hashtbl.create 1024
+  in
+  List.iter
+    (fun (p : Oi.Plan.package_plan) ->
+      if not (Hashtbl.mem by_hash p.layer_hash) then
+        Hashtbl.add by_hash p.layer_hash p)
+    all_plans;
+  (* Roots: layer hashes that are not depended on by any other
+     package_plan in the merged view. *)
+  let dep_set = Hashtbl.create 1024 in
+  Hashtbl.iter
+    (fun _ (p : Oi.Plan.package_plan) ->
+      List.iter
+        (fun (d : Oi.Identity.dep) -> Hashtbl.replace dep_set d.hash ())
+        p.dep_layers)
+    by_hash;
+  let roots =
+    Hashtbl.fold
+      (fun h p acc ->
+        if Hashtbl.mem dep_set h then acc else p :: acc)
+      by_hash []
+    |> List.sort (fun (a : Oi.Plan.package_plan) b ->
+           String.compare a.pkg b.pkg)
+  in
+  let short_hash h =
+    if String.length h > 12 then String.sub h 0 12 else h
+  in
+  let label_first (p : Oi.Plan.package_plan) =
+    let tag = match p.method_ with Source -> "" | Binary -> " [cached]" in
+    Fmt.str "%s  %s%s" p.pkg (short_hash p.layer_hash) tag
+  in
+  let label_ref (p : Oi.Plan.package_plan) = p.pkg in
+  let key_of (p : Oi.Plan.package_plan) = p.layer_hash in
+  let children (p : Oi.Plan.package_plan) =
+    List.filter_map
+      (fun (d : Oi.Identity.dep) -> Hashtbl.find_opt by_hash d.hash)
+      p.dep_layers
+  in
+  Fmt.pr "%a@.@." Oi.Style.header_string
+    (Fmt.str "Merged plan for @%s on %s" handle os_key);
+  Oi.Dep_tree.render ~label_first ~label_ref ~key_of ~children roots;
+  let n_layers = Hashtbl.length by_hash in
+  let n_source =
+    Hashtbl.fold
+      (fun _ (p : Oi.Plan.package_plan) acc ->
+        if p.method_ = Oi.Identity.Source then acc + 1 else acc)
+      by_hash 0
+  in
+  let n_binary = n_layers - n_source in
+  Fmt.pr
+    "@.%d group(s) \u{2192} %d unique layer(s) (%d source, %d cached), \
+     %d root(s); \u{21B0} marks a back-reference to a layer expanded \
+     earlier@."
+    n_groups_solved n_layers n_source n_binary (List.length roots);
+  (* Divergence summary: any [name.version] that resolved to more
+     than one layer hash across the overlay's roots. The hash differs
+     because the transitive dep set differs (different version of a
+     grandchild, different patch set, etc.); for each variant we
+     show its consumers and the entries in [dep_layers] that diverge
+     between variants. *)
+  let variants_by_pkg : (string, Oi.Plan.package_plan) Hashtbl.t =
+    Hashtbl.create 64
+  in
+  Hashtbl.iter
+    (fun _ (p : Oi.Plan.package_plan) ->
+      Hashtbl.add variants_by_pkg p.pkg p)
+    by_hash;
+  let divergent =
+    Hashtbl.fold
+      (fun pkg () acc ->
+        let variants = Hashtbl.find_all variants_by_pkg pkg in
+        let unique_hashes =
+          List.map (fun (p : Oi.Plan.package_plan) -> p.layer_hash) variants
+          |> List.sort_uniq String.compare
+        in
+        if List.length unique_hashes > 1 then (pkg, variants) :: acc
+        else acc)
+      (let s = Hashtbl.create 64 in
+       Hashtbl.iter
+         (fun _ (p : Oi.Plan.package_plan) -> Hashtbl.replace s p.pkg ())
+         by_hash;
+       s)
+      []
+    |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+  in
+  if divergent = [] then ()
+  else begin
+    (* For each layer hash, find every consumer (a [package_plan] in
+       the merged set whose [dep_layers] references this hash). The
+       lookup is per-pair-of-hashes pricey if recomputed, so build it
+       once over [by_hash]. *)
+    let consumers_of : (string, Oi.Plan.package_plan list) Hashtbl.t =
+      Hashtbl.create 1024
+    in
+    Hashtbl.iter
+      (fun _ (p : Oi.Plan.package_plan) ->
+        List.iter
+          (fun (d : Oi.Identity.dep) ->
+            let prev =
+              Hashtbl.find_opt consumers_of d.hash |> Stdlib.Option.value ~default:[]
+            in
+            Hashtbl.replace consumers_of d.hash (p :: prev))
+          p.dep_layers)
+      by_hash;
+    let consumers_of_hash h =
+      Hashtbl.find_opt consumers_of h |> Stdlib.Option.value ~default:[]
+      |> List.sort (fun (a : Oi.Plan.package_plan) b ->
+             String.compare a.pkg b.pkg)
+    in
+    Fmt.pr "@.%a@.@." Oi.Style.header_string
+      (Fmt.str "Divergent layers (%d package%s with multiple variants)"
+         (List.length divergent)
+         (if List.length divergent = 1 then "" else "s"));
+    List.iter
+      (fun (pkg, variants) ->
+        let variants =
+          (* Sort variants by hash so the diff output is stable
+             across runs. *)
+          List.sort
+            (fun (a : Oi.Plan.package_plan) b ->
+              String.compare a.layer_hash b.layer_hash)
+            variants
+        in
+        Fmt.pr "%a (%d variants):@." Oi.Style.accent_string pkg
+          (List.length variants);
+        List.iter
+          (fun (v : Oi.Plan.package_plan) ->
+            let cons = consumers_of_hash v.layer_hash in
+            let cons_label =
+              match cons with
+              | [] -> "(root)"
+              | _ ->
+                  let names =
+                    List.map (fun (c : Oi.Plan.package_plan) -> c.pkg) cons
+                  in
+                  let max_inline = 6 in
+                  if List.length names <= max_inline then
+                    String.concat ", " names
+                  else
+                    let head, _ =
+                      List.fold_left
+                        (fun (acc, i) n ->
+                          if i < max_inline then (n :: acc, i + 1)
+                          else (acc, i + 1))
+                        ([], 0) names
+                    in
+                    Fmt.str "%s, +%d more"
+                      (String.concat ", " (List.rev head))
+                      (List.length names - max_inline)
+            in
+            Fmt.pr "  \u{25B8} %s [%s] used by %s@."
+              (short_hash v.layer_hash)
+              (Oi.Identity.method_to_string v.method_)
+              cons_label)
+          variants;
+        (* Pairwise dep diff between consecutive variants — for 2
+           variants this is the full diff; for N>2 it shows the chain
+           A→B, B→C, … which is enough to spot the changing axis
+           without N² output. *)
+        let dep_map (p : Oi.Plan.package_plan) =
+          let m = Hashtbl.create (List.length p.dep_layers) in
+          List.iter
+            (fun (d : Oi.Identity.dep) ->
+              Hashtbl.replace m (Oi.Identity.to_string d.id) d.hash)
+            p.dep_layers;
+          m
+        in
+        let rec diff_pairs = function
+          | [] | [ _ ] -> ()
+          | (a : Oi.Plan.package_plan)
+            :: ((b : Oi.Plan.package_plan) :: _ as rest) ->
+              let ma = dep_map a and mb = dep_map b in
+              let names =
+                let s = Hashtbl.create 32 in
+                Hashtbl.iter (fun k _ -> Hashtbl.replace s k ()) ma;
+                Hashtbl.iter (fun k _ -> Hashtbl.replace s k ()) mb;
+                Hashtbl.fold (fun k () acc -> k :: acc) s []
+                |> List.sort String.compare
+              in
+              let diffs =
+                List.filter_map
+                  (fun n ->
+                    let ah = Hashtbl.find_opt ma n in
+                    let bh = Hashtbl.find_opt mb n in
+                    match (ah, bh) with
+                    | Some x, Some y when String.equal x y -> None
+                    | _ -> Some (n, ah, bh))
+                  names
+              in
+              if diffs <> [] then begin
+                Fmt.pr "  dep diff %s vs %s:@." (short_hash a.layer_hash)
+                  (short_hash b.layer_hash);
+                List.iter
+                  (fun (n, ah, bh) ->
+                    match (ah, bh) with
+                    | Some x, Some y ->
+                        Fmt.pr "    %s: %s \u{2192} %s@." n (short_hash x)
+                          (short_hash y)
+                    | Some x, None ->
+                        Fmt.pr "    %s: %s \u{2192} (absent)@." n
+                          (short_hash x)
+                    | None, Some y ->
+                        Fmt.pr "    %s: (absent) \u{2192} %s@." n
+                          (short_hash y)
+                    | None, None -> ())
+                  diffs
+              end;
+              diff_pairs rest
+        in
+        diff_pairs variants;
+        Fmt.pr "@.")
+      divergent
+  end
+
 let show_overlay ~cache_root ~os_key ~handle =
   let reporepo = Terms.reporepo_path () in
   let pkgs_dir =
@@ -607,41 +926,38 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
   end
 
 let cmd =
-  let run (c : Terms.common) refresh skip_local registry toolchain_override
+  let run (c : Terms.common) refresh skip_local toolchain_override
       targets with_repos with_deps tree plan_view summary only_depexts
-      os_override show_all =
+      os_override show_all show_cache_listing =
     Harness.run @@ fun ~sw env ->
-    let {
-      Harness.proc_mgr = _proc_mgr;
-      fs;
-      clock;
-      sys;
-      platform;
-      os_key;
-      cache;
-      _;
-    } =
+    let harness =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
         c.cache_dir
     in
+    let { Harness.fs; clock; sys; platform; os_key; cache; _ } = harness in
     let data_dir = c.data_dir in
-    let _ = registry in
-    (* Cache-listing modes: [oi show --all] and [oi show @h] (bare
-       handle, no /pkg) bypass the solver and just walk
-       [<cache>/layers/<os_key>/]. They replace the old [oi registry
-       list]. *)
+    (* Bare [@HANDLE] dispatch:
+       - [--all]: walk every cached layer (handle-filtered).
+       - [--cache]: legacy overlay listing of declared / cached pkgs.
+       - default: solve every overlay root (or every package, if
+         [x-root-packages] is empty), merge the recipes, and print the
+         deduped layer-hash dependency tree. Same view that
+         [oi build @HANDLE] would execute. *)
     let bare_handle =
       match targets with [ t ] -> Target.bare_handle t | _ -> None
     in
     let cache_root = Oi.Cache.root_s cache in
-    (match (bare_handle, show_all) with
-    | Some handle, false ->
-        show_overlay ~cache_root ~os_key ~handle;
-        exit 0
-    | _, true ->
+    (match (bare_handle, show_all, show_cache_listing) with
+    | _, true, _ ->
         show_cache ~fs ~sys ~cache_root ~os_key ~handle:bare_handle;
         exit 0
-    | None, false -> ());
+    | Some handle, false, true ->
+        show_overlay ~cache_root ~os_key ~handle;
+        exit 0
+    | Some handle, false, false ->
+        show_merged_plan ~harness ~handle ~refresh;
+        exit 0
+    | None, false, _ -> ());
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
     let conf_host =
@@ -710,17 +1026,6 @@ let cmd =
       Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:false
         ~override:toolchain_override ~handles:tc_handles ()
     in
-    let conf, tc_ctx = Oi.Pipeline.solver_inputs toolchain conf in
-    (* Toolchain overlay's packages_dirs drive the consumer solve too:
-       when set, they REPLACE [get_packages_dirs] rather than stack
-       on top, otherwise the default flow would add [relocatable]
-       whose [ocaml-base-compiler.5.5.0] conflicts with the toolchain
-       pin. *)
-    let tc_pkg_dirs =
-      match toolchain with
-      | None -> None
-      | Some (info : Oi.Toolchain.info) -> Some info.packages_dirs
-    in
     let project_overlays =
       Oi.Pipeline.filter_compatible_overlays
         ~reporepo_path:(Terms.reporepo_path ()) ~toolchain project_overlays
@@ -730,26 +1035,10 @@ let cmd =
     let all_extras =
       Target.merge_extras ~cli:cli_extras ~project:project_extras
     in
-    let extra_pkg_dirs =
-      Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh all_extras
-    in
-    let pin_dir =
-      Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh project_pins
-    in
-    let base_pkg_dirs =
-      match tc_pkg_dirs with
-      | Some dirs -> dirs
-      | None -> Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ()
-    in
     let local_packages_dir =
       match project_packages_dir with
       | Some _ -> project_packages_dir
       | None -> url_project.packages_dir
-    in
-    let packages_dirs =
-      Stdlib.Option.to_list local_packages_dir
-      @ Stdlib.Option.to_list pin_dir
-      @ extra_pkg_dirs @ base_pkg_dirs
     in
     let extra_constraints = Oi.Project.Script.constraints extra_deps in
     let handle_constraints =
@@ -805,25 +1094,58 @@ let cmd =
         "oi show: nothing to show (no TARGET, no --with, and no *.opam files \
          in %s)"
         cwd_s;
-    let cache_root = Oi.Cache.root_s cache in
-    let build_prefix = cache_root / "build" / "prefix" in
-    let ctx =
-      Oi.Solver.Ctx.create ~prefix:build_prefix ~packages_dirs ~conf
-        ?toolchain:tc_ctx ()
+    (* Drive the solve through [Build_pipeline.solve] — same path as
+       [oi build TARGET] so target classification, toolchain pickup,
+       and pin/extra-repo handling match. The downstream rendering
+       below consumes [solved.groups[0].(pkgs, build_plan, pkgs_dir)]. *)
+    let pipeline_env : Oi.Build_pipeline.env =
+      {
+        proc_mgr = harness.proc_mgr;
+        fs;
+        clock;
+        sys;
+        os_key;
+        cache;
+        data_dir;
+        http_session = harness.http_session;
+      }
     in
-    let pkgs =
-      match
-        Oi.Solver.solve ~fs ~cache_root ctx ~packages_dirs
-          ~constraints:extra_constraints names
-      with
-      | Ok pkgs -> pkgs
-      | Error msg ->
-          (* "No known implementations at all" usually means the user
-             typed a name that isn't actually an opam package - a
-             common confusion when a project's display name differs
-             from its package name (e.g. "ocurrent" vs [current]).
-             Walk the packages_dirs for substring matches and include
-             them in the error so the fix is obvious. *)
+    let token_strs = List.map OpamPackage.Name.to_string names in
+    let req : Oi.Build_pipeline.request =
+      {
+        targets = [ Group { tokens = token_strs; handles = [] } ];
+        with_repos;
+        pins = project_pins;
+        extra_repos = all_extras;
+        constraints = extra_constraints;
+        toolchain_override;
+        toolchain;
+        conf;
+        local_packages_dir;
+        project_root = None;
+        force_source = false;
+        refresh;
+      }
+    in
+    let solve_label =
+      match targets with [] -> "." | xs -> String.concat " " xs
+    in
+    let solved =
+      Progress_ui.with_ui ~target:solve_label
+        ~clock:(clock :> _ Eio.Resource.t)
+        ~enabled:(Tty.is_tty ())
+      @@ fun ui_reporter ->
+      Oi.Build_pipeline.solve pipeline_env ~reporter:ui_reporter req
+    in
+    let group =
+      match solved.groups with
+      | [ gr ] -> gr
+      | _ -> Oi.Error.msg "oi show: unexpected solve group count"
+    in
+    let exec_plan =
+      match group.error with
+      | Error (Solve_failed { msg; _ }) ->
+          (* Same did-you-mean hint as the inline solver-error path. *)
           let contains ~needle s =
             let nl = String.length needle and sl = String.length s in
             if nl = 0 || nl > sl then false
@@ -835,31 +1157,24 @@ let cmd =
               in
               loop 0
           in
-          (* Bidirectional substring match: a package is a candidate if
-             either the typed target contains the package's name (e.g.
-             target="ocurrent" matches package "current") or the
-             package's name contains the typed target (e.g.
-             target="curr" matches "current"). Case-insensitive. Both
-             sides need at least four letters: shorter names (like
-             [re]) otherwise match as spurious fragments of unrelated
-             targets. *)
           let suggest_for target =
             let lower = String.lowercase_ascii target in
             if String.length lower < 4 then []
             else
               List.concat_map
-                (fun dir -> try Sys.readdir dir |> Array.to_list with _ -> [])
-                packages_dirs
+                (fun dir ->
+                  try Sys.readdir dir |> Array.to_list with _ -> [])
+                group.pkgs_dir
               |> List.sort_uniq String.compare
               |> List.filter (fun name ->
-                  let ln = String.lowercase_ascii name in
-                  String.length ln >= 4
-                  && ln <> lower
-                  && (contains ~needle:lower ln || contains ~needle:ln lower))
+                     let ln = String.lowercase_ascii name in
+                     String.length ln >= 4
+                     && ln <> lower
+                     && (contains ~needle:lower ln
+                        || contains ~needle:ln lower))
           in
           let extras =
-            targets
-            |> List.concat_map suggest_for
+            targets |> List.concat_map suggest_for
             |> List.sort_uniq String.compare
           in
           let hint =
@@ -876,24 +1191,31 @@ let cmd =
                   (if rest > 0 then Fmt.str " (+%d more)" rest else "")
           in
           Oi.Error.no_solution (msg ^ hint)
+      | Error (Cycle cycles) ->
+          Oi.Error.config_error
+            "dependency cycle in solved packages:@\n%a" Oi.Plan.pp_cycles
+            cycles
+      | Error (Empty_after_strip | Elaborate_failed _ | Emit_failed _) ->
+          Oi.Error.msg "oi show: solve produced no plan"
+      | Ok () -> (
+          match group.exec_plan with
+          | Some xp -> xp
+          | None -> Oi.Error.msg "oi show: empty solve result")
     in
-    let d10 =
-      Oi.Pipeline.make_d10 ~sys ~fs
-        ~clock:(clock :> D10.Config.clk)
-        ~cache ~os_key
-    in
-    let action_plan =
-      try Oi.Plan.of_solution ctx ~d10 ~packages_dirs pkgs
-      with Oi.Plan.Cycle cycles ->
-        Oi.Error.config_error "dependency cycle in solved packages:@\n%a"
-          Oi.Plan.pp_cycles cycles
-    in
-    let json_plan_node (n : Oi.Plan.node) =
-      let name = OpamPackage.Name.to_string (OpamPackage.name n.pkg) in
-      let version = OpamPackage.Version.to_string (OpamPackage.version n.pkg) in
-      let method_ = Oi.Identity.method_to_string n.method_ in
-      let deps = List.map OpamPackage.Name.to_string n.deps in
-      (name, version, method_, n.layer_hash, deps)
+    let packages_dirs = group.pkgs_dir in
+    let json_plan_node (p : Oi.Plan.package_plan) =
+      let opam_pkg = opam_pkg_of_package_plan p in
+      let name = OpamPackage.Name.to_string (OpamPackage.name opam_pkg) in
+      let version =
+        OpamPackage.Version.to_string (OpamPackage.version opam_pkg)
+      in
+      let method_ = Oi.Identity.method_to_string p.method_ in
+      let deps =
+        List.map
+          (fun (d : Oi.Identity.dep) -> d.id.name)
+          p.dep_layers
+      in
+      (name, version, method_, p.layer_hash, deps)
     in
     let json_node_codec =
       let open Jsont in
@@ -910,7 +1232,7 @@ let cmd =
     in
     let render_json_plan () =
       let all_depexts, _ =
-        show_depexts ~ctx ~packages_dirs ~action_plan ~os_override
+        show_depexts ~conf ~packages_dirs ~plan:exec_plan ~os_override
       in
       let depexts =
         OpamSysPkg.Set.fold
@@ -918,7 +1240,7 @@ let cmd =
           all_depexts []
         |> List.sort String.compare
       in
-      let nodes = List.map json_plan_node (Oi.Plan.nodes action_plan) in
+      let nodes = List.map json_plan_node exec_plan.packages in
       let target_label =
         match targets with
         | [] -> (
@@ -988,58 +1310,63 @@ let cmd =
 
        [only_depexts] and [show_all] are higher-precedence than the
        view picker — they suppress everything else. *)
+    (* [--tree] is the default, so the flag is accepted but never
+       branched on — present so users who explicitly type it get the
+       same behavior as the default. *)
+    let _ = tree in
     let view =
       if only_depexts || show_all then `Existing
       else if plan_view then `Plan
       else if summary then `Summary
-      else `Tree (* default *)
+      else `Tree
     in
-    let _ = tree in
     if view = `Plan then begin
-      let plan =
-        Oi.Plan.elaborate ctx ~packages_dirs ~cache_root ~os_key
-          ~ocaml_version:conf.ocaml_version action_plan
-      in
-      Fmt.pr "%a@." Oi.Plan.pp plan
+      match group.exec_plan with
+      | Some plan -> Fmt.pr "%a@." Oi.Plan.pp plan
+      | None -> Oi.Error.msg "oi show --plan: no exec plan available"
     end
     else if view = `Tree then begin
-      (* Render the action graph as a Unicode dep tree. The graph
-         keys nodes by [OpamPackage.Name.t]; we follow [n.deps] for
-         children and use [layer_hash] as the dedup key (so two
-         identical packages from different solve groups collapse to
-         one back-reference). Roots are nodes with no in-plan
-         consumer. *)
-      let nodes = Oi.Plan.nodes action_plan in
-      let by_name =
+      (* Render the elaborated plan as a Unicode dep tree. Each
+         [package_plan] keys by its layer_hash (so two identical
+         packages from different solve groups collapse to one
+         back-reference); children come from [dep_layers]. Roots
+         are package_plans whose layer_hash is no other plan's
+         dep. *)
+      let nodes = exec_plan.packages in
+      let by_hash =
         let h = Hashtbl.create 64 in
         List.iter
-          (fun (n : Oi.Plan.node) ->
-            Hashtbl.replace h (OpamPackage.name n.pkg) n)
+          (fun (p : Oi.Plan.package_plan) ->
+            if not (Hashtbl.mem h p.layer_hash) then
+              Hashtbl.add h p.layer_hash p)
           nodes;
         h
       in
       let consumed = Hashtbl.create 64 in
       List.iter
-        (fun (n : Oi.Plan.node) ->
-          List.iter (fun d -> Hashtbl.replace consumed d ()) n.deps)
+        (fun (p : Oi.Plan.package_plan) ->
+          List.iter
+            (fun (d : Oi.Identity.dep) ->
+              Hashtbl.replace consumed d.hash ())
+            p.dep_layers)
         nodes;
       let roots =
         List.filter
-          (fun (n : Oi.Plan.node) ->
-            not (Hashtbl.mem consumed (OpamPackage.name n.pkg)))
+          (fun (p : Oi.Plan.package_plan) ->
+            not (Hashtbl.mem consumed p.layer_hash))
           nodes
       in
-      let label_first (n : Oi.Plan.node) =
-        let h = n.layer_hash in
+      let label_first (p : Oi.Plan.package_plan) =
+        let h = p.layer_hash in
         let short = if String.length h > 12 then String.sub h 0 12 else h in
-        Fmt.str "%s  %s" (OpamPackage.to_string n.pkg) short
+        Fmt.str "%s  %s" p.pkg short
       in
-      let label_ref (n : Oi.Plan.node) =
-        OpamPackage.to_string n.pkg
-      in
-      let key_of (n : Oi.Plan.node) = n.layer_hash in
-      let children (n : Oi.Plan.node) =
-        List.filter_map (fun d -> Hashtbl.find_opt by_name d) n.deps
+      let label_ref (p : Oi.Plan.package_plan) = p.pkg in
+      let key_of (p : Oi.Plan.package_plan) = p.layer_hash in
+      let children (p : Oi.Plan.package_plan) =
+        List.filter_map
+          (fun (d : Oi.Identity.dep) -> Hashtbl.find_opt by_hash d.hash)
+          p.dep_layers
       in
       Fmt.pr "%a@.@." Oi.Style.header_string "Dependency tree";
       Oi.Dep_tree.render ~label_first ~label_ref ~key_of ~children roots;
@@ -1050,13 +1377,12 @@ let cmd =
     else (* `Existing or `Summary — both fall through to the original
             metadata + depexts listing. *)
       let all_depexts, dep_status =
-        show_depexts ~ctx ~packages_dirs ~action_plan ~os_override
+        show_depexts ~conf ~packages_dirs ~plan:exec_plan ~os_override
       in
       if only_depexts then
         (* Always print every depext, one per line, with no status
            marking. Intended for piping into a package manager; the
            caller handles which ones are already installed. *)
-        let _ = dep_status in
         OpamSysPkg.Set.iter
           (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
           all_depexts
@@ -1065,17 +1391,18 @@ let cmd =
           show_target_label ~targets ~local_packages:project_local_packages
         in
         let overlay = show_overlay_label ~with_repos in
-        let n_cached, n_source = show_counts action_plan in
+        let n_cached, n_source = show_counts exec_plan in
         let primary =
-          show_primary_meta ~action_plan ~targets ~project_deps ~cwd:cwd_s
+          show_primary_meta ~plan:exec_plan ~targets ~project_deps ~cwd:cwd_s
         in
         let target_version, target_opams, target_layer_hash =
           match primary with
           | None -> ("", [], None)
-          | Some (From_node n) ->
-              ( OpamPackage.Version.to_string (OpamPackage.version n.pkg),
-                [ (n.pkg, n.opam) ],
-                Some n.layer_hash )
+          | Some (From_pkg p) ->
+              let opam_pkg = opam_pkg_of_package_plan p in
+              ( OpamPackage.Version.to_string (OpamPackage.version opam_pkg),
+                [ (opam_pkg, p.opam) ],
+                Some p.layer_hash )
           | Some (From_project_opams pkgs) ->
               (* Project *.opam files rarely pin a real version;
                  "dev" isn't useful on a user-facing line, so we
@@ -1160,6 +1487,16 @@ let cmd =
              handle-scoped listing."
           [ "all" ])
   in
+  let show_cache_listing =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "With bare $(b,@HANDLE), list the overlay's declared / cached \
+             packages instead of the merged build plan. Without bare \
+             $(b,@HANDLE) this flag is ignored."
+          [ "cache" ])
+  in
   let info =
     Cmd.info "show" ~doc:"Summarise a package's build plan and depexts"
       ~man:
@@ -1171,9 +1508,13 @@ let cmd =
              fetched and no builds run.";
           `P "With no $(b,TARGET), reads $(b,*.opam) in the cwd.";
           `P
-            "Bare $(b,@HANDLE) lists every package the overlay declares, \
-             marking which are cached and what binaries they ship. $(b,--all) \
-             lists cached layers across the whole cache.";
+            "Bare $(b,@HANDLE) renders the merged build plan that \
+             $(b,oi build @HANDLE) would execute: every overlay root is \
+             solved, the per-group recipes are merged via \
+             $(b,d10ir) (deduped by layer hash), and the result prints \
+             as a Unicode dependency tree. $(b,--cache) falls back to \
+             the per-overlay package listing; $(b,--all) lists cached \
+             layers across the whole cache.";
           `S "MODES";
           `I
             ( "(default)",
@@ -1196,8 +1537,14 @@ let cmd =
               "Depexts only, one per line. Pipe to a package manager." );
           `I
             ( "Bare $(b,@HANDLE)",
-              "Listing of every package declared by the overlay, with cache \
-               state and known binaries." );
+              "Merged build plan for every overlay root, deduped by \
+               layer hash. Useful for spotting packages that resolve to \
+               multiple distinct layer hashes across the overlay's \
+               roots." );
+          `I
+            ( "Bare $(b,@HANDLE) $(b,--cache)",
+              "Per-overlay package listing (cache state and known \
+               binaries). The pre-merge default." );
           `I
             ( "$(b,--all)",
               "Cached layers across all overlays. Combine with bare \
@@ -1215,9 +1562,9 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.common $ Terms.refresh $ Terms.skip_local
-      $ Terms.registry $ Terms.toolchain $ targets $ Terms.with_repos
+      $ Terms.toolchain $ targets $ Terms.with_repos
       $ Terms.with_deps $ tree $ plan_view $ summary $ only_depexts
-      $ os_override $ show_all)
+      $ os_override $ show_all $ show_cache_listing)
 
 (* -- env ----------------------------------------------------------------- *)
 

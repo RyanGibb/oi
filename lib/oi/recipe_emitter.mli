@@ -14,14 +14,14 @@
     store; downstream nodes reference them via [dep_layer_hashes]. *)
 
 val emit :
-  proc_mgr:_ Eio.Process.mgr ->
-  fs:Eio.Fs.dir_ty Eio.Path.t ->
   d10:D10.Config.t ->
-  ?cache_urls:OpamUrl.t list ->
   ?cli_invocation:string list ->
   toolchain_name:string ->
   toolchain_layer:string ->
   Plan.t ->
   D10ir.Plan.t
-(** Uses [plan.cache_root] for source-prep state and writes archives
-    under [<d10.root>/d10ir/archives/]. *)
+(** Uses [d10.root] to resolve the recipe's [archive_root] (i.e.
+    [<d10.root>/d10ir/archives/]). The archives themselves are NOT
+    materialised here — that's [oi repo bake] / [oi repo bump]'s job;
+    the emitter reads each package's [x-d10-archive] sha and
+    references the archive by content hash. *)

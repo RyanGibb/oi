@@ -185,3 +185,20 @@ val find_node : t -> Layer_hash.t -> node option
 val producers_table : t -> (Layer_hash.t, node) Hashtbl.t
 (** Map from a node's [layer_hash] to the node, for O(1) producer
     lookup. *)
+
+val merge : t list -> (t, string) result
+(** [merge plans] folds a collection of plans into a single plan the
+    executor can schedule across as one unified DAG.
+
+    Nodes are deduplicated by [layer_hash] (if several input plans
+    share a transitive dep, only one copy survives). Roots and
+    mounts are union'd; mounts dedupe by [name]. Metadata's
+    [cli_invocation] is concatenated so the merged plan's audit
+    trail records every batched invocation.
+
+    Returns [Error msg] when the inputs disagree on any field that
+    must be globally consistent for the executor: schema version,
+    [os_key], [toolchain.base_layer], or [archive_root]. Two solve
+    groups built against different overlays or toolchains cannot
+    be merged this way; build them in separate runs. The empty
+    list also returns [Error]. *)

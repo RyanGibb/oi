@@ -35,7 +35,14 @@ type event =
            when [Fetch_started] couldn't supply it. *)
     }
   | Fetch_finished of { kind : fetch_kind; key : string }
+  | Solve_started of { label : string }
+  | Solve_finished of { label : string }
   | Plan_ready of D10ir.Plan.t
+  | Total_estimate of {
+      fetches : int;
+      builds : int;
+      fetch_bytes : int64;
+    }
   | Build of D10ir.Direct.event
   | Build_summary of D10ir.Direct.result
 

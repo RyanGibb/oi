@@ -138,9 +138,10 @@ let trim_to_latest ~all_versions rows key version =
 (* One row of search output. Same shape for [bin] and [pkg] kinds so the
    caller can print them in a single uniform table. *)
 type search_row = {
-  kind : [ `Bin | `Pkg ];
+  kind : [ `Bin | `Pkg | `Lib ];
   overlay : string; (* "@handle" or "-" *)
-  binary : string option; (* filled for [Bin]; [None] for [Pkg] *)
+  binary : string option; (* filled for [Bin]; [None] for [Pkg] / [Lib] *)
+  findlib : string option; (* filled for [Lib]; [None] otherwise *)
   pkg_name : string;
   pkg_version : string;
   state : state;
@@ -203,6 +204,7 @@ let cmd =
             kind = `Bin;
             overlay = overlay_of overlay;
             binary = Some bin;
+            findlib = None;
             pkg_name;
             pkg_version = pkg_ver;
             state = st;
@@ -219,12 +221,32 @@ let cmd =
             kind = `Pkg;
             overlay = overlay_of overlay;
             binary = None;
+            findlib = None;
             pkg_name;
             pkg_version = pkg_ver;
             state = st;
             hash = Some hash;
           })
         (D10.Index.search_package db ~pattern ~os_key)
+    in
+    (* Findlib (ocamlfind) matches from [layer_meta]. Lets the user
+       look up "what opam package installs ocamlfind library X" with
+       the same [oi search PATTERN] surface. *)
+    let lib_rows =
+      List.map
+        (fun (pkg_name, pkg_ver, hash, overlay) ->
+          let st = if D10.Layer.succeeded d10 ~hash then Local else Remote in
+          {
+            kind = `Lib;
+            overlay = overlay_of overlay;
+            binary = None;
+            findlib = Some pattern;
+            pkg_name;
+            pkg_version = pkg_ver;
+            state = st;
+            hash = Some hash;
+          })
+        (D10.Index.find_meta db ~findlib_pkg:pattern ~os_key)
     in
     (* Declared-package matches scanned from overlay clones. *)
     let pkg_declared_rows =
@@ -234,6 +256,7 @@ let cmd =
             kind = `Pkg;
             overlay = "@" ^ handle;
             binary = None;
+            findlib = None;
             pkg_name = name;
             pkg_version = version;
             state = Declared;
@@ -260,6 +283,7 @@ let cmd =
     let all_rows =
       filter_by_overlay bin_rows
       @ filter_by_overlay pkg_built_rows
+      @ filter_by_overlay lib_rows
       @ filter_by_overlay pkg_declared_rows
     in
     (* Collapse redundant rows for the same package: a locally built
@@ -290,12 +314,8 @@ let cmd =
     let sorted =
       List.sort
         (fun a b ->
-          let c =
-            match (a.kind, b.kind) with
-            | `Bin, `Pkg -> -1
-            | `Pkg, `Bin -> 1
-            | _ -> 0
-          in
+          let kind_rank = function `Bin -> 0 | `Lib -> 1 | `Pkg -> 2 in
+          let c = compare (kind_rank a.kind) (kind_rank b.kind) in
           if c <> 0 then c
           else
             let c = String.compare a.pkg_name b.pkg_name in
@@ -321,7 +341,11 @@ let cmd =
     in
     (match c.format with
     | Json ->
-        let kind_string = function `Bin -> "bin" | `Pkg -> "pkg" in
+        let kind_string = function
+          | `Bin -> "bin"
+          | `Lib -> "lib"
+          | `Pkg -> "pkg"
+        in
         let row_codec =
           let open Jsont in
           Object.map ~kind:"search_row"
@@ -373,11 +397,18 @@ let cmd =
     if sorted = [] then Fmt.pr "No matches for %s@." pattern
     else begin
       let row_spans r =
-        let kind_s = match r.kind with `Bin -> "bin" | `Pkg -> "pkg" in
+        let kind_s =
+          match r.kind with
+          | `Bin -> "bin"
+          | `Lib -> "lib"
+          | `Pkg -> "pkg"
+        in
         let nv =
-          match r.binary with
-          | Some b -> Fmt.str "%s (%s.%s)" b r.pkg_name r.pkg_version
-          | None -> Fmt.str "%s.%s" r.pkg_name r.pkg_version
+          match (r.binary, r.findlib) with
+          | Some b, _ -> Fmt.str "%s (%s.%s)" b r.pkg_name r.pkg_version
+          | None, Some lib ->
+              Fmt.str "%s (%s.%s)" lib r.pkg_name r.pkg_version
+          | None, None -> Fmt.str "%s.%s" r.pkg_name r.pkg_version
         in
         let state_style =
           match r.state with

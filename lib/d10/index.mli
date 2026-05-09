@@ -39,16 +39,42 @@ val close : db -> unit
 (** {1 Indexing} *)
 
 val rebuild :
-  Config.t -> ?overlay_for:(hash:string -> Overlay.t option) -> db -> unit
-(** [rebuild c ?overlay_for db] scans all layers under [<root>/layers/<os_key>/]
-    and populates the index tables. Existing data for [c.os_key] is replaced
-    atomically within a transaction. Each layer's [layer.json] is parsed for
-    metadata, and its [fs/] tree is scanned for file paths and binary names.
+  Config.t ->
+  ?overlay_for:(hash:string -> Overlay.t option) ->
+  ?include_files:bool ->
+  db ->
+  unit
+(** [rebuild c ?overlay_for ?include_files db] scans all layers under
+    [<root>/layers/<os_key>/] and populates the index tables. Existing data
+    for [c.os_key] is replaced atomically within a transaction. Each layer's
+    [layer.json] is parsed for metadata; its [fs/] tree is scanned for
+    binary names ([fs/bin/], [fs/sbin/]) and findlib package metadata
+    (every [fs/lib/<dir>/META] is parsed and its declared subpackages
+    recorded in [layer_meta]).
+
+    [include_files] (default [false]) controls whether the full file path
+    list lands in [layer_files]. The bin-index registry shape leaves this
+    off — the table is the bulk of [index.db]'s on-disk size and is only
+    needed by the layer-cache shape (where [oi build] verifies tarball
+    contents). [oi search] / [find_binary] / [find_meta] don't consult
+    [layer_files] and work with [include_files = false].
 
     [overlay_for] supplies the per-layer overlay attribution (defaulted to
     [fun ~hash:_ -> None]). The [oi] cache wires this to read from the layer's
     [provenance.json] sidecar; tools that don't care about overlay routing can
     leave it at the default. *)
+
+val record_tarball :
+  db ->
+  hash:string ->
+  sha256:string ->
+  size:int64 ->
+  unit
+(** [record_tarball db ~hash ~sha256 ~size] populates the
+    [tarball_sha256] / [tarball_size] columns on the [layers] row.
+    Called per-layer after the [.tar.zst] has been written to the
+    export dir. A row whose tarball columns are NULL belongs to a
+    bin-index registry — no layer restore is possible from there. *)
 
 (** {1 Queries} *)
 
@@ -91,6 +117,34 @@ val search_package :
     [(package_name, package_version, layer_hash, overlay)]. Pattern matching and
     the [overlay] field have the same semantics as {!search_binary}. Results are
     sorted by package name then opam version descending. *)
+
+val find_meta :
+  db ->
+  findlib_pkg:string ->
+  os_key:string ->
+  (string * string * string * Overlay.t option) list
+(** [find_meta db ~findlib_pkg ~os_key] returns layers whose findlib
+    metadata declares [findlib_pkg] (e.g. ["cohttp.async"]), as
+    [(package_name, package_version, layer_hash, overlay)] sorted by
+    opam version descending. Use [*] as a wildcard for substring search.
+    Reads the [layer_meta] table populated by {!rebuild}. *)
+
+val tarball_info :
+  db ->
+  hash:string ->
+  (string * int64) option
+(** [tarball_info db ~hash] returns [(sha256, size)] when the layer's
+    [.tar.zst] is published in this registry, or [None] for a bin-index
+    registry. Replaces the old [OINDEX.txt] sidecar lookup. *)
+
+val all_tarballs :
+  db ->
+  os_key:string ->
+  (string * string * int64) list
+(** [all_tarballs db ~os_key] returns [(hash, sha256, size)] for every
+    layer in [os_key] that has a published tarball. Empty list on a
+    bin-index registry. The cmdliner layer's [fetch_remote_index]
+    consumes this to populate {!Layer.remote_index}. *)
 
 val deps : db -> hash:string -> (string * string * string) list
 (** [deps db ~hash] returns the direct dependencies of a layer as

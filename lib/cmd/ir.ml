@@ -51,7 +51,7 @@ let opam_set_x_d10_archive ~path ~sha =
 
 (* ---- ir emit ---------------------------------------------------------- *)
 
-(* Mirrors the prep [oi run @handle/pkg] does before [Pipeline.build]: no
+(* Mirrors the prep [oi run @handle/pkg] does before [Build_pipeline.build]: no
    project mode, just resolve toolchain, materialise overlays, and call
    the pipeline with [emit_recipe] set. *)
 let emit_run (c : Terms.common) refresh registry use_registry with_repos
@@ -67,9 +67,11 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
   let conf =
     Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
-  let { Terms.layer_remote; source_remote } =
-    Terms.remotes_of ~url:registry ~mode:use_registry
-  in
+  (* [oi ir emit] is solver-only — no fetch / build phases run, so
+     the [Terms.layer_remote] / [source_remote] selection is unused
+     here. *)
+  let _ = registry in
+  let _ = use_registry in
   let extra_deps, url_project =
     Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
@@ -79,13 +81,12 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
   let targets, with_repos, target_pins =
     Target.extract_handle_pins ~with_repos [ target ]
   in
-  let with_deps_strs, with_repos, with_pins =
+  let _with_deps_strs, with_repos, with_pins =
     Target.extract_handle_pins ~with_repos
       (List.map (fun (d : Oi.Project.Script.dep) ->
            OpamPackage.Name.to_string d.name)
          extra_deps)
   in
-  ignore with_deps_strs;
   let handle_pins = target_pins @ with_pins in
   let tc_handles =
     Target.pin_handles handle_pins
@@ -114,12 +115,49 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
   in
   if names = [] then
     Oi.Error.config_error "oi ir emit: no target after pin extraction.";
-  let _ : string list =
-    Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-      ~session:http_session ~extra_repos:all_extras ~refresh ?layer_remote
-      ?source_remote ?toolchain ~constraints:extra_constraints
-      ~emit_recipe:out_dir names
+  let pipeline_env : Oi.Build_pipeline.env =
+    {
+      proc_mgr;
+      fs;
+      clock;
+      sys;
+      os_key;
+      cache;
+      data_dir;
+      http_session;
+    }
   in
+  let req : Oi.Build_pipeline.request =
+    {
+      targets = [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+      with_repos = [];
+      pins = [];
+      extra_repos = all_extras;
+      constraints = extra_constraints;
+      toolchain_override;
+      toolchain;
+      conf;
+      local_packages_dir = None;
+      project_root = None;
+      force_source = true;
+      refresh;
+    }
+  in
+  let solved = Oi.Build_pipeline.solve pipeline_env req in
+  (* Save each successful group's recipe. [oi ir emit] today only
+     takes one TARGET, so [solved.groups] has a single entry and the
+     loop writes one [recipe.json]. *)
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+    Eio.Path.(fs / out_dir);
+  List.iter
+    (fun (gr : Oi.Build_pipeline.group_result) ->
+      match gr.recipe with
+      | None -> ()
+      | Some recipe ->
+          let dst = Filename.concat out_dir "recipe.json" in
+          D10ir.Plan.save Eio.Path.(fs / dst) recipe;
+          Oi.Say.ok "emitted recipe to %s" dst)
+    solved.groups;
   0
 
 let emit_cmd =
@@ -207,6 +245,87 @@ let validate_cmd =
   in
   Cmd.v
     (Cmd.info "validate" ~doc:"Validate a d10ir recipe.")
+    term
+
+(* ---- ir merge --------------------------------------------------------- *)
+
+(* [load_recipe_file path] loads a [recipe.json] (or any file containing
+   a serialised d10ir plan) directly, without expecting a directory
+   layout. Used by [oi ir merge] which takes individual recipe files
+   produced by [oi build --save-d10ir=DIR]. *)
+let load_recipe_file path =
+  if not (Sys.file_exists path) then Fmt.failwith "no such file: %s" path;
+  let s =
+    let ic = open_in path in
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr ic)
+      (fun () ->
+        let n = in_channel_length ic in
+        really_input_string ic n)
+  in
+  match D10ir.Plan.of_string s with
+  | Ok plan -> plan
+  | Error e -> Fmt.failwith "decoding %s: %s" path e
+
+let merge_run (_ : Terms.common) inputs out =
+  let plans = List.map load_recipe_file inputs in
+  match D10ir.Plan.merge plans with
+  | Error msg ->
+      Oi.Say.error "%s" msg;
+      1
+  | Ok merged ->
+      Harness.run @@ fun ~sw:_ env ->
+      let fs = Eio.Stdenv.fs env in
+      D10ir.Plan.save Eio.Path.(fs / out) merged;
+      Oi.Say.ok "merged %d recipe(s) → %s (%d nodes, %d roots)"
+        (List.length inputs) out
+        (List.length merged.nodes)
+        (List.length merged.roots);
+      0
+
+let merge_cmd =
+  let inputs =
+    Arg.(
+      non_empty & pos_left ~rev:true 0 string []
+      & info ~docv:"RECIPE" ~doc:"Input d10ir recipe file paths." [])
+  in
+  let out =
+    Arg.(
+      required
+      & pos ~rev:true 0 (some string) None
+      & info ~docv:"OUT" ~doc:"Output path for the merged recipe." [])
+  in
+  let term =
+    Term.(
+      const (fun c ins out ->
+          let code = merge_run c ins out in
+          if code <> 0 then exit code)
+      $ Terms.common $ inputs $ out)
+  in
+  Cmd.v
+    (Cmd.info "merge"
+       ~doc:"Merge several d10ir recipes into one batched recipe."
+       ~man:
+         [
+           `S Cmdliner.Manpage.s_description;
+           `P
+             "$(b,oi ir merge) folds a collection of recipes (typically the \
+              per-group $(b,*.d10ir.json) files written by $(b,oi build \
+              --save-d10ir=DIR)) into a single batched recipe that the \
+              executor can schedule across as one unified DAG.";
+           `P
+             "Nodes are deduplicated by layer hash, so transitive deps \
+              shared across input plans are kept once. Roots are union'd \
+              (every input's roots remain reachable in the merged plan).";
+           `P
+             "Errors out when the inputs disagree on schema version, \
+              $(b,os_key), $(b,toolchain.base_layer), or $(b,archive_root) — \
+              recipes that target different toolchains or platforms cannot \
+              be batched in one run.";
+           `S Cmdliner.Manpage.s_examples;
+           `Pre
+             "  oi ir merge a.d10ir.json b.d10ir.json -o merged.d10ir.json";
+         ])
     term
 
 (* ---- ir show ---------------------------------------------------------- *)
@@ -349,7 +468,7 @@ let run_run (c : Terms.common) dir parallel keep_staging =
   (* Drive the unified [Progress_ui]: it materialises the recipe's
      dep tree on [Plan_ready] and renders per-node status updates as
      [D10ir.Direct] events arrive. We synthesise [Plan_ready]
-     ourselves since this command bypasses [Pipeline.build]. *)
+     ourselves since this command bypasses [Build_pipeline.build]. *)
   let result =
     Progress_ui.with_ui ~target:dir ~clock:(clock :> _ Eio.Resource.t)
       ~enabled:(Tty.is_tty ())
@@ -420,4 +539,4 @@ let cmd =
               what oi would build, and for validating that all archives and \
               dep layers are in place before kicking off a build.";
          ])
-    [ emit_cmd; run_cmd; validate_cmd; show_cmd ]
+    [ emit_cmd; run_cmd; validate_cmd; show_cmd; merge_cmd ]

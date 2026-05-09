@@ -13,7 +13,7 @@
 
     - {!Preflight} — overall-progress UI that owns the single [Progress.Display]
       active during [oi run] / [oi build]. Subsystems
-      ([Pipeline.fetch_remote_layers], [Execute.run]) attach their multi-bar
+      ([Build_pipeline.build], [Execute.run]) attach their multi-bar
       lines to the same display via [add_line] / [remove_line], so the overall
       bar above stays visible across phase transitions.
 
@@ -81,7 +81,7 @@ module Preflight : sig
       Owns one [Progress.Display] for the whole pipeline. Renders one persistent
       overall-bar line at the top in the form
       [⠼ <phase>                    │██████░░░░░░░░░░░░░░│ 6/18 (33%)]; inner
-      multi-bar phases ([Pipeline.fetch_remote_layers], [Execute.run]) attach
+      multi-bar phases ([Build_pipeline.build], [Execute.run]) attach
       their aggregate + per-row lines below it via [shared_display] /
       [Progress.Display.add_line] and remove them on completion, so the overall
       bar stays on screen the whole way through.
@@ -97,7 +97,7 @@ module Preflight : sig
       - [preflight_done ()] — finalise the display, freeing the screen for
         subsequent subprocess output (e.g. [dune build]).
       - [shared_display] — the live [Progress.Display] handle to thread through
-        to [Pipeline.build]'s [?shared_display]. [None] on non-TTY.
+        to [Build_pipeline.build]'s [?shared_display]. [None] on non-TTY.
 
       On non-TTY all hooks are no-ops; the callback still runs with the same
       plumbing so caller code stays unconditional. *)

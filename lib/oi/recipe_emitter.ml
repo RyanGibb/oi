@@ -126,29 +126,18 @@ let opam_file_sha256_of (p : Plan.package_plan) =
   | Some path -> Provenance.hash_opam_file ~path
   | None -> ""
 
-let archives_dir_of d10 =
-  Filename.concat
-    (Eio.Path.native_exn d10.D10.Config.root)
-    (Filename.concat "d10ir" "archives")
-
 (* Strict consumer of x-d10-archive: errors if the package's opam
    file doesn't carry the field, since the only path that should
-   populate it ([oi repo bump]) is solver-free and runs as part of
-   the reporepo workflow.
+   populate it ([oi repo bake] / [oi repo bump]) is solver-free
+   and runs as part of the reporepo workflow.
 
    Archive *presence* on disk is NOT verified here — the pipeline's
    pre-fetch step pulls missing archives from the configured registry
    before [D10ir.Direct.run] takes over. The Direct executor itself
    does no network I/O; if an archive is still missing post-prefetch,
    it errors at unpack time. *)
-let node_of_package_plan ~proc_mgr ~fs ~d10 ~cache_root ?cache_urls
-    (p : Plan.package_plan) : D10ir.Plan.node =
-  ignore proc_mgr;
-  ignore fs;
-  ignore d10;
-  ignore cache_urls;
-  ignore cache_root;
-  ignore archives_dir_of;
+let node_of_package_plan ~cache_root (p : Plan.package_plan) :
+    D10ir.Plan.node =
   let archive : D10ir.Archive.t =
     let handle_str =
       match p.overlay with Some o -> o.handle | None -> "<handle>"
@@ -255,8 +244,8 @@ let default_mounts () : D10ir.Plan.mount list =
     };
   ]
 
-let emit ~proc_mgr ~fs ~d10 ?cache_urls ?(cli_invocation = []) ~toolchain_name
-    ~toolchain_layer (plan : Plan.t) : D10ir.Plan.t =
+let emit ~d10 ?(cli_invocation = []) ~toolchain_name ~toolchain_layer
+    (plan : Plan.t) : D10ir.Plan.t =
   let cache_root = plan.cache_root in
   let nodes =
     List.filter_map
@@ -265,9 +254,7 @@ let emit ~proc_mgr ~fs ~d10 ?cache_urls ?(cli_invocation = []) ~toolchain_name
         | Identity.Binary ->
             Log.debug (fun m -> m "skipping binary package %s" p.pkg);
             None
-        | Source ->
-            Some
-              (node_of_package_plan ~proc_mgr ~fs ~d10 ~cache_root ?cache_urls p))
+        | Source -> Some (node_of_package_plan ~cache_root p))
       plan.packages
   in
   let roots =

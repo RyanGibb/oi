@@ -28,7 +28,14 @@ let schema =
     exit_status     INTEGER NOT NULL,
     created         REAL NOT NULL,
     overlay_handle  TEXT,
-    overlay_version TEXT
+    overlay_version TEXT,
+    -- [tarball_sha256] / [tarball_size] are populated when a [.tar.zst]
+    -- exists in the registry alongside this index. Both NULL on a
+    -- bin-index registry (lookup-only — no layer restore possible);
+    -- both set on a layer-cache registry. Replaces the old OINDEX.txt
+    -- sidecar so [index.db] is the single source of truth.
+    tarball_sha256  TEXT,
+    tarball_size    INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS layer_deps (
@@ -45,6 +52,24 @@ let schema =
     FOREIGN KEY (layer_hash) REFERENCES layers(hash)
   );
 
+  -- Ocamlfind package metadata. Populated for every [lib/<dir>/META]
+  -- file found in a layer. Lets [oi search] answer "what opam package
+  -- provides ocamlfind library X" without storing every file path.
+  -- Multiple rows per (layer_hash, package_dir) are possible because
+  -- META can declare nested subpackages.
+  CREATE TABLE IF NOT EXISTS layer_meta (
+    layer_hash      TEXT NOT NULL,
+    package_dir     TEXT NOT NULL, -- e.g. "cohttp" — the dir under lib/
+    findlib_pkg     TEXT NOT NULL, -- e.g. "cohttp.async"
+    archive         TEXT,          -- "cohttp_async.cma" / .cmxa, may be NULL
+    FOREIGN KEY (layer_hash) REFERENCES layers(hash)
+  );
+
+  -- Optional: file path index for [oi cache] / dependency-resolution
+  -- tools that need to know exactly what a layer ships. Populated only
+  -- when the registry is exported with [--with-layers] (the full
+  -- layer-cache mode). Skipped on a bin-index export to keep size
+  -- under a megabyte for typical tool sets.
   CREATE TABLE IF NOT EXISTS layer_files (
     layer_hash    TEXT NOT NULL,
     path          TEXT NOT NULL,
@@ -59,6 +84,8 @@ let schema =
   CREATE INDEX IF NOT EXISTS idx_binaries_name ON layer_binaries(binary_name);
   CREATE INDEX IF NOT EXISTS idx_deps_hash ON layer_deps(layer_hash);
   CREATE INDEX IF NOT EXISTS idx_files_hash ON layer_files(layer_hash);
+  CREATE INDEX IF NOT EXISTS idx_meta_findlib ON layer_meta(findlib_pkg);
+  CREATE INDEX IF NOT EXISTS idx_meta_hash ON layer_meta(layer_hash);
 |}
 
 let rec mkdir_p dir =
@@ -119,7 +146,147 @@ let parse_pkg_string s =
       OpamPackage.Version.to_string (OpamPackage.version pkg) )
   with Failure _ -> (s, "")
 
-let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None) db =
+(* Best-effort findlib META parser. Looks at the bytes of a META file
+   to extract:
+   - the top-level package name (= containing directory under lib/)
+   - any subpackages declared via [package "X" (...)]
+   - the [archive(byte)] / [archive(native)] string for each, when
+     present.
+
+   Doesn't try to evaluate the full findlib predicate algebra — that
+   would pull in [findlib]'s own parser. Good enough for [oi search]'s
+   "what opam package provides ocamlfind library X" question, which
+   only needs the name graph. Lines starting with [#] are comments;
+   sub-packages that span multiple lines are caught by a simple
+   brace counter. *)
+let parse_meta_file ~package_dir contents =
+  let len = String.length contents in
+  let acc = ref [] in
+  let push name archive =
+    acc := (name, archive) :: !acc
+  in
+  let rec skip_ws i =
+    if i >= len then i
+    else
+      match contents.[i] with
+      | ' ' | '\t' | '\n' | '\r' -> skip_ws (i + 1)
+      | '#' ->
+          let rec eol j =
+            if j >= len then j
+            else if contents.[j] = '\n' then j + 1
+            else eol (j + 1)
+          in
+          skip_ws (eol i)
+      | _ -> i
+  in
+  let read_quoted i =
+    if i >= len || contents.[i] <> '"' then None
+    else
+      let rec loop j buf =
+        if j >= len then None
+        else
+          match contents.[j] with
+          | '"' -> Some (Buffer.contents buf, j + 1)
+          | '\\' when j + 1 < len ->
+              Buffer.add_char buf contents.[j + 1];
+              loop (j + 2) buf
+          | c ->
+              Buffer.add_char buf c;
+              loop (j + 1) buf
+      in
+      loop (i + 1) (Buffer.create 16)
+  in
+  let starts_with p i =
+    i + String.length p <= len
+    && String.sub contents i (String.length p) = p
+  in
+  let read_archive_at i =
+    (* Match [archive(byte) = "X"] or [archive(native) = "X"] or
+       [archive = "X"]. Take the first match found in this scope. *)
+    let rec scan i =
+      if i >= len then None
+      else if starts_with "archive" i then
+        let j = skip_ws (i + 7) in
+        let j = if j < len && contents.[j] = '(' then
+          let rec close k = if k >= len || contents.[k] = ')' then k + 1 else close (k + 1) in
+          close j
+        else j in
+        let j = skip_ws j in
+        let j = if j < len && contents.[j] = '=' then j + 1 else j in
+        let j = skip_ws j in
+        match read_quoted j with
+        | Some (s, _) -> Some s
+        | None -> scan (i + 1)
+      else scan (i + 1)
+    in
+    scan i
+  in
+  let rec scan_top_level depth name_stack i =
+    if i >= len then ()
+    else
+      let i = skip_ws i in
+      if i >= len then ()
+      else if starts_with "package" i then begin
+        let j = skip_ws (i + 7) in
+        match read_quoted j with
+        | Some (subname, k) ->
+            (* Find the opening '(' *)
+            let k = skip_ws k in
+            if k < len && contents.[k] = '(' then begin
+              let archive = read_archive_at (k + 1) in
+              let new_name =
+                match name_stack with
+                | [] -> subname
+                | top :: _ -> top ^ "." ^ subname
+              in
+              push new_name archive;
+              scan_top_level (depth + 1) (new_name :: name_stack) (k + 1)
+            end
+            else scan_top_level depth name_stack (k + 1)
+        | None -> scan_top_level depth name_stack (i + 1)
+      end
+      else if i < len && contents.[i] = ')' then
+        scan_top_level (depth - 1)
+          (match name_stack with [] -> [] | _ :: t -> t)
+          (i + 1)
+      else scan_top_level depth name_stack (i + 1)
+  in
+  (* Top-level package = directory name *)
+  let archive = read_archive_at 0 in
+  push package_dir archive;
+  scan_top_level 0 [ package_dir ] 0;
+  List.rev !acc
+
+(* Walk [<fs_dir>/lib/<dir>/META] for every immediate subdir of lib/.
+   Returns [(package_dir, findlib_pkg, archive_opt)] triples. *)
+let scan_meta ~fs fs_dir =
+  let lib_dir = Eio.Path.(fs / fs_dir / "lib") in
+  if not (Sysops.file_exists lib_dir) then []
+  else
+    let entries =
+      try Eio.Path.read_dir lib_dir with Eio.Exn.Io _ -> []
+    in
+    List.concat_map
+      (fun pkg_dir ->
+        let meta_path = Eio.Path.(lib_dir / pkg_dir / "META") in
+        match
+          try
+            let st = Eio.Path.stat ~follow:false meta_path in
+            match st.kind with
+            | `Regular_file | `Symbolic_link ->
+                Some (Eio.Path.load meta_path)
+            | _ -> None
+          with Eio.Exn.Io _ -> None
+        with
+        | None -> []
+        | Some contents ->
+            parse_meta_file ~package_dir:pkg_dir contents
+            |> List.map (fun (findlib_pkg, archive) ->
+                   (pkg_dir, findlib_pkg, archive)))
+      entries
+
+let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
+    ?(include_files = false) db =
   let layers_dir = Eio.Path.(c.root / "layers" / c.os_key) in
   let os_key = c.os_key in
   if not (Sysops.file_exists layers_dir) then ()
@@ -128,21 +295,16 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None) db =
     let { Os_key.distro; os_version; arch; os } = parts in
     Log.info (fun m ->
         m "Indexing layers for %s (%s/%s/%s)" os_key distro arch os);
-    exec db
-      (Fmt.str
-         "DELETE FROM layer_files WHERE layer_hash IN (SELECT hash FROM layers \
-          WHERE os_key = %s)"
-         (quote os_key));
-    exec db
-      (Fmt.str
-         "DELETE FROM layer_binaries WHERE layer_hash IN (SELECT hash FROM \
-          layers WHERE os_key = %s)"
-         (quote os_key));
-    exec db
-      (Fmt.str
-         "DELETE FROM layer_deps WHERE layer_hash IN (SELECT hash FROM layers \
-          WHERE os_key = %s)"
-         (quote os_key));
+    let scoped table =
+      Fmt.str
+        "DELETE FROM %s WHERE layer_hash IN (SELECT hash FROM layers WHERE \
+         os_key = %s)"
+        table (quote os_key)
+    in
+    exec db (scoped "layer_files");
+    exec db (scoped "layer_binaries");
+    exec db (scoped "layer_deps");
+    exec db (scoped "layer_meta");
     exec db (Fmt.str "DELETE FROM layers WHERE os_key = %s" (quote os_key));
     let entries = Eio.Path.read_dir layers_dir in
     exec db "BEGIN TRANSACTION";
@@ -184,7 +346,11 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None) db =
                      (quote hash) (quote dep_name) (quote dep_version)
                      (quote dep_hash)))
               info.deps;
-            (* Scan files in fs/ *)
+            (* Scan files in fs/. Two passes: always extract
+               binaries + ocamlfind META metadata (small, the
+               primary 'what does this layer ship' answer); only
+               record the full file path list under
+               [include_files = true] (the layer-cache mode). *)
             let fs_dir = Eio.Path.(layers_dir / hash / "fs") in
             if Sysops.file_exists fs_dir then begin
               let files =
@@ -192,12 +358,12 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None) db =
               in
               List.iter
                 (fun path ->
-                  exec db
-                    (Fmt.str
-                       "INSERT INTO layer_files (layer_hash, path) VALUES (%s, \
-                        %s)"
-                       (quote hash) (quote path));
-                  (* Track binaries separately (bin/ and sbin/) *)
+                  if include_files then
+                    exec db
+                      (Fmt.str
+                         "INSERT INTO layer_files (layer_hash, path) VALUES \
+                          (%s, %s)"
+                         (quote hash) (quote path));
                   let bin_name =
                     if String.length path > 4 && String.sub path 0 4 = "bin/"
                     then Some (String.sub path 4 (String.length path - 4))
@@ -214,7 +380,27 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None) db =
                             binary_name) VALUES (%s, %s)"
                            (quote hash) (quote name)))
                     bin_name)
-                files
+                files;
+              (* Findlib META: record one row per (package_dir,
+                 findlib_pkg, archive) triple so [oi search ocamlfind:X]
+                 can map back to its opam producer. *)
+              let metas =
+                scan_meta ~fs:c.Config.fs (Eio.Path.native_exn fs_dir)
+              in
+              List.iter
+                (fun (package_dir, findlib_pkg, archive) ->
+                  let archive_q =
+                    match archive with
+                    | None -> "NULL"
+                    | Some a -> quote a
+                  in
+                  exec db
+                    (Fmt.str
+                       "INSERT INTO layer_meta (layer_hash, package_dir, \
+                        findlib_pkg, archive) VALUES (%s, %s, %s, %s)"
+                       (quote hash) (quote package_dir) (quote findlib_pkg)
+                       archive_q))
+                metas
             end)
       entries;
     exec db "COMMIT";
@@ -330,6 +516,66 @@ let search_binary db ~pattern ~os_key =
           (OpamPackage.Version.of_string v1))
     (List.rev !results)
 
+let find_meta db ~findlib_pkg ~os_key =
+  let results = ref [] in
+  let cb row =
+    match row with
+    | [| name; version; hash; oh; ov |] ->
+        results := (name, version, hash, overlay_of_cols oh ov) :: !results
+    | _ -> ()
+  in
+  let sql_pattern =
+    String.map (fun c -> if c = '*' then '%' else c) findlib_pkg
+  in
+  let op = if String.contains sql_pattern '%' then "LIKE" else "=" in
+  ignore
+    (Sqlite3.exec_not_null_no_headers db ~cb
+       (Fmt.str
+          "SELECT l.package_name, l.package_ver, l.hash, \
+           COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') \
+           FROM layer_meta m JOIN layers l ON m.layer_hash = l.hash WHERE \
+           m.findlib_pkg %s %s AND l.os_key = %s AND l.exit_status = 0"
+          op (quote sql_pattern) (quote os_key)));
+  List.sort
+    (fun (_, v1, _, _) (_, v2, _, _) ->
+      OpamPackage.Version.compare
+        (OpamPackage.Version.of_string v2)
+        (OpamPackage.Version.of_string v1))
+    (List.rev !results)
+
+let tarball_info db ~hash =
+  let result = ref None in
+  let cb row =
+    match row with
+    | [| sha; size_s |] -> (
+        try result := Some (sha, Int64.of_string size_s) with _ -> ())
+    | _ -> ()
+  in
+  ignore
+    (Sqlite3.exec_not_null_no_headers db ~cb
+       (Fmt.str
+          "SELECT tarball_sha256, tarball_size FROM layers WHERE hash = %s \
+           AND tarball_sha256 IS NOT NULL"
+          (quote hash)));
+  !result
+
+let all_tarballs db ~os_key =
+  let results = ref [] in
+  let cb row =
+    match row with
+    | [| hash; sha; size_s |] -> (
+        try results := (hash, sha, Int64.of_string size_s) :: !results
+        with _ -> ())
+    | _ -> ()
+  in
+  ignore
+    (Sqlite3.exec_not_null_no_headers db ~cb
+       (Fmt.str
+          "SELECT hash, tarball_sha256, tarball_size FROM layers WHERE \
+           os_key = %s AND tarball_sha256 IS NOT NULL"
+          (quote os_key)));
+  List.rev !results
+
 let deps db ~hash =
   let results = ref [] in
   let cb row =
@@ -393,6 +639,13 @@ let all_binaries db ~os_key =
 
 (* -- Stats ---------------------------------------------------------------- *)
 
+let record_tarball db ~hash ~sha256 ~size =
+  exec db
+    (Fmt.str
+       "UPDATE layers SET tarball_sha256 = %s, tarball_size = %Ld WHERE \
+        hash = %s"
+       (quote sha256) size (quote hash))
+
 let stats db ~os_key =
   let get_count sql =
     let stmt = Sqlite3.prepare db sql in
@@ -454,22 +707,61 @@ let delete_layers db ~hashes =
 
 (* -- Remote merge --------------------------------------------------------- *)
 
+(* Build the column-name intersection between a local table and the
+   same table in the attached "remote" schema, so a merge from an
+   older registry that lacks (e.g.) [tarball_sha256] still imports
+   the rows it does have. Uses [pragma_table_info] (the table-valued
+   variant) instead of [PRAGMA table_info] because the latter goes
+   through the [Sqlite3.exec_not_null_no_headers] callback, which
+   silently drops rows where any column is NULL — including PRAGMA's
+   own [dflt_value] column when no default is set, which is most
+   columns in our schema. *)
+(* Column names of [<schema>.<table>]. Uses [PRAGMA table_info]
+   driven through [Sqlite3.exec] (not [exec_not_null_no_headers] —
+   that variant silently drops rows whose [dflt_value] is NULL,
+   which is most of our columns). The [schema] qualifier lets us
+   inspect the attached "remote" database during a merge. *)
+let column_names db ~schema ~table =
+  let cols = ref [] in
+  let cb row _headers =
+    match row with
+    | [| _cid; Some name; _ty; _nn; _dflt; _pk |] ->
+        cols := name :: !cols
+    | _ -> ()
+  in
+  let sql =
+    if schema = "main" then Fmt.str "PRAGMA table_info(%s)" table
+    else Fmt.str "PRAGMA %s.table_info(%s)" schema table
+  in
+  ignore (Sqlite3.exec db ~cb sql);
+  List.rev !cols
+
+let copy_table_intersection db ~table ~where =
+  let local = column_names db ~schema:"main" ~table in
+  let remote = column_names db ~schema:"remote" ~table in
+  let common = List.filter (fun c -> List.mem c remote) local in
+  if local = [] || remote = [] || common = [] then ()
+  else
+    let cols = String.concat ", " common in
+    exec db
+      (Fmt.str "INSERT INTO %s (%s) SELECT %s FROM remote.%s WHERE %s" table
+         cols cols table where)
+
 let merge_remote db ~remote_path =
   exec db (Fmt.str "ATTACH DATABASE %s AS remote" (quote remote_path));
   exec db
     "CREATE TEMP TABLE _new_hashes AS SELECT hash FROM remote.layers WHERE \
      hash NOT IN (SELECT hash FROM main.layers)";
-  exec db
-    "INSERT INTO layers SELECT * FROM remote.layers WHERE hash IN (SELECT hash \
-     FROM _new_hashes)";
-  exec db
-    "INSERT INTO layer_deps SELECT * FROM remote.layer_deps WHERE layer_hash \
-     IN (SELECT hash FROM _new_hashes)";
-  exec db
-    "INSERT INTO layer_binaries SELECT * FROM remote.layer_binaries WHERE \
-     layer_hash IN (SELECT hash FROM _new_hashes)";
-  exec db
-    "INSERT INTO layer_files SELECT * FROM remote.layer_files WHERE layer_hash \
-     IN (SELECT hash FROM _new_hashes)";
+  copy_table_intersection db ~table:"layers"
+    ~where:"hash IN (SELECT hash FROM _new_hashes)";
+  let dep_where = "layer_hash IN (SELECT hash FROM _new_hashes)" in
+  copy_table_intersection db ~table:"layer_deps" ~where:dep_where;
+  copy_table_intersection db ~table:"layer_binaries" ~where:dep_where;
+  copy_table_intersection db ~table:"layer_meta" ~where:dep_where;
+  (* [layer_files] is dropped in the new index.db shape (it was
+     88% of the index size with no consumer in [oi search]).
+     Skip it on merge too — even if a remote registry was exported
+     by an older version that still wrote the table, importing it
+     locally just re-bloats the index for no gain. *)
   exec db "DROP TABLE _new_hashes";
   exec db "DETACH DATABASE remote"

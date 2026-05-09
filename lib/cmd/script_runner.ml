@@ -1,13 +1,13 @@
 let ( / ) = Filename.concat
 
 (* The [run.ml] caller has already built the [--with] deps via
-   [Pipeline.build] and assembled them into [prefix]. Here we read
+   [Build_pipeline.build] and assembled them into [prefix]. Here we read
    the script file's [[\@\@\@opam …]] header, build any *additional*
-   deps the script declares (re-running [Pipeline.build] with the
+   deps the script declares (re-running [Build_pipeline.build] with the
    merged dep set), reassemble a richer prefix, then compile the
    script and exec.
 
-   All build paths inside this function go through [Pipeline.build],
+   All build paths inside this function go through [Build_pipeline.build],
    so the d10ir pipeline (Recipe_emitter → archive prefetch →
    D10ir.Direct.run) handles every layer build. *)
 let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
@@ -42,13 +42,43 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
       if dep_names = [] then prefix
       else begin
         Eio.Switch.run @@ fun sw ->
-        let session = D10.Sysops.Http.with_session ~sw sys (fun s -> s) in
-        let layer_hashes =
-          Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-            ~os_key ~session ?source_remote ?toolchain ~constraints dep_names
+        let http_session = D10.Sysops.Http.with_session ~sw sys (fun s -> s) in
+        let pipeline_env : Oi.Build_pipeline.env =
+          {
+            proc_mgr;
+            fs;
+            clock;
+            sys;
+            os_key;
+            cache;
+            data_dir;
+            http_session;
+          }
+        in
+        let req : Oi.Build_pipeline.request =
+          {
+            targets =
+              [ Group { tokens = List.map OpamPackage.Name.to_string dep_names; handles = [] } ];
+            with_repos = [];
+            pins = [];
+            extra_repos = [];
+            constraints;
+            toolchain_override = None;
+            toolchain;
+            conf;
+            local_packages_dir = None;
+            project_root = None;
+        force_source = false;
+            refresh = false;
+          }
+        in
+        let solved = Oi.Build_pipeline.solve pipeline_env req in
+        let _ : D10ir.Direct.result option =
+          Oi.Build_pipeline.build pipeline_env
+            { solved; layer_remote = None; source_remote; jobs = None }
         in
         Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key
-          ~layer_hashes
+          ~layer_hashes:(Oi.Build_pipeline.layer_hashes solved)
       end
     in
     let build_dir = run_dir_s in

@@ -75,15 +75,45 @@ let cmd =
             extra_cli
           @ List.map OpamPackage.Name.of_string url_project.roots
         in
-        let layer_hashes =
-          Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-            ~os_key ~session:http_session ~refresh ~extra_repos:extras
-            ~pins:url_project.pins ?jobs ?toolchain:tc_info
-            ~constraints:extra_constraints ~project_root:cwd_s
-            ?local_packages_dir:url_project.packages_dir
-            (OpamPackage.Name.of_string "ocaml" :: extra_names)
+        let pipeline_env : Oi.Build_pipeline.env =
+          {
+            proc_mgr;
+            fs;
+            clock;
+            sys;
+            os_key;
+            cache;
+            data_dir;
+            http_session;
+          }
         in
-        Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
+        let names =
+          "ocaml"
+          :: List.map OpamPackage.Name.to_string extra_names
+        in
+        let req : Oi.Build_pipeline.request =
+          {
+            targets = [ Group { tokens = names; handles = [] } ];
+            with_repos = [];
+            pins = url_project.pins;
+            extra_repos = extras;
+            constraints = extra_constraints;
+            toolchain_override = None;
+            toolchain = tc_info;
+            conf;
+            local_packages_dir = url_project.packages_dir;
+            project_root = Some cwd_s;
+        force_source = false;
+            refresh;
+          }
+        in
+        let solved = Oi.Build_pipeline.solve pipeline_env req in
+        let _ : D10ir.Direct.result option =
+          Oi.Build_pipeline.build pipeline_env
+            { solved; layer_remote = None; source_remote = None; jobs }
+        in
+        Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key
+          ~layer_hashes:(Oi.Build_pipeline.layer_hashes solved)
       end
     in
     let vars =

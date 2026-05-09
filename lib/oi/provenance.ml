@@ -201,9 +201,9 @@ let read_all ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root ~os_key =
   | hashes ->
       List.filter_map
         (fun hash ->
-          (* Skip files mixed in with the hash-named subdirs (e.g. the
-             OINDEX.txt manifest) — every real layer dir is a flat hex
-             string with no extension. *)
+          (* Skip files mixed in with the hash-named subdirs (e.g.
+             [.partial] sentinels or stale [.tmp] files) — every real
+             layer dir is a flat hex string with no extension. *)
           if String.contains hash '.' then None
           else read_one ~fs ~cache_root ~os_key ~hash)
         hashes

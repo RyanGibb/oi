@@ -152,91 +152,13 @@ type remote = [ `Http_remote of string ]
 
 (* -- Index --------------------------------------------------------------- *)
 
-(* OINDEX.txt format: one line per layer, sha256sum-compatible.
-   <sha256>  <hash>.tar.zst  <size_bytes>
-   The size field is informational (for future progress display). *)
-
 type index_entry = { sha256 : string; size : int64 }
 type remote_index = (string, index_entry) Hashtbl.t
 
-let parse_index contents =
-  let idx = Hashtbl.create 64 in
-  String.split_on_char '\n' contents
-  |> List.iter (fun line ->
-      let parts =
-        String.split_on_char ' ' line |> List.filter (fun s -> s <> "")
-      in
-      match parts with
-      | [ sha; filename; size_s ] | [ sha; filename; size_s; _ ] ->
-          if Filename.check_suffix filename ".tar.zst" then begin
-            let hash = Filename.chop_suffix filename ".tar.zst" in
-            let size = try Int64.of_string size_s with Failure _ -> 0L in
-            Hashtbl.replace idx hash { sha256 = sha; size }
-          end
-      | [ sha; filename ] ->
-          if Filename.check_suffix filename ".tar.zst" then begin
-            let hash = Filename.chop_suffix filename ".tar.zst" in
-            Hashtbl.replace idx hash { sha256 = sha; size = 0L }
-          end
-      | _ -> ());
-  idx
-
-let write_index ~dst os_key =
-  let os_dir = Eio.Path.(dst / os_key) in
-  let files = try Eio.Path.read_dir os_dir with Eio.Exn.Io _ -> [] in
-  let entries =
-    List.filter_map
-      (fun f ->
-        if Filename.check_suffix f ".tar.zst" then
-          let path = Eio.Path.native_exn Eio.Path.(os_dir / f) in
-          let sha256 =
-            OpamHash.contents (OpamHash.compute ~kind:`SHA256 path)
-          in
-          let size = (Unix.stat path).Unix.st_size |> Int64.of_int in
-          Some (sha256, f, size)
-        else None)
-      (List.sort String.compare files)
-  in
-  let content =
-    String.concat ""
-      (List.map
-         (fun (sha, f, size) -> Fmt.str "%s  %s  %Ld\n" sha f size)
-         entries)
-  in
-  Eio.Path.save ~create:(`Or_truncate 0o644)
-    Eio.Path.(os_dir / "OINDEX.txt")
-    content
-
-(* Process-wide memo for [OINDEX.txt] keyed by [(os_key, remote_url)].
-   The registry index doesn't change inside one CLI invocation, so an
-   [oi build --all] run that calls {!fetch_remote_index} once per
-   solve group can return the first result for every subsequent call —
-   no second HTTP round-trip per group. The first miss populates;
-   later hits skip the [Sysops.Http.fetch_session] entirely. Bounded
-   by the (usually-1) number of distinct registry URLs an oi run
-   targets. *)
-let index_cache : (string, remote_index) Hashtbl.t = Hashtbl.create 4
-
-let fetch_remote_index (c : Config.t) ~session ~remote =
-  let url =
-    match remote with
-    | `Http_remote base -> Fmt.str "%s/%s/OINDEX.txt" base c.os_key
-  in
-  match Hashtbl.find_opt index_cache url with
-  | Some cached -> cached
-  | None ->
-      let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
-      let tmp = Eio.Path.(os_layer_dir / "OINDEX.txt.tmp") in
-      let idx = Hashtbl.create 64 in
-      if Sysops.Http.fetch_session session ~url ~dst:tmp then begin
-        let contents = Eio.Path.load tmp in
-        let parsed = parse_index contents in
-        Hashtbl.iter (Hashtbl.replace idx) parsed;
-        try Eio.Path.unlink tmp with _ -> ()
-      end;
-      Hashtbl.replace index_cache url idx;
-      idx
+(* [fetch_remote_index] lives in {!Remote_index} to break the
+   [Layer ↔ Index] cycle: reading the remote [index.db] needs
+   [Index], and [Index.rebuild] already needs [Layer.load_meta].
+   In-tree callers reach for {!Remote_index.fetch} directly. *)
 
 (* -- Remote pull --------------------------------------------------------- *)
 
@@ -421,10 +343,5 @@ let export_all (c : Config.t) ~dst =
             count hashes)
         0 os_keys
     in
-    (* Write OINDEX.txt for each os_key that has exported layers *)
-    List.iter
-      (fun os_key ->
-        let os_dir = Eio.Path.(dst / os_key) in
-        if Sysops.file_exists os_dir then write_index ~dst os_key)
-      os_keys;
+    let _ = os_keys in
     count

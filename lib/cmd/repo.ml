@@ -1,6 +1,5 @@
 open Cmdliner
 
-[@@@warning "-32"]
 
 let ( / ) = Filename.concat
 
@@ -796,7 +795,6 @@ module Bump = struct
         Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
           c.cache_dir
       in
-      let data_dir = c.data_dir in
       if rebake && no_bake then begin
         Fmt.epr
           "oi repo bump: --rebake and --no-bake are mutually exclusive.@.";
@@ -815,7 +813,6 @@ module Bump = struct
           ~cache ~os_key
       in
       let cache_root = Oi.Cache.root_s cache in
-      ignore data_dir;
       let bump_and_bake handle =
         (* Snapshot the pre-materialise source identity + baked sha for
            every package version, so the post-materialise pass can
@@ -1009,6 +1006,142 @@ module Bump = struct
         const run $ Terms.common $ reporepo_term $ reporepo_url_term $ handle
         $ all $ url $ ref_term $ toolchain_repo_term $ depend_term $ default
         $ no_bake $ rebake)
+end
+
+module Bake = struct
+  (* Read [x-d10-archive] off a baked opam file. Used to collect the
+     set of shas to publish for a given handle, without re-reading
+     the whole opam metadata stack. *)
+  let read_archive_sha opam_path =
+    try
+      let opam =
+        OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
+      in
+      let exts = OpamFile.OPAM.extensions opam in
+      match OpamStd.String.Map.find_opt "x-d10-archive" exts with
+      | Some v -> (
+          match v.OpamParserTypes.FullPos.pelem with
+          | OpamParserTypes.FullPos.String s -> Some s
+          | _ -> None)
+      | None -> None
+    with _ -> None
+
+  let collect_handle_shas ~reporepo ~handle =
+    let acc = ref [] in
+    Bump.iter_handle_opams ~reporepo ~handle
+      (fun ~pkg:_ ~version:_ ~pkg_dir:_ ~opam_path ->
+        match read_archive_sha opam_path with
+        | Some sha -> acc := sha :: !acc
+        | None -> ());
+    List.sort_uniq String.compare !acc
+
+  let cmd =
+    let run (c : Terms.common) reporepo reporepo_url handle_opt to_dir =
+      Harness.run @@ fun ~sw env ->
+      let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache; _ } =
+        Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+          c.cache_dir
+      in
+      Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
+        ~url:reporepo_url ();
+      let d10 =
+        Oi.Pipeline.make_d10 ~sys ~fs
+          ~clock:(clock :> D10.Config.clk)
+          ~cache ~os_key
+      in
+      let cache_root = Oi.Cache.root_s cache in
+      let bake_one handle =
+        let missing =
+          Bump.count_packages_missing_archive ~reporepo ~handle
+        in
+        if missing = 0 then
+          Fmt.pr "@.%a %s: every package already baked@."
+            Oi.Style.ok_string "✓" handle
+        else begin
+          Fmt.pr "@.%a %s: baking %d missing archive(s)...@."
+            Oi.Style.info_string "▸" handle missing;
+          let baked, failed =
+            Bump.bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform
+              ~reporepo ~handle
+          in
+          Fmt.pr "  %d baked, %d failed@." baked failed
+        end;
+        let shas = collect_handle_shas ~reporepo ~handle in
+        let n = Oi.D10ir_archives.publish_shas ~cache ~output:to_dir shas in
+        Fmt.pr "  %a %d archive(s) published to %s/d10ir-archives/@."
+          Oi.Style.ok_string "✓" n to_dir
+      in
+      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / to_dir);
+      (match handle_opt with
+      | Some handle -> bake_one handle
+      | None ->
+          let entries = Oi.Source.Reporepo.load ~path:reporepo in
+          let handles =
+            List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle) entries
+            |> List.sort_uniq String.compare
+          in
+          if handles = [] then
+            Fmt.epr "oi repo bake: no overlays found in %s@." reporepo
+          else List.iter bake_one handles);
+      ()
+    in
+    let handle =
+      Arg.(
+        value & pos 0 (some string) None
+        & info ~docv:"HANDLE"
+            ~doc:
+              "Overlay handle to bake. Omit to bake every overlay in the \
+               reporepo."
+            [])
+    in
+    let to_dir =
+      Arg.(
+        required
+        & opt (some string) None
+        & info ~docv:"DIR"
+            ~doc:
+              "Output directory. Archives are hardlinked (or copied across \
+               filesystems) into $(b,DIR/d10ir-archives/<sha>.tar.zst), \
+               matching the layout $(b,oi build) clients expect from a \
+               remote registry."
+            [ "to" ])
+    in
+    let info =
+      Cmd.info "bake"
+        ~doc:
+          "Bake an overlay's consolidated source archives and publish them \
+           to a directory."
+        ~man:
+          [
+            `S Manpage.s_description;
+            `P
+              "Walks $(b,<reporepo>/v2/HANDLE/) (or every overlay when \
+               $(b,HANDLE) is omitted) and runs the same bake step \
+               $(b,oi repo bump) does — fetching upstream sources, applying \
+               patches, and writing each consolidated tarball to \
+               $(b,<cache>/d10ir/archives/<sha>.tar.zst). Then hardlinks \
+               every $(b,x-d10-archive) sha into \
+               $(b,DIR/d10ir-archives/), the layout an $(b,oi build) \
+               client expects from a remote registry.";
+            `P
+              "Use $(b,oi repo bake) when you want to ship source archives \
+               without re-bumping a handle's upstream commit (which is \
+               $(b,oi repo bump)'s job). The two compose: bake is a no-op \
+               on packages already carrying $(b,x-d10-archive); bump runs \
+               bake as a side effect so a fresh bump+publish flow can use \
+               either command.";
+            `S Manpage.s_examples;
+            `Pre
+              "  oi repo bake @avsm --to=./registry\n\
+              \  oi repo bake --to=./registry         # every overlay\n\
+              \  oi build --all --export=./registry   # full registry, \
+               including layers";
+          ]
+    in
+    Cmd.v info
+      Term.(
+        const run $ Terms.common $ reporepo_term $ reporepo_url_term $ handle
+        $ to_dir)
 end
 
 module Set_roots = struct
@@ -1475,6 +1608,7 @@ let cmd =
       Show.cmd;
       Add.cmd;
       Bump.cmd;
+      Bake.cmd;
       Set_roots.cmd;
       Remove.cmd;
       Push.cmd;

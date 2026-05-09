@@ -281,6 +281,118 @@ let producers_table t =
 
 let find_node t hash = Hashtbl.find_opt (producers_table t) hash
 
+(* Merge a collection of plans into a single plan that the executor
+   can schedule across as one unified DAG.
+
+   Nodes are deduplicated by [layer_hash] — when several input
+   plans share a transitive dep, we keep one copy. Roots and
+   mounts are union'd; mounts dedupe by name. Metadata's
+   [cli_invocation] concatenates all the input plans' invocations
+   so the merged plan's audit trail records everything that was
+   batched together.
+
+   Errors out when the input plans disagree on any of the fields
+   that must be globally consistent for the executor (schema
+   version, [os_key], [toolchain.base_layer], [archive_root]).
+   Different overlays / toolchain handles inside a single
+   batch fail validation up front. *)
+let merge = function
+  | [] -> Error "merge: empty plan list"
+  | first :: rest ->
+      let mismatch field =
+        Fmt.str "merge: plans disagree on %s — cannot batch them" field
+      in
+      (* The base_layer hash can legitimately differ across groups —
+         it's the recipe's [packages[0].layer_hash], which depends on
+         topological order and that group's specific dep closure. We
+         only require [toolchain.name] to match: same logical
+         toolchain ⇒ batchable. *)
+      let invalid =
+        List.find_opt
+          (fun p ->
+            p.schema_version <> first.schema_version
+            || p.os_key <> first.os_key
+            || p.archive_root <> first.archive_root
+            || p.toolchain.name <> first.toolchain.name)
+          rest
+      in
+      match invalid with
+      | Some p when p.schema_version <> first.schema_version ->
+          Error (mismatch "schema_version")
+      | Some p when p.os_key <> first.os_key -> Error (mismatch "os_key")
+      | Some p when p.archive_root <> first.archive_root ->
+          Error (mismatch "archive_root")
+      | Some _ -> Error (mismatch "toolchain.name")
+      | None ->
+          let seen_nodes : (string, unit) Hashtbl.t = Hashtbl.create 256 in
+          let nodes =
+            List.concat_map
+              (fun p ->
+                List.filter
+                  (fun n ->
+                    let key = Layer_hash.to_string n.layer_hash in
+                    if Hashtbl.mem seen_nodes key then false
+                    else begin
+                      Hashtbl.add seen_nodes key ();
+                      true
+                    end)
+                  p.nodes)
+              (first :: rest)
+          in
+          let seen_roots : (string, unit) Hashtbl.t = Hashtbl.create 32 in
+          let roots =
+            List.concat_map
+              (fun p ->
+                List.filter
+                  (fun h ->
+                    let key = Layer_hash.to_string h in
+                    if Hashtbl.mem seen_roots key then false
+                    else begin
+                      Hashtbl.add seen_roots key ();
+                      true
+                    end)
+                  p.roots)
+              (first :: rest)
+          in
+          let seen_mounts : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+          let mounts =
+            List.concat_map
+              (fun p ->
+                List.filter
+                  (fun (m : mount) ->
+                    if Hashtbl.mem seen_mounts m.name then false
+                    else begin
+                      Hashtbl.add seen_mounts m.name ();
+                      true
+                    end)
+                  p.mounts)
+              (first :: rest)
+          in
+          let metadata =
+            {
+              oi_version = first.metadata.oi_version;
+              generated_at =
+                List.fold_left
+                  (fun acc p -> max acc p.metadata.generated_at)
+                  0. (first :: rest);
+              cli_invocation =
+                List.concat_map
+                  (fun p -> p.metadata.cli_invocation)
+                  (first :: rest);
+            }
+          in
+          Ok
+            {
+              schema_version = first.schema_version;
+              os_key = first.os_key;
+              toolchain = first.toolchain;
+              archive_root = first.archive_root;
+              nodes;
+              roots;
+              mounts;
+              metadata;
+            }
+
 (* Tarjan SCC over the nodes-by-layer-hash graph; returns SCCs of size > 1
    (true cycles) and self-loops. *)
 let find_cycles (nodes : node list) : Layer_hash.t list list =

@@ -50,21 +50,51 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
   in
   let install_named ~tool_name ~constraints =
     let name = OpamPackage.Name.of_string tool_name in
-    (* Surface the per-tool [Pipeline.build] phases (build solver
+    (* Surface the per-tool [Build_pipeline.build] phases (build solver
        context, solve, plan, fetch layers) and Execute's per-package
        progress so a long tool build doesn't look like a hang. In
        quiet mode the phase narration drops to [Logs.info], matching
        the rest of [install_tools]. *)
     try
+      let pipeline_env : Oi.Build_pipeline.env =
+        {
+          proc_mgr;
+          fs;
+          clock;
+          sys;
+          os_key;
+          cache;
+          data_dir;
+          http_session = session;
+        }
+      in
+      let req : Oi.Build_pipeline.request =
+        {
+          targets = [ Plain (OpamPackage.Name.to_string name) ];
+          with_repos = [];
+          pins;
+          extra_repos;
+          constraints;
+          toolchain_override = None;
+          toolchain;
+          conf;
+          local_packages_dir = None;
+          project_root = Some cwd;
+        force_source = false;
+          refresh = Stdlib.Option.value ~default:false refresh;
+        }
+      in
       let hashes =
         Progress_ui.with_ui ~target:tool_name
           ~clock:(clock :> _ Eio.Resource.t)
           ~enabled:(not quiet && Tty.is_tty ())
         @@ fun reporter ->
-        Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-          ~os_key ~session ~extra_repos ~pins ?refresh ?layer_remote
-          ?source_remote ?jobs ?toolchain ~constraints ~project_root:cwd
-          ~reporter [ name ]
+        let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
+        let _ : D10ir.Direct.result option =
+          Oi.Build_pipeline.build pipeline_env ~reporter
+            { solved; layer_remote; source_remote; jobs }
+        in
+        Oi.Build_pipeline.layer_hashes solved
       in
       match leaf_hash_for ~fs ~cache ~os_key ~want_name:tool_name hashes with
       | None ->
@@ -198,7 +228,7 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   let toolchain_override = toolchain in
   (* [quiet]: route narration to [Logs.info] (debug-only). Otherwise
      persistent [Oi.Say.step] / [Oi.Say.info] lines. The
-     [Progress_ui] bar (opened around the [Pipeline.build] call
+     [Progress_ui] bar (opened around the [Build_pipeline.build] call
      below) interjects properly so Say lines and bar redraws don't
      tear each other. *)
   let say_step fmt =
@@ -286,14 +316,44 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
       | Some _ -> project.packages_dir
       | None -> url_project.packages_dir
     in
+    let pipeline_env : Oi.Build_pipeline.env =
+      {
+        proc_mgr;
+        fs;
+        clock;
+        sys;
+        os_key;
+        cache;
+        data_dir;
+        http_session = session;
+      }
+    in
+    let req : Oi.Build_pipeline.request =
+      {
+        targets =
+          [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+        with_repos = [];
+        pins = project.pins @ url_project.pins;
+        extra_repos = all_extras;
+        constraints = extra_constraints;
+        toolchain_override;
+        toolchain;
+        conf;
+        local_packages_dir;
+        project_root = Some cwd;
+        force_source = false;
+        refresh;
+      }
+    in
     Progress_ui.with_ui ~target:cwd ~clock:(clock :> _ Eio.Resource.t)
       ~enabled:(not quiet && Tty.is_tty ())
     @@ fun reporter ->
-    Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-      ~session ~extra_repos:all_extras
-      ~pins:(project.pins @ url_project.pins)
-      ~refresh ~constraints:extra_constraints ~project_root:cwd ?layer_remote
-      ?source_remote ?jobs ?toolchain ?local_packages_dir ~reporter names
+    let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
+    let _ : D10ir.Direct.result option =
+      Oi.Build_pipeline.build pipeline_env ~reporter
+        { solved; layer_remote; source_remote; jobs }
+    in
+    Oi.Build_pipeline.layer_hashes solved
   in
   let oi_dir = cwd / "_oi" in
   let prefix = oi_dir / "prefix" in

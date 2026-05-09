@@ -105,6 +105,13 @@ type subst = string
 
 type package_plan = {
   pkg : string;
+  opam : OpamFile.OPAM.t;
+      (** Parsed opam metadata for this package. Carried so callers
+          that need [synopsis], [license], [homepage], [depends:],
+          etc. can read them without re-loading the opam file from
+          disk — and so {!Build_pipeline.group_result} can drop its
+          [build_plan] field once every consumer of {!node.opam}
+          moves to {!package_plan.opam}. *)
   layer_hash : string;
   method_ : Identity.method_;
   dep_layers : Identity.dep list;

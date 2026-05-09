@@ -338,7 +338,10 @@ let row_bytes =
   + 1 + row_status_w
 
 (* Map a d10ir-phase short tag to a 1..8 progress index so
-   [render_bar] can fill the row's bar as the package advances. *)
+   [render_bar] can fill the row's bar as the package advances.
+   The synthetic ["solving"] tag is used by the per-solve task
+   rows; it has no measurable sub-progress so we just put a
+   single cell of fill in to signal activity. *)
 let phase_idx_of_string = function
   | "stage-deps" -> 1
   | "unpack" -> 2
@@ -348,6 +351,7 @@ let phase_idx_of_string = function
   | "install" -> 6
   | "diff" -> 7
   | "store" -> 8
+  | "solving" -> 1
   | _ -> 0
 let phase_total = 8
 
@@ -357,7 +361,10 @@ let render_row_payload pkg ((elapsed, phase) : row_payload) =
     let idx = phase_idx_of_string phase in
     render_bar ~width:row_bar_w idx phase_total
   in
-  let status_raw = Fmt.str "[%s] %.1fs" phase elapsed in
+  let status_raw =
+    if phase = "" then ""  (* blank: pre-phase-event state *)
+    else Fmt.str "[%s] %.1fs" phase elapsed
+  in
   let status =
     if String.length status_raw > row_status_w then
       String.sub status_raw 0 row_status_w
@@ -370,7 +377,13 @@ let render_row_payload pkg ((elapsed, phase) : row_payload) =
   else if n > row_bytes then String.sub s 0 row_bytes
   else s ^ String.make (row_bytes - n) ' '
 
-let row_line ~pkg =
+(* [?init_phase] is the placeholder phase shown until the first
+   [push_row] update fires. Default is empty (renders a blank
+   status), so a row added but not yet phase-tagged shows just its
+   spinner + package label, never the misleading
+   ["stage-deps 0.0s"]. Build callers that know the row will start
+   in [stage-deps] can override. *)
+let row_line ?(init_phase = "") ~pkg () =
   let open Progress.Line in
   let printer =
     Progress.Printer.create
@@ -378,7 +391,7 @@ let row_line ~pkg =
       ~string_len:row_bytes ~width:row_cells ()
   in
   list ~sep:(const " ")
-    [ const "  "; row_spinner (); of_printer ~init:(0., "stage-deps") printer ]
+    [ const "  "; row_spinner (); of_printer ~init:(0., init_phase) printer ]
 
 (* Per-running-fetch row payload: (bytes_done, bytes_total).
    [bytes_total = 0L] means the size is unknown (typical for source
@@ -498,6 +511,7 @@ type state = {
   agg : agg_payload Progress.Reporter.t;
   mutex : Mutex.t;
   rows : (string, row) Hashtbl.t;  (* keyed by layer hash *)
+  solve_rows : (string, row) Hashtbl.t;  (* keyed by Solve_* label *)
   fetches : (string, int64) Hashtbl.t;  (* keyed by Fetch_* key, value=bytes *)
   fetch_sizes : (string, int64) Hashtbl.t;  (* declared total per Fetch_* key *)
   fetch_rows : (string, fetch_row) Hashtbl.t;  (* keyed by Fetch_* key *)
@@ -520,6 +534,12 @@ type state = {
   mutable fetch_done_base : int;
   mutable build_total_base : int;
   mutable build_done_base : int;
+  mutable totals_locked : bool;
+      (* Once a [Total_estimate] event arrives, [fetch_total] and
+         [build_total] are pinned to the supplied values and per-
+         group [Aggregate] events stop changing them. Per-task
+         completion events ([Fetch_finished], [Node_built/...])
+         drive the done counters instead. *)
   mutable running : int;  (* in-flight fetches + in-flight builds *)
   mutable phase_label : string;
   mutable phase_id : string;  (* short phase tag, used to detect transitions *)
@@ -538,14 +558,26 @@ type state = {
   target_label : string;  (* user's target, set once at with_ui time *)
 }
 
+(* Bar denominator semantics:
+   - During the [solve] phase: groups solved out of total groups.
+     Solving has its own scale (groups, not packages) so it sits
+     in its own counter and isn't summed with fetch+build.
+   - During [fetch] / [build] phases: combined fetch + build
+     tasks. With an upfront [Total_estimate] this is static across
+     the whole fetch → build journey; without one, it accumulates.
+   The bar therefore shows two stable denominators in sequence —
+   one for solving, one for fetch+build — with no resets within
+   either phase. *)
 let total_of s =
-  s.solve_total_base + s.solve_total
-  + s.fetch_total_base + s.fetch_total
-  + s.build_total_base + s.build_total
+  if s.phase_id = "solve" then s.solve_total + s.solve_total_base
+  else
+    s.fetch_total + s.fetch_total_base
+    + s.build_total + s.build_total_base
 let current_of s =
-  s.solve_done_base + s.solve_done
-  + s.fetch_done_base + s.fetch_done
-  + s.build_done_base + s.build_done
+  if s.phase_id = "solve" then s.solve_done + s.solve_done_base
+  else
+    s.fetch_done + s.fetch_done_base
+    + s.build_done + s.build_done_base
 
 (* Commit the in-progress group's per-phase counts into the [*_base]
    accumulators and zero the working slots. Called at the end of a
@@ -677,8 +709,11 @@ let add_row s ~now node =
   let k = key_of node in
   if not (Hashtbl.mem s.rows k) then begin
     let pkg = pkg_label_of node in
-    let r = Progress.Display.add_line s.display (row_line ~pkg) in
     let phase = D10ir.Direct.phase_to_string Stage_deps in
+    let r =
+      Progress.Display.add_line s.display
+        (row_line ~init_phase:phase ~pkg ())
+    in
     let row = { started_at = now; phase; reporter = r } in
     Hashtbl.add s.rows k row;
     push_row row ~now phase;
@@ -768,18 +803,19 @@ let handle_build_event s (e : D10ir.Direct.event) =
   let now = Eio.Time.now s.clock in
   match e with
   | Plan_started { total } ->
-      (* Refine the build denominator if it wasn't seeded by an
-         earlier [Plan_ready]. We do not reset [build_done] — by
-         design the count carries across the fetch → build boundary
-         so the user sees a single combined progress bar. *)
-      if s.build_total = 0 then s.build_total <- total;
+      (* Refine the build denominator only when totals aren't
+         locked. With a [Total_estimate] in place the upfront value
+         is authoritative; per-group [Plan_started] reflects only
+         this group's count, which would shrink the denominator. *)
+      if (not s.totals_locked) && s.build_total = 0 then
+        s.build_total <- total;
       push_agg s
   | Plan_done _ ->
-      (* End of this solve group's d10ir build. Commit per-phase
-         counters into the [*_base] accumulators so the bar's
-         denominator stays monotonic when the next group begins
-         under [oi build @overlay] / [oi build --all]. *)
-      commit_group s;
+      (* End of this solve group's d10ir build. With locked totals
+         we don't commit (totals are already authoritative);
+         otherwise commit per-phase counters into the [*_base]
+         accumulators so the denominator at least stays monotonic. *)
+      if not s.totals_locked then commit_group s;
       push_agg s
   | Node_queued _ -> ()
   | Node_started { node } -> add_row s ~now node
@@ -845,7 +881,15 @@ let handle_event s (e : Oi.Build_progress.event) =
           if s.phase_id <> new_id then begin
             s.phase_id <- new_id;
             Hashtbl.clear s.fetches;
-            Hashtbl.clear s.fetch_sizes;
+            (* In-flight fetch-row state clears at phase boundaries
+               (orphan rows from a previous fetch phase shouldn't
+               bleed into the next), but we deliberately do NOT
+               reset [phase_bytes_total / phase_bytes_done /
+               fetch_sizes] here — for [oi build --all] / [oi build
+               @overlay] flows that bracket multiple per-group fetch
+               phases inside one invocation, the user wants to see a
+               cumulative byte total across all groups, not a fresh
+               counter every time another group's fetch begins. *)
             Hashtbl.iter
               (fun _ r ->
                 (try Progress.Reporter.finalise r.fetch_reporter with _ -> ());
@@ -853,9 +897,13 @@ let handle_event s (e : Oi.Build_progress.event) =
                 with _ -> ())
               s.fetch_rows;
             Hashtbl.clear s.fetch_rows;
-            s.phase_bytes_total <- 0L;
-            s.phase_bytes_done <- 0L;
-            s.phase_bytes_done_base <- 0L
+            Hashtbl.iter
+              (fun _ r ->
+                (try Progress.Reporter.finalise r.reporter with _ -> ());
+                try Progress.Display.remove_line s.display r.reporter
+                with _ -> ())
+              s.solve_rows;
+            Hashtbl.clear s.solve_rows
           end;
           s.status_msg <- "";
           push_agg s)
@@ -864,6 +912,34 @@ let handle_event s (e : Oi.Build_progress.event) =
       with_lock s (fun () ->
           s.status_msg <- msg;
           push_agg s)
+  | Total_estimate { fetches; builds; fetch_bytes } ->
+      with_lock s (fun () ->
+          let first_lock = not s.totals_locked in
+          s.fetch_total <- fetches;
+          s.build_total <- builds;
+          if first_lock then begin
+            (* Initial lock: reset bases + done counters so the
+               upfront values are authoritative and subsequent
+               per-task events drive [fetch_done] / [build_done]
+               from zero. Re-fires (cmdliner refining the totals
+               once exact figures are known) leave the in-flight
+               counters alone. *)
+            s.fetch_total_base <- 0;
+            s.build_total_base <- 0;
+            s.fetch_done_base <- 0;
+            s.build_done_base <- 0;
+            s.fetch_done <- 0;
+            s.build_done <- 0;
+            s.totals_locked <- true
+          end;
+          (* Pin the byte denominator to the upfront sum so the
+             [X MB / Y MB] readout stops creeping as each per-group
+             fetch phase emits its [Fetch_started] events. A re-fire
+             with [fetch_bytes = 0L] leaves the existing total
+             alone (callers use that to refine [builds] only). *)
+          if Int64.compare fetch_bytes 0L > 0 then
+            s.phase_bytes_total <- fetch_bytes;
+          push_agg s)
   | Aggregate { phase; current; total } ->
       with_lock s (fun () ->
           (match phase with
@@ -871,11 +947,19 @@ let handle_event s (e : Oi.Build_progress.event) =
                s.solve_total <- total;
                s.solve_done <- current
            | Fetching ->
-               s.fetch_total <- total;
-               s.fetch_done <- current
+               (* Once totals are locked the agg denominator is
+                  authoritative; ignore per-group [total] updates,
+                  but still let [current] drive the done count if no
+                  upfront pre-pass produced finer per-task events. *)
+               if not s.totals_locked then begin
+                 s.fetch_total <- total;
+                 s.fetch_done <- current
+               end
            | Building ->
-               s.build_total <- total;
-               s.build_done <- current
+               if not s.totals_locked then begin
+                 s.build_total <- total;
+                 s.build_done <- current
+               end
            | Baking | Assembling -> ());
           push_agg s)
   | Fetch_started { key; pkg; size; _ } ->
@@ -885,7 +969,11 @@ let handle_event s (e : Oi.Build_progress.event) =
           Hashtbl.replace s.fetches key 0L;
           if not (Hashtbl.mem s.fetch_sizes key) then begin
             Hashtbl.replace s.fetch_sizes key size;
-            if Int64.compare size 0L > 0 then
+            (* When [totals_locked], an upfront [Total_estimate]
+               already pinned [phase_bytes_total]; per-fetch sizes
+               accumulate into the per-row reporters but don't grow
+               the agg denominator. *)
+            if (not s.totals_locked) && Int64.compare size 0L > 0 then
               s.phase_bytes_total <-
                 Int64.add s.phase_bytes_total size
           end;
@@ -906,8 +994,9 @@ let handle_event s (e : Oi.Build_progress.event) =
                | Some t when Int64.compare t 0L > 0 -> ()
                | _ ->
                    Hashtbl.replace s.fetch_sizes key total;
-                   s.phase_bytes_total <-
-                     Int64.add s.phase_bytes_total total);
+                   if not s.totals_locked then
+                     s.phase_bytes_total <-
+                       Int64.add s.phase_bytes_total total);
             update_fetch_row s ~key ~bytes;
               recompute_phase_bytes_done s;
             push_agg s
@@ -939,16 +1028,48 @@ let handle_event s (e : Oi.Build_progress.event) =
           Hashtbl.remove s.fetches key;
           drop_fetch_row s ~key;
           recompute_phase_bytes_done s;
-          (* [fetch_done] itself is driven by the [Aggregate] event
-             that fetch loops emit alongside each [Fetch_finished],
-             so we don't bump it here. *)
+          (* When totals are locked by an upfront [Total_estimate],
+             [fetch_done] climbs from per-task completion events;
+             otherwise it's driven by the [Aggregate] events that
+             fetch loops emit alongside each [Fetch_finished]. *)
+          if s.totals_locked then s.fetch_done <- s.fetch_done + 1;
           push_agg s)
+  | Solve_started { label } ->
+      with_lock s (fun () ->
+          if not (Hashtbl.mem s.solve_rows label) then begin
+            let now = Eio.Time.now s.clock in
+            let r =
+              Progress.Display.add_line s.display
+                (row_line ~init_phase:"solving" ~pkg:label ())
+            in
+            let row =
+              { started_at = now; phase = "solving"; reporter = r }
+            in
+            Hashtbl.add s.solve_rows label row;
+            push_row row ~now "solving";
+            s.running <- s.running + 1;
+            push_agg s
+          end)
+  | Solve_finished { label } ->
+      with_lock s (fun () ->
+          match Hashtbl.find_opt s.solve_rows label with
+          | None -> ()
+          | Some r ->
+              Hashtbl.remove s.solve_rows label;
+              (try Progress.Reporter.finalise r.reporter with _ -> ());
+              (try Progress.Display.remove_line s.display r.reporter
+               with _ -> ());
+              s.running <- max 0 (s.running - 1);
+              push_agg s)
   | Plan_ready plan ->
       with_lock s (fun () ->
           (* Seed the build denominator early so the agg bar shows
              the combined fetch + build total even before D10ir's
-             [Plan_started] arrives. *)
-          s.build_total <- List.length plan.nodes;
+             [Plan_started] arrives. With locked totals (upfront
+             [Total_estimate]) the value is already authoritative,
+             so don't override. *)
+          if not s.totals_locked then
+            s.build_total <- List.length plan.nodes;
           push_agg s)
   | Build e -> handle_build_event s e
   | Build_summary _ -> ()
@@ -975,6 +1096,7 @@ let with_ui ?(target = "") ~clock ~enabled f =
         agg;
         mutex = Mutex.create ();
         rows = Hashtbl.create 16;
+        solve_rows = Hashtbl.create 16;
         fetches = Hashtbl.create 16;
         fetch_sizes = Hashtbl.create 16;
         fetch_rows = Hashtbl.create 16;
@@ -990,6 +1112,7 @@ let with_ui ?(target = "") ~clock ~enabled f =
         fetch_done_base = 0;
         build_total_base = 0;
         build_done_base = 0;
+        totals_locked = false;
         running = 0;
         running_hist = Array.make agg_spark_w 0;
         (* Empty phase_label until the first [Phase_started] fires;
@@ -1017,6 +1140,12 @@ let with_ui ?(target = "") ~clock ~enabled f =
           Hashtbl.clear s.rows;
           Hashtbl.iter
             (fun _ r ->
+              (try Progress.Reporter.finalise r.reporter with _ -> ());
+              try Progress.Display.remove_line display r.reporter with _ -> ())
+            s.solve_rows;
+          Hashtbl.clear s.solve_rows;
+          Hashtbl.iter
+            (fun _ r ->
               (try Progress.Reporter.finalise r.fetch_reporter with _ -> ());
               try Progress.Display.remove_line display r.fetch_reporter
               with _ -> ())
@@ -1028,7 +1157,15 @@ let with_ui ?(target = "") ~clock ~enabled f =
           try Progress.Display.remove_line display s.agg with _ -> ());
       Logs_progress.clear_active ();
       Oi.Say.set_around_emit (fun f -> f ());
-      try Progress.Display.finalise display with _ -> ()
+      (try Progress.Display.finalise display with _ -> ());
+      (* [Logs_progress.start_display_compact] sent a [\x1b[1A]
+         (move-cursor-up-one) at start so the first bar row would
+         overdraw the line that contained the user's command, sparing
+         a visual newline. [Progress.Display.finalise] doesn't know
+         about that move, so it clears one fewer line than was
+         consumed — the user's command line ends up erased. We
+         compensate by printing the missing newline ourselves. *)
+      Format.fprintf Format.err_formatter "\n%!"
     in
     Fun.protect ~finally:cleanup @@ fun () ->
     let done_p, done_r = Eio.Promise.create () in

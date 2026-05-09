@@ -375,6 +375,11 @@ let inputs_of_opam_file ~platform_env ~name ~version ~build_dir ~pkg_dir
 let to_min_plan ~prefix (b : bake_inputs) : Plan.package_plan =
   {
     pkg = b.pkg;
+    opam =
+      OpamFile.OPAM.create
+        (OpamPackage.create
+           (OpamPackage.Name.of_string "synthetic")
+           (OpamPackage.Version.of_string "0"));
     layer_hash = "";
     method_ = Identity.Source;
     dep_layers = [];

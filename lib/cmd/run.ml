@@ -249,7 +249,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
        invocation. *)
   let unfound_bins = ref [] in
   (* Phase budget for the overall bar: [oi run]'s flow only fires
-     [Pipeline.build]'s phases (no [Sync] / [install_tools] / dune
+     [Build_pipeline.build]'s phases (no [Sync] / [install_tools] / dune
      subprocess), so ~8 phases on cold cache, fewer when the layer
      cache hit short-circuits the source path. *)
   let with_preflight_bar f =
@@ -269,16 +269,88 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
       |> Oi.Pipeline.strip_compiler_roots_for_override
            ~override:toolchain_override ~toolchain
     in
+    let pipeline_env : Oi.Build_pipeline.env =
+      {
+        proc_mgr;
+        fs;
+        clock;
+        sys;
+        os_key;
+        cache;
+        data_dir;
+        http_session;
+      }
+    in
+    let req : Oi.Build_pipeline.request =
+      {
+        targets =
+          [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+        with_repos = [];
+        pins = project_pins;
+        extra_repos = all_extras;
+        constraints = extra_constraints;
+        toolchain_override;
+        toolchain;
+        conf;
+        local_packages_dir;
+        project_root = None;
+        force_source = false;
+        refresh;
+      }
+    in
     let layer_hashes =
       Progress_ui.with_ui ~target:binary_name
         ~clock:(clock :> _ Eio.Resource.t)
         ~enabled:(Tty.is_tty ())
       @@ fun reporter ->
-      Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-        ~session:http_session ~dry_run ~extra_repos:all_extras
-        ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
-        ?toolchain ~constraints:extra_constraints ?local_packages_dir
-        ?save_recipe:save_d10ir ~reporter names
+      let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
+      if dry_run then begin
+        (* Match [Build_pipeline.build]'s old [~dry_run] semantic: print
+           the plan and exit 0 without fetching or building. *)
+        (match solved.merged with
+        | None -> Fmt.pr "(no packages to build)@."
+        | Some merged ->
+            List.iter
+              (fun (n : D10ir.Plan.node) ->
+                Fmt.pr "%s.%s  %s@." n.package.name n.package.version
+                  (D10ir.Layer_hash.to_string n.layer_hash))
+              merged.nodes);
+        exit 0
+      end;
+      (match save_d10ir with
+      | None -> ()
+      | Some dir ->
+          List.iter
+            (fun (gr : Oi.Build_pipeline.group_result) ->
+              match gr.recipe with
+              | None -> ()
+              | Some recipe ->
+                  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+                    Eio.Path.(fs / dir);
+                  let stem =
+                    match gr.group.tokens with
+                    | t :: _ ->
+                        String.map
+                          (fun c ->
+                            if (c >= 'a' && c <= 'z')
+                               || (c >= 'A' && c <= 'Z')
+                               || (c >= '0' && c <= '9')
+                               || c = '.' || c = '-' || c = '_'
+                            then c
+                            else '_')
+                          t
+                    | [] -> "recipe"
+                  in
+                  let dst =
+                    Filename.concat dir (stem ^ ".d10ir.json")
+                  in
+                  D10ir.Plan.save Eio.Path.(fs / dst) recipe)
+            solved.groups);
+      let _ : D10ir.Direct.result option =
+        Oi.Build_pipeline.build pipeline_env ~reporter
+          { solved; layer_remote; source_remote; jobs }
+      in
+      Oi.Build_pipeline.layer_hashes solved
     in
     Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
     let prefix =
@@ -380,14 +452,70 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
     let layer_hashes =
       if dep_opam_names = [] then []
       else
+        let pipeline_env : Oi.Build_pipeline.env =
+          {
+            proc_mgr;
+            fs;
+            clock;
+            sys;
+            os_key;
+            cache;
+            data_dir;
+            http_session;
+          }
+        in
+        let req : Oi.Build_pipeline.request =
+          {
+            targets =
+              [
+                Group { tokens = List.map OpamPackage.Name.to_string dep_opam_names; handles = [] };
+              ];
+            with_repos = [];
+            pins = project_pins;
+            extra_repos = all_extras;
+            constraints;
+            toolchain_override;
+            toolchain;
+            conf;
+            local_packages_dir;
+            project_root = None;
+        force_source = false;
+            refresh;
+          }
+        in
         Progress_ui.with_ui ~target ~clock:(clock :> _ Eio.Resource.t)
           ~enabled:(Tty.is_tty ())
         @@ fun reporter ->
-        Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf
-          ~os_key ~session:http_session ~dry_run ~extra_repos:all_extras
-          ~pins:project_pins ~refresh ?layer_remote ?source_remote ?jobs
-          ?toolchain ~constraints ?local_packages_dir ?save_recipe:save_d10ir
-          ~reporter dep_opam_names
+        let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
+        if dry_run then begin
+          (match solved.merged with
+          | None -> Fmt.pr "(no packages to build)@."
+          | Some merged ->
+              List.iter
+                (fun (n : D10ir.Plan.node) ->
+                  Fmt.pr "%s.%s  %s@." n.package.name n.package.version
+                    (D10ir.Layer_hash.to_string n.layer_hash))
+                merged.nodes);
+          exit 0
+        end;
+        (match save_d10ir with
+        | None -> ()
+        | Some dir ->
+            List.iter
+              (fun (gr : Oi.Build_pipeline.group_result) ->
+                match gr.recipe with
+                | None -> ()
+                | Some recipe ->
+                    Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+                      Eio.Path.(fs / dir);
+                    let dst = Filename.concat dir "recipe.d10ir.json" in
+                    D10ir.Plan.save Eio.Path.(fs / dst) recipe)
+              solved.groups);
+        let _ : D10ir.Direct.result option =
+          Oi.Build_pipeline.build pipeline_env ~reporter
+            { solved; layer_remote; source_remote; jobs }
+        in
+        Oi.Build_pipeline.layer_hashes solved
     in
     if dry_run && dep_opam_names = [] then
       (* No deps to solve, but still in dry-run mode — just exit *)
@@ -419,7 +547,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
          search consult it, so we want to share one Pin.materialize +
          Repo.ensure_extra + Reporepo.ensure_base pass. The toolchain's
          own [info.packages_dirs] takes the place of the default base
-         when set (matches what Pipeline.build does), so the precheck
+         when set (matches what Build_pipeline.build does), so the precheck
          sees the same package universe the actual solve will. *)
     let packages_dirs =
       lazy

@@ -360,15 +360,45 @@ let update_cmd =
       Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain
         names
     in
+    let pipeline_env : Oi.Build_pipeline.env =
+      {
+        proc_mgr;
+        fs;
+        clock;
+        sys;
+        os_key;
+        cache;
+        data_dir;
+        http_session;
+      }
+    in
+    let req : Oi.Build_pipeline.request =
+      {
+        targets =
+          [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+        with_repos = [];
+        pins = url_project.pins;
+        extra_repos = all_extras;
+        constraints = extra_constraints;
+        toolchain_override = None;
+        toolchain;
+        conf;
+        local_packages_dir = url_project.packages_dir;
+        project_root = None;
+        force_source = false;
+        refresh;
+      }
+    in
     let layer_hashes =
       Progress_ui.with_ui ~target:"oi" ~clock:(clock :> _ Eio.Resource.t)
         ~enabled:(Tty.is_tty ())
       @@ fun reporter ->
-      Oi.Pipeline.build ~sys ~proc_mgr ~fs ~clock ~cache ~data_dir ~conf ~os_key
-        ~session:http_session ~refresh ~extra_repos:all_extras
-        ~pins:url_project.pins ~constraints:extra_constraints ?layer_remote
-        ?source_remote ?jobs ?toolchain
-        ?local_packages_dir:url_project.packages_dir ~reporter names
+      let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
+      let _ : D10ir.Direct.result option =
+        Oi.Build_pipeline.build pipeline_env ~reporter
+          { solved; layer_remote; source_remote; jobs }
+      in
+      Oi.Build_pipeline.layer_hashes solved
     in
     let prefix =
       Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes

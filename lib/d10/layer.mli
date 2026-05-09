@@ -135,24 +135,21 @@ type remote = [ `Http_remote of string ]
 
 (** {2 Index}
 
-    Each os_key directory in the registry contains an [OINDEX.txt] file listing
-    all available layers with their SHA-256 checksums and sizes:
-    {v <sha256>  <hash>.tar.zst  <size_bytes> v}
-    The format is compatible with [sha256sum(1)] (the size field is ignored by
-    that tool). Clients fetch the index once per command and use it to determine
-    which layers are available remotely, avoiding per-layer HTTP probes. *)
+    Each os_key directory in the registry contains an [index.db] sqlite file
+    listing every layer available remotely, plus its tarball sha256 and size
+    when one is published (a "layer-cache" registry). Bin-index registries
+    leave the tarball columns NULL — restore is impossible from those, but
+    the same database still answers "what package provides binary X" /
+    "what opam pkg installs ocamlfind library Y". Clients fetch [index.db]
+    once per command and read its [layers] rows. *)
 
 type index_entry = { sha256 : string; size : int64 }
 type remote_index = (string, index_entry) Hashtbl.t
-
-val fetch_remote_index :
-  Config.t -> session:Sysops.Http.session -> remote:remote -> remote_index
-(** [fetch_remote_index c ~session ~remote] downloads [OINDEX.txt] from [remote]
-    for the current [os_key] and returns a map from layer hash to its SHA-256
-    checksum and size. Returns an empty table on failure.
-
-    The fetch goes through [session]'s connection pool so it shares connections
-    with subsequent {!pull_remote} calls in the same batch. *)
+(** [remote_index] is built from [<remote>/<os_key>/index.db]'s
+    [layers] rows whose [tarball_sha256] / [tarball_size] columns are
+    populated. The fetch helper itself lives in {!Remote_index}
+    (cycle break — [Index.rebuild] calls [Layer.load_meta], so
+    [Layer] can't import [Index] back). *)
 
 type fetch_phase =
   | Fetching
@@ -196,5 +193,7 @@ val export : Config.t -> hash:string -> dst:_ Eio.Path.t -> bool
 
 val export_all : Config.t -> dst:_ Eio.Path.t -> int
 (** [export_all c ~dst] exports all succeeded layers for all os_keys to [dst].
-    Writes [OINDEX.txt] for each os_key after exporting. Returns the number of
-    newly exported layers. *)
+    The per-os_key [index.db] (built via {!Index.rebuild} +
+    {!Index.record_tarball}) is the source of truth for "what's
+    published"; this function only writes the [.tar.zst] files. Returns
+    the number of newly exported layers. *)

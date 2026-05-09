@@ -115,89 +115,23 @@ val cache_urls :
     to upstream: always includes the local {!Source.Mirror}; with a remote
     [source_remote], also the registry's [sources/] subtree. *)
 
-val fetch_remote_layers :
+val fetch_layer_hashes :
   ?reporter:Build_progress.reporter ->
   ?jobs:int ->
   session:D10.Sysops.Http.session ->
-  layer_remote:D10.Layer.remote option ->
+  remote:D10.Layer.remote ->
   d10:D10.Config.t ->
-  packages_dirs:string list ->
-  ctx:Solver.Ctx.t ->
-  pkgs:OpamPackage.t list ->
-  Plan.graph ->
-  Plan.graph
-(** Try fetching uncached [Source] layers from [layer_remote]. Returns a new
-    plan graph with downloaded layers promoted to [Binary]. No-op when
-    [layer_remote = None] or every layer is already cached.
-
-    [session] is the shared connection pool for the index probe and every layer
-    pull — typically created once per CLI invocation by the caller via
-    {!D10.Sysops.Http.with_session}, so an [oi build --all] over [N] solve
-    groups does one TLS handshake and one [OINDEX.txt] fetch instead of [N].
-
-    [reporter] receives typed {!Build_progress.event}s — [Phase_started
-    Fetching], [Fetch_started/_progress/_finished], [Phase_done]. The
-    cmdliner layer renders them; defaults to {!Build_progress.null}. *)
-
-val build :
-  sys:D10.Sysops.t ->
-  proc_mgr:_ Eio.Process.mgr ->
-  fs:Eio.Fs.dir_ty Eio.Path.t ->
-  clock:_ Eio.Time.clock ->
-  cache:Cache.t ->
-  data_dir:string ->
-  conf:Solver.Ctx.conf ->
-  os_key:string ->
-  session:D10.Sysops.Http.session ->
-  ?dry_run:bool ->
-  ?extra_repos:Project.extra_repo list ->
-  ?pins:Project.pin list ->
-  ?refresh:bool ->
-  ?layer_remote:D10.Layer.remote ->
-  ?source_remote:D10.Layer.remote ->
-  ?jobs:int ->
-  ?toolchain:Toolchain.info ->
-  ?constraints:OpamFormula.version_constraint OpamTypes.name_map ->
-  ?project_root:string ->
-  ?local_packages_dir:string ->
-  ?reporter:Build_progress.reporter ->
-  ?emit_recipe:string ->
-  ?save_recipe:string ->
-  OpamPackage.Name.t list ->
-  string list
-(** [build] solves for [names], ensures every needed layer exists (building from
-    source via the build prefix when not cached), and returns the layer hashes
-    in topological order.
-
-    [project_root] is the directory that holds the project's [_oi/] tree; when
-    supplied, every pin's URL is sha-pinned via [_oi/oi.lock] before fetch. The
-    lock is transient build state, regenerated as needed.
-
-    [reporter] receives every progress event from this build: phase
-    transitions ([Solving] → [Fetching] → [Building]), per-archive fetch
-    progress, per-layer build events from [D10ir.Direct.run], and a
-    final [Build_summary]. The library never opens or drives a UI
-    itself; the cmdliner layer constructs whatever rendering it wants
-    on top of {!Build_progress.event}s.
-
-    [emit_recipe] when set, after the plan has been elaborated, writes a
-    serialised d10ir recipe to that directory and returns without running
-    [Execute.run]. The archives that the recipe references are
-    materialised as a side-effect of [Recipe_emitter.emit] and live under
-    [<cache>/d10ir/archives/]; the recipe references them by relative
-    path. Mutually exclusive with the build path — when [emit_recipe] is
-    set, no layers are built.
-
-    [save_recipe] is the build-and-also-save companion: when set, the
-    recipe is serialised into the supplied directory before
-    [D10ir.Direct.run] takes over, with a filename derived from the
-    plan's first root package so multiple groups in an [oi build
-    --all] / [oi build @overlay] flow each leave a distinct recipe.
-    The build itself continues normally. Different from [emit_recipe]
-    which is mutually exclusive with the build.
-
-    When [dry_run] is [true] the function prints the build plan and calls
-    [Stdlib.exit 0] — same behaviour as [oi show]. *)
+  index:D10.Layer.remote_index ->
+  hashes:string list ->
+  pkg_of:(string, string) Hashtbl.t ->
+  unit ->
+  unit
+(** Lower-level companion to {!fetch_remote_layers}: fetch a deduplicated list
+    of layer hashes directly, without taking a {!Plan.graph}. Used by [oi
+    build]'s merged-plan flow, which collects layer hashes from the unified
+    {!D10ir.Plan.t} (post-{!D10ir.Plan.merge}) and fires one fetch round
+    against the registry instead of N per-group rounds. [pkg_of] maps a hash
+    to its display label. *)
 
 val assemble_prefix :
   sys:D10.Sysops.t ->

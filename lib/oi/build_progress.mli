@@ -11,7 +11,7 @@
     these into a single multi-line bar; non-TTY callers can use
     [null] to silence everything without changing call shapes. *)
 
-(** Major phases of a [Pipeline.build] / [Archive_builder] run. The
+(** Major phases of a [Build_pipeline.build] / [Archive_builder] run. The
     bar UI typically renders at most one of these as the "current
     phase" header at any time. *)
 type phase =
@@ -69,11 +69,43 @@ type event =
       key : string;
     }
 
+  | Solve_started of { label : string }
+      (** A new solve group is starting. [label] is the group's
+          human-readable target list (e.g. ["@avsm/atp-identity"]).
+          The cmdliner layer renders this as a per-task row beneath
+          the agg row, similar to how [Fetch_started] / [Node_started]
+          rows are rendered. *)
+
+  | Solve_finished of { label : string }
+      (** The named solve group has completed (successfully or
+          failed). Drops the corresponding per-task row. *)
+
   | Plan_ready of D10ir.Plan.t
       (** Fired once the recipe is built, before
           [D10ir.Direct.run] starts firing per-node events. The UI
           uses this to materialise its per-package rows / dep-tree
           rendering. *)
+
+  | Total_estimate of {
+      fetches : int;
+      builds : int;
+      fetch_bytes : int64;
+    }
+      (** Fired by the cmdliner layer once it knows the final total
+          number of fetch and build tasks across all solve groups
+          ([oi build @overlay] / [oi build --all]). Locks the agg
+          bar's denominator so it stays static through the run
+          rather than dynamically incrementing as new groups
+          are discovered. After this event, per-task completion
+          events ([Fetch_finished], [Node_built / Cached / Failed /
+          Skipped]) increment the done count.
+
+          [fetch_bytes] is the upfront sum of binary-layer sizes
+          across all groups (looked up in the registry index
+          during the pre-pass). [0L] when no registry is configured
+          or no source-method layers will fetch. The bar's byte
+          denominator pins to this value so it doesn't grow as each
+          group's fetch phase emits its own [Fetch_started] events. *)
 
   | Build of D10ir.Direct.event
       (** Per-layer build events propagated from [D10ir.Direct]. The

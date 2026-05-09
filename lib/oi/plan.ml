@@ -273,6 +273,7 @@ type subst = string
 
 type package_plan = {
   pkg : string;
+  opam : OpamFile.OPAM.t;
   layer_hash : string;
   method_ : Identity.method_;
   dep_layers : Identity.dep list;
@@ -471,6 +472,7 @@ let resolve_node ctx ~packages_dirs ~cache_root ~prefix g (node : node) :
   in
   {
     pkg = pkg_s;
+    opam;
     layer_hash;
     method_;
     dep_layers;
