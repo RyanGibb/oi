@@ -72,7 +72,7 @@ val reporepo_url : unit -> string
     {!Oi.Source.Reporepo.default_url}. *)
 
 val default_registry : string
-(** [https://oi.ci.dev]. *)
+(** [https://oi.thicket.dev]. *)
 
 val use_registry : Oi.Use_registry.t Cmdliner.Term.t
 (** [--use-registry] term, accepting [all], [archives], or [never]. Defaults to
