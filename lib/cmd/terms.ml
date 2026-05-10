@@ -170,7 +170,7 @@ let toolchain =
           "Select a reporepo toolchain by name. List with $(b,oi config)."
         [ "toolchain" ])
 
-let default_registry = "https://oi.ci.dev"
+let default_registry = "https://oi.thicket.dev"
 
 let registry =
   let doc =
