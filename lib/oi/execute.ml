@@ -51,11 +51,9 @@ let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
                   (* Promote the just-fetched blob into our content-
                      addressed mirror so [oi build --export] picks it up
                      and registry consumers can fetch it offline. *)
-                  let _ =
-                    Source.Mirror.import_from_opam_cache ~fs ~cache_root
-                      checksums
-                  in
-                  ()
+                  ignore
+                    (Source.Mirror.import_from_opam_cache ~fs ~cache_root
+                       checksums)
               | OpamTypes.Not_available (_, msg) ->
                   Fmt.failwith "Failed to fetch %s: %s" p.pkg msg)
         with Failure msg ->
@@ -93,11 +91,9 @@ let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
               in
               match result with
               | OpamTypes.Result () | OpamTypes.Up_to_date () ->
-                  let _ =
-                    Source.Mirror.import_from_opam_cache ~fs ~cache_root
-                      checksums
-                  in
-                  ()
+                  ignore
+                    (Source.Mirror.import_from_opam_cache ~fs ~cache_root
+                       checksums)
               | OpamTypes.Not_available (_, msg) -> Fmt.failwith "%s" msg)
         with Failure msg ->
           (* Match the previous semantics: extra sources are
@@ -163,6 +159,7 @@ let apply_patches (p : Plan.package_plan) =
               ~cmd:(Fmt.str "patch -p1 -i %s" patch.file)
               ~output:(Printexc.to_string exn))
     p.patches
+
 let fetch_phase ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
   fetch_source ~cache_urls ~fs ~cache_root p;
   (* Ensure build_dir exists before fetching extra-sources: pull_tree

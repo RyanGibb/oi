@@ -2,10 +2,7 @@
 [@@@ai_model "claude-opus-4-7"]
 [@@@ai_provider "Anthropic"]
 
-(* Opam repository clones. Was inside [Source.Repo] in [source.ml]; lifted
-   here to keep [source.ml] thin and to make the four reporepo
-   sub-areas (clones, overlay metadata, pins, source mirror) navigable
-   as separate files. *)
+(* Opam repository clones. Re-exported as [Source.Repo]. *)
 
 let ( / ) = Filename.concat
 let log_src = Logs.Src.create "oi.source.repo"

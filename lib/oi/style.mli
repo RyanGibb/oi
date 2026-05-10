@@ -10,20 +10,7 @@ val info : Tty.Style.t
 val header : Tty.Style.t
 val dim : Tty.Style.t
 val accent : Tty.Style.t
-val strong_ok : Tty.Style.t
-val source : Tty.Style.t
 
-val camel : Tty.Style.t
-(** OCaml.org camel-orange. Used by progress UI (preflight spinner, multi-bar
-    fills) for unified branding across pipeline phases. *)
-
-val phase_fetch : Tty.Style.t
-val phase_build : Tty.Style.t
-val phase_install : Tty.Style.t
-val phase_binary : Tty.Style.t
-val phase_clone : Tty.Style.t
-val phase_configure : Tty.Style.t
-val phase_check : Tty.Style.t
 val error_string : string Fmt.t
 val warn_string : string Fmt.t
 val ok_string : string Fmt.t
@@ -33,8 +20,12 @@ val dim_string : string Fmt.t
 val accent_string : string Fmt.t
 val strong_ok_string : string Fmt.t
 val source_string : string Fmt.t
-val camel_string : string Fmt.t
 
 val pp : Tty.Style.t -> 'a Fmt.t -> 'a Fmt.t
 (** [pp style pp] wraps a formatter with [style]. Use for non-string formatters
     or one-off styles not in the palette. *)
+
+val pp_table : Format.formatter -> Tty.Table.t -> unit
+(** [pp_table ppf t] renders [t] through [ppf]. Honours the formatter's style
+    rendering setting: when ANSI is off, escapes are stripped before output
+    lands. Prefer this over {!Tty.Table.pp} at every call site. *)

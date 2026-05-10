@@ -27,16 +27,7 @@ let load_recipe dir =
 let opam_set_x_d10_archive ~path ~sha =
   let opam_file = OpamFile.make (OpamFilename.raw path) in
   let opam = OpamFile.OPAM.read opam_file in
-  let exts = OpamFile.OPAM.extensions opam in
-  let same =
-    match OpamStd.String.Map.find_opt "x-d10-archive" exts with
-    | Some v -> (
-        match v.OpamParserTypes.FullPos.pelem with
-        | OpamParserTypes.FullPos.String s -> s = sha
-        | _ -> false)
-    | None -> false
-  in
-  if same then `Already
+  if Oi.Keys.read_string_ext Oi.Keys.d10_archive opam = Some sha then `Already
   else
     let v : OpamParserTypes.FullPos.value =
       {
@@ -44,10 +35,43 @@ let opam_set_x_d10_archive ~path ~sha =
         pos = OpamTypesBase.pos_null;
       }
     in
-    let exts = OpamStd.String.Map.add "x-d10-archive" v exts in
+    let exts =
+      OpamStd.String.Map.add Oi.Keys.d10_archive v
+        (OpamFile.OPAM.extensions opam)
+    in
     let opam' = OpamFile.OPAM.with_extensions exts opam in
     OpamFile.OPAM.write opam_file opam';
     `Added
+
+(* Strip [patches:] and [extra-files:] from an opam file in place,
+   and remove the sibling [files/] subdirectory that holds the patch
+   blobs and extra-files content. Called after bake/restore once
+   [x-d10-archive] is set: the baked archive already contains the
+   patched + extras-included source tree, so the reporepo entry has
+   no further use for them. The [files/] dir is the bulk of a baked
+   reporepo's on-disk size, so reclaiming it matters. Returns whether
+   anything was actually rewritten / removed. *)
+let opam_strip_patches_extras ~fs ~opam_path =
+  let opam_file = OpamFile.make (OpamFilename.raw opam_path) in
+  let opam = OpamFile.OPAM.read opam_file in
+  let had_patches = OpamFile.OPAM.patches opam <> [] in
+  let had_extras = OpamFile.OPAM.extra_files opam <> None in
+  let files_dir = Filename.dirname opam_path / "files" in
+  let had_files_dir = Sys.file_exists files_dir in
+  if not (had_patches || had_extras || had_files_dir) then `Already
+  else begin
+    if had_patches || had_extras then begin
+      let opam =
+        opam
+        |> OpamFile.OPAM.with_patches []
+        |> OpamFile.OPAM.with_extra_files_opt None
+      in
+      OpamFile.OPAM.write opam_file opam
+    end;
+    if had_files_dir then
+      Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / files_dir);
+    `Stripped
+  end
 
 (* ---- ir emit ---------------------------------------------------------- *)
 
@@ -165,14 +189,14 @@ let emit_cmd =
     Arg.(
       required & pos 0 (some string) None
       & info ~docv:"TARGET"
-          ~doc:"A package, $(b,@HANDLE/PKG), or $(b,@HANDLE) target." [])
+          ~doc:"Build target: package name, $(b,@HANDLE/PKG), or $(b,@HANDLE)" [])
   in
   let out_dir =
     Arg.(
       required
       & opt (some string) None
       & info ~docv:"DIR"
-          ~doc:"Output directory for $(b,recipe.json). Created if missing."
+          ~doc:"Write $(b,recipe.json) into $(i,DIR), creating it if absent"
           [ "o"; "out" ])
   in
   let term =
@@ -190,23 +214,17 @@ let emit_cmd =
   in
   Cmd.v
     (Cmd.info "emit"
-       ~doc:"Solve, plan, and write a d10ir recipe to a directory."
+       ~doc:"Solve, plan, and write a d10ir recipe"
        ~man:
          [
            `S Cmdliner.Manpage.s_description;
            `P
-             "$(b,oi ir emit) solves for $(b,TARGET) (the same shapes accepted \
-              by $(b,oi run) — bare package, $(b,@HANDLE/PKG), URL-pinned with \
-              $(b,--with)), elaborates the build plan, materialises every \
-              package's source archive under \
-              $(b,<cache>/d10ir/archives/), and writes the resulting \
-              $(b,recipe.json) to $(b,DIR). Run the recipe with $(b,oi ir run \
-              DIR).";
+             "Solve for $(b,TARGET), fetch and patch every package's source, \
+              and write $(b,recipe.json) into $(i,DIR). No compilation \
+              happens. Replay with $(b,oi ir run DIR).";
            `P
-             "Emitting takes the same time as the source-prep phase of \
-              $(b,oi build) — fetches and patches run, but no compilation \
-              happens. The emitted recipe is replayable by anyone with access \
-              to the same archive contents.";
+             "$(b,TARGET) takes the same shapes as $(b,oi run): bare \
+              package, $(b,@HANDLE/PKG), or URL-pinned via $(b,--with).";
          ])
     term
 
@@ -234,7 +252,7 @@ let validate_cmd =
   let dir =
     Arg.(
       required & pos 0 (some string) None
-      & info ~docv:"DIR" ~doc:"Recipe directory containing recipe.json." [])
+      & info ~docv:"DIR" ~doc:"Recipe directory containing $(b,recipe.json)" [])
   in
   let term =
     Term.(
@@ -244,7 +262,7 @@ let validate_cmd =
       $ Terms.common $ dir)
   in
   Cmd.v
-    (Cmd.info "validate" ~doc:"Validate a d10ir recipe.")
+    (Cmd.info "validate" ~doc:"Validate a d10ir recipe")
     term
 
 (* ---- ir merge --------------------------------------------------------- *)
@@ -287,13 +305,13 @@ let merge_cmd =
   let inputs =
     Arg.(
       non_empty & pos_left ~rev:true 0 string []
-      & info ~docv:"RECIPE" ~doc:"Input d10ir recipe file paths." [])
+      & info ~docv:"RECIPE" ~doc:"Input d10ir recipe file" [])
   in
   let out =
     Arg.(
       required
       & pos ~rev:true 0 (some string) None
-      & info ~docv:"OUT" ~doc:"Output path for the merged recipe." [])
+      & info ~docv:"OUT" ~doc:"Output path for the merged recipe" [])
   in
   let term =
     Term.(
@@ -304,24 +322,17 @@ let merge_cmd =
   in
   Cmd.v
     (Cmd.info "merge"
-       ~doc:"Merge several d10ir recipes into one batched recipe."
+       ~doc:"Merge d10ir recipes into one batched recipe"
        ~man:
          [
            `S Cmdliner.Manpage.s_description;
            `P
-             "$(b,oi ir merge) folds a collection of recipes (typically the \
-              per-group $(b,*.d10ir.json) files written by $(b,oi build \
-              --save-d10ir=DIR)) into a single batched recipe that the \
-              executor can schedule across as one unified DAG.";
+             "Fold each $(i,RECIPE) into a single batched recipe at \
+              $(i,OUT). Nodes are deduplicated by layer hash; roots are \
+              unioned.";
            `P
-             "Nodes are deduplicated by layer hash, so transitive deps \
-              shared across input plans are kept once. Roots are union'd \
-              (every input's roots remain reachable in the merged plan).";
-           `P
-             "Errors out when the inputs disagree on schema version, \
-              $(b,os_key), $(b,toolchain.base_layer), or $(b,archive_root) — \
-              recipes that target different toolchains or platforms cannot \
-              be batched in one run.";
+             "Fails if inputs disagree on schema version, $(b,os_key), \
+              $(b,toolchain.base_layer), or $(b,archive_root).";
            `S Cmdliner.Manpage.s_examples;
            `Pre
              "  oi ir merge a.d10ir.json b.d10ir.json -o merged.d10ir.json";
@@ -393,9 +404,9 @@ let render_recipe_summary (plan : D10ir.Plan.t) =
 
 let show_run (c : Terms.common) dir plan_view =
   Harness.run @@ fun ~sw env ->
-  let _ =
-    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env c.cache_dir
-  in
+  ignore
+    (Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+       c.cache_dir);
   let plan = load_recipe dir in
   if plan_view then render_recipe_summary plan
   else begin
@@ -411,7 +422,7 @@ let show_cmd =
   let dir =
     Arg.(
       required & pos 0 (some string) None
-      & info ~docv:"DIR" ~doc:"Recipe directory." [])
+      & info ~docv:"DIR" ~doc:"Recipe directory" [])
   in
   let plan_view =
     (* Two flag names for symmetry with [oi show --plan] / hidden
@@ -422,8 +433,8 @@ let show_cmd =
       value & flag
       & info
           ~doc:
-            "Print the verbose recipe details (schema, mounts, every node's \
-             layer hash and archive) instead of the dependency tree."
+            "Dump full recipe details (schema, mounts, every node) instead \
+             of the dependency tree."
           [ "plan"; "details" ])
   in
   let term =
@@ -435,7 +446,7 @@ let show_cmd =
   in
   Cmd.v
     (Cmd.info "show"
-       ~doc:"Show a d10ir recipe's dependency tree or plan details.")
+       ~doc:"Show a d10ir recipe's dependency tree or plan details")
     term
 
 (* ---- ir run ----------------------------------------------------------- *)
@@ -499,19 +510,19 @@ let run_cmd =
   let dir =
     Arg.(
       required & pos 0 (some string) None
-      & info ~docv:"DIR" ~doc:"Recipe directory." [])
+      & info ~docv:"DIR" ~doc:"Recipe directory" [])
   in
   let parallel =
     Arg.(
       value
       & opt (some int) None
-      & info ~docv:"N" ~doc:"Build parallelism. Overrides $(b,OI_BUILD_PARALLELISM)."
+      & info ~docv:"N" ~doc:"Build $(i,N) layers in parallel; overrides $(b,OI_BUILD_PARALLELISM)"
           [ "j"; "jobs" ])
   in
   let keep =
     Arg.(
       value & flag
-      & info ~doc:"Keep per-node staging dirs after build (debug)."
+      & info ~doc:"Keep per-node staging directories after build (debug)"
           [ "keep-staging" ])
   in
   let term =
@@ -521,22 +532,22 @@ let run_cmd =
           if code <> 0 then exit code)
       $ Terms.common $ dir $ parallel $ keep)
   in
-  Cmd.v (Cmd.info "run" ~doc:"Execute a d10ir recipe via the Direct executor.") term
+  Cmd.v (Cmd.info "run" ~doc:"Execute a d10ir recipe") term
 
 (* ---- group ------------------------------------------------------------ *)
 
 let cmd =
   Cmd.group
     (Cmd.info "ir"
-       ~doc:"Inspect, validate, and execute d10ir recipes."
+       ~doc:"Inspect, validate, and execute d10ir recipes"
        ~man:
          [
            `S Cmdliner.Manpage.s_description;
            `P
-             "$(b,oi ir) groups commands that operate directly on serialised \
-              d10ir recipes (recipe.json + archives/). Useful for replaying a \
-              recipe produced by $(b,oi build --emit-recipe), for inspecting \
-              what oi would build, and for validating that all archives and \
-              dep layers are in place before kicking off a build.";
+             "Operate on serialised d10ir recipes \
+              ($(b,recipe.json) + archives). Emit a recipe with $(b,oi ir \
+              emit), inspect with $(b,oi ir show), check archives and dep \
+              layers with $(b,oi ir validate), then replay with $(b,oi ir \
+              run).";
          ])
     [ emit_cmd; run_cmd; validate_cmd; show_cmd; merge_cmd ]

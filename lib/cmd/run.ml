@@ -346,10 +346,70 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                   in
                   D10ir.Plan.save Eio.Path.(fs / dst) recipe)
             solved.groups);
-      let _ : D10ir.Direct.result option =
+      let build_result =
         Oi.Build_pipeline.build pipeline_env ~reporter
           { solved; layer_remote; source_remote; jobs }
       in
+      (* Surface build outcomes: previously [_ = build …] discarded
+         this, so a failed [D10ir.Direct.run] (or one that returned
+         immediately with an empty plan) silently produced an empty
+         prefix, and we'd later mis-report "solved but does not install
+         bin/<target>". *)
+      (match build_result with
+      | None ->
+          (* Build_pipeline.build returns [None] when [solved.merged]
+             is [None] — every solve group failed elaborate or recipe
+             emit. The per-group [error] field carries the reason. *)
+          let group_msgs =
+            List.filter_map
+              (fun (gr : Oi.Build_pipeline.group_result) ->
+                match gr.error with
+                | Ok () -> None
+                | Error e ->
+                    let kind =
+                      match e with
+                      | Solve_failed _ -> "solve"
+                      | Cycle _ -> "cycle"
+                      | Empty_after_strip -> "empty"
+                      | Elaborate_failed _ -> "elaborate"
+                      | Emit_failed _ -> "emit"
+                    in
+                    Some (Fmt.str "%s: %s" gr.group.label kind))
+              solved.groups
+          in
+          Oi.Error.config_error
+            "build pipeline produced no executable plan (%s). Re-run with \
+             --verbosity=debug for the per-group trace."
+            (String.concat ", " group_msgs)
+      | Some r when r.failed = 0 && r.skipped = 0 && r.built = 0 && r.cached = 0 ->
+          (* Direct.run was handed an empty plan. Likely cause: every
+             package was filtered out of the d10ir recipe (e.g. all
+             marked Binary against a stale d10 cache, or recipe emit
+             skipped them silently). Without this guard we'd assemble
+             an empty prefix and report a misleading "no bin/<X>". *)
+          Oi.Error.config_error
+            "build pipeline ran with an empty d10ir plan: solver \
+             picked packages but the d10ir executor saw 0 nodes. The \
+             most likely cause is a stale d10 layer cache; try \
+             [oi clean --layers] and re-run."
+      | Some r when r.failed = 0 && r.skipped = 0 -> ()
+      | Some r ->
+          let pp_fail (f : D10ir.Direct.failure) =
+            Fmt.str "%s.%s @ %s — see %s" f.package.name f.package.version
+              (D10ir.Direct.phase_to_string f.phase) f.log_path
+          in
+          if r.failures <> [] then begin
+            let summary = List.map pp_fail r.failures |> String.concat "\n  " in
+            Oi.Error.config_error
+              "build failed: %d node(s) failed, %d skipped.@\n  %s"
+              r.failed r.skipped summary
+          end
+          else
+            Oi.Error.config_error
+              "build failed: 0 nodes built, %d skipped (likely a dep \
+               chain broke upstream). Re-run with --verbosity=debug for \
+               the per-node trace."
+              r.skipped);
       Oi.Build_pipeline.layer_hashes solved
     in
     Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
@@ -726,24 +786,21 @@ let target =
     & pos 0 (some string) None
     & info ~docv:"TARGET"
         ~doc:
-          "Either the name of a binary to run, the path to an OCaml $(b,.ml) \
-           script, or an $(b,http) or $(b,https) URL pointing at a remote \
-           $(b,.ml) script."
+          "Binary name, $(b,@HANDLE/PKG) overlay shortcut, $(b,.ml) script \
+           path, or $(b,https://) URL pointing at a $(b,.ml) script ($(b,http://) \
+           also accepted)."
         [])
 
 let dry_run =
   Arg.(
     value & flag
-    & info
-        ~doc:
-          "Print the packages that would be built, but do not fetch, compile, \
-           or run anything."
+    & info ~doc:"Print the build plan and exit."
         [ "n"; "dry-run" ])
 
 let args =
   Arg.(
     value & pos_right 0 string []
-    & info ~docv:"ARG" ~doc:"Arguments passed through to $(b,TARGET)." [])
+    & info ~docv:"ARG" ~doc:"Forwarded to $(b,TARGET)." [])
 
 let save_d10ir =
   Arg.(
@@ -751,105 +808,86 @@ let save_d10ir =
     & opt (some string) None
     & info ~docv:"DIR"
         ~doc:
-          "Save the d10ir recipe generated for the solve into $(b,DIR) \
-           alongside running. A file $(b,<root-pkg>.d10ir.json) is written; \
-           does not skip the build."
+          "Write the d10ir recipe for each solve group to \
+           $(b,DIR/<root>.d10ir.json). Does not skip the build."
         [ "save-d10ir" ])
 
 let info_run =
-  Cmd.info "run" ~doc:"Run an OCaml script or any opam-packaged binary"
+  Cmd.info "run" ~doc:"Run an opam-packaged binary or OCaml script"
     ~man:
       [
         `S Manpage.s_description;
         `P
-          "Resolve $(b,TARGET)'s dependencies, install them into the shared \
-           cache, and run $(b,TARGET). Subsequent runs with the same dep set \
-           reuse the cache.";
-        `P
-          "$(b,TARGET) is a binary name, a local $(b,.ml) script, or an \
-           $(b,http)/$(b,https) URL pointing at a remote script.";
-        `S "BINARY TARGETS";
-        `P
-          "$(b,oi) looks up the opam package shipping the named binary and \
-           installs it. Dash-prefixes fall back: $(b,ocluster-admin) tries \
-           $(b,ocluster). $(b,--with) packages are searched first.";
+          "Resolve $(b,TARGET)'s dependencies into the shared cache and exec \
+           $(b,TARGET). Arguments after $(b,TARGET) are forwarded unchanged.";
+        `P "$(b,TARGET) is one of:";
+        `I ("$(b,name)", "Binary name. Looked up in the layer index; \
+                          dash-prefixes fall back ($(b,ocluster-admin) tries \
+                          $(b,ocluster)).");
+        `I ("$(b,@HANDLE/PKG)", "Take $(b,PKG) from the named overlay.");
+        `I ("$(b,path/to/script.ml)", "Local OCaml script.");
+        `I ("$(b,https://...ml)", "Remote OCaml script ($(b,http://) also \
+                                    accepted). Refetched each run; cached \
+                                    by content hash.");
+        `S "BINARIES";
         `Pre
           "  oi run utop\n\
           \  oi run ocamlformat -- --help\n\
           \  oi run --with=crockford roguedoi";
-        `S "SCRIPT TARGETS";
-        `P
-          "For $(b,.ml) scripts, $(b,oi) parses the first line for deps, \
-           builds them with the script, and caches by content hash. Editing \
-           the script triggers a rebuild. Remote URLs are refetched on every \
-           invocation and rebuilt only when contents change.";
+        `S "SCRIPTS";
         `P "Declare deps on the first line:";
         `Pre "  [@@@opam fmt cmdliner lwt>=5.0]";
         `P
-          "Each token is an opam package, with optional version constraint \
+          "Each token is an opam package with optional constraint \
            ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
-           auto-wired as PPX preprocessors.";
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
+           as preprocessors.";
         `Pre
           "  oi run my_script.ml\n\
           \  oi run my_script.ml --with=tls -- arg1 arg2\n\
           \  oi run https://gist.example.com/hello.ml";
         `S "OVERLAYS";
         `P
-          "Prefix $(i,@HANDLE/) on a target or $(b,--with) value to pull from \
-           the named overlay; bare $(i,@HANDLE) stacks the whole overlay onto \
-           the solve. See $(b,oi repo).";
+          "$(i,@HANDLE/PKG) on $(b,TARGET) or $(b,--with) takes $(b,PKG) from \
+           an overlay. Bare $(i,@HANDLE) on $(b,--with-repo) stacks the whole \
+           overlay. $(b,x-repos: [\"@HANDLE\"]) in a project's $(b,*.opam) \
+           applies it automatically.";
         `Pre
           "  oi run @avsm/owntracks\n  oi run --with=@avsm/crockford roguedoi";
-        `P
-          "Add $(b,x-repos: [\"@HANDLE\"]) to a project's $(b,*.opam) to apply \
-           the overlay automatically. Plain URLs are also accepted as unpinned \
-           escape hatches.";
         `S "PROJECT EXTRAS";
-        `P
-          "Files read from the project (cwd, or the clone of $(b,--with=URL)) \
-           that influence the solve:";
-        `I
-          ( "$(b,*.opam)",
-            "$(b,depends:), $(b,pin-depends:), and $(b,x-repos:) merge into \
-             the solve. Local roots become solver roots." );
-        `I
-          ( "$(b,packages/) + $(b,repo)",
-            "When the project root contains a $(b,repo) marker, its \
-             $(b,packages/) tree is injected as the highest-priority \
-             opam-repository. Use it to ship a patched opam file for a \
-             transitive dep without vendoring its sources." );
+        `P "Read from the cwd (or a $(b,--with=URL) clone):";
+        `I ("$(b,*.opam)",
+            "$(b,depends:), $(b,pin-depends:), $(b,x-repos:) merge into the \
+             solve.");
+        `I ("$(b,packages/) + $(b,repo)",
+            "Highest-priority opam-repository overlay for patched transitive \
+             deps.");
         `S "TOOLCHAIN";
         `P "Picked in order:";
         `I ("1.", "$(b,--toolchain=NAME).");
-        `I
-          ( "2.",
-            "$(b,x-oi-toolchain) on an in-scope $(b,@HANDLE) (target, \
-             $(b,--with-repo=@h), or project $(b,x-repos:)). Conflicts error."
-          );
+        `I ("2.", "$(b,x-oi-toolchain) on an in-scope $(b,@HANDLE). Conflicts \
+                  error.");
         `I ("3.", "Reporepo's $(b,x-oi-default-toolchain).");
         `S "GIT URLS";
         `P
-          "$(b,--with=URL) clones the repo and pins each root $(b,*.opam) as a \
-           solver root. Schemes: $(b,http://), $(b,https://), $(b,git+), \
-           $(b,git@), $(b,git://), $(b,ssh://). Append $(b,#REF) for a \
-           specific commit/tag/branch.";
+          "$(b,--with=URL) clones the repo and pins every root $(b,*.opam). \
+           Schemes: $(b,http://), $(b,https://), $(b,git+), $(b,git@), \
+           $(b,git://), $(b,ssh://). Append $(b,#REF) for a tag, branch, \
+           or commit.";
         `Pre
           "  oi run --with=https://github.com/owner/project.git target\n\
           \  oi run --with=git+https://example.org/foo.git#branch foo";
         `S "VERSION CONSTRAINTS";
-        `P "Pin a $(b,--with) dep with $(b,pkg.VERSION) or $(b,pkg=VERSION).";
+        `P "$(b,pkg.VERSION) or $(b,pkg=VERSION) on $(b,--with).";
         `Pre
           "  oi run --with=dune.3.20.0 -- dune --version\n\
           \  oi run --with=fmt>=0.9 my_script.ml";
         `S "DRY RUN";
         `P "$(b,-n) prints the plan and exits. Per-package tags:";
-        `I ("$(b,binary)", "Already cached.");
-        `I ("$(b,remote)", "Fetchable from the configured registry.");
-        `I ("$(b,source)", "Would compile from source.");
-        `I
-          ( "$(b,virtual)",
-            "Placeholder ($(b,conf-pkg-config) etc.); nothing to build." );
+        `I ("$(b,binary)", "Cached locally.");
+        `I ("$(b,remote)", "Fetchable from the registry.");
+        `I ("$(b,source)", "Compiles from source.");
+        `I ("$(b,virtual)", "No-op placeholder ($(b,conf-pkg-config) etc.).");
       ]
 
 let info_oix =
@@ -857,6 +895,10 @@ let info_oix =
     ~man:
       [
         `S Manpage.s_description;
+        `P
+          "Resolve $(b,TARGET), build its dependencies into the shared cache, \
+           and exec it. Arguments after $(b,TARGET) are forwarded unchanged. \
+           Equivalent to $(b,oi run --skip-local).";
         `Pre
           "  oix utop\n\
           \  oix patdiff a.txt b.txt\n\
@@ -867,45 +909,38 @@ let info_oix =
           \  oix --toolchain=oxcaml utop\n\
           \  oix @avsm/owntracks\n\
           \  oix -n utop";
-        `P
-          "$(b,oix) resolves $(b,TARGET), builds it and its dependencies into \
-           a shared cache, and runs it. Repeat invocations with the same flags \
-           are instant.";
-        `P "Arguments after $(b,TARGET) are forwarded to it unchanged.";
         `S "EXTRA DEPENDENCIES";
         `P
-          "$(b,--with) adds a package alongside $(b,TARGET). Accepts a bare \
-           name, an opam atom ($(b,fmt>=0.9), $(b,dune.3.20.0)), or a git URL \
-           whose root $(b,*.opam) files become pins. Repeatable.";
+          "$(b,--with) accepts a bare name, opam atom \
+           ($(b,fmt>=0.9), $(b,dune.3.20.0)), or git URL \
+           (every root $(b,*.opam) becomes a pin). Repeatable.";
         `Pre
           "  oix --with=tls --with=cohttp my_client\n\
           \  oix --with=dune.3.20.0 dune --version\n\
           \  oix --with=https://github.com/owner/proj.git my-tool";
         `S "OVERLAYS";
         `P
-          "Overlays are curated bundles of opam packages. Prefix $(b,@HANDLE/) \
-           on $(b,TARGET) or $(b,--with) to take a single package from a named \
-           overlay. $(b,--with-repo=@HANDLE) stacks the whole overlay onto the \
-           solve.";
+          "$(b,@HANDLE/PKG) on $(b,TARGET) or $(b,--with) takes one package \
+           from an overlay. $(b,--with-repo=@HANDLE) stacks the whole \
+           overlay.";
         `Pre "  oix @avsm/owntracks\n  oix --with-repo=@avsm crockford";
         `S "TOOLCHAIN";
         `P
-          "$(b,--toolchain=NAME) pins the compiler. Without it, an overlay \
-           tagged with $(b,x-oi-toolchain) wins, falling back to a sensible \
-           default.";
+          "$(b,--toolchain=NAME) pins the compiler. Otherwise an overlay's \
+           $(b,x-oi-toolchain) wins, falling back to the reporepo default.";
         `S "SCRIPT FORMAT";
         `P
-          "$(b,TARGET) may also be a local $(b,.ml) script or an \
-           $(b,http(s)://) URL pointing at one. Declare deps on the first \
+          "$(b,TARGET) may be a $(b,.ml) script path or an $(b,https://) \
+           URL ($(b,http://) also accepted). Declare deps on the first \
            line:";
         `Pre "  [@@@opam fmt cmdliner>=1.2.0 lwt]";
         `P
-          "Each token is an opam package, with optional version constraint \
+          "Each token is an opam package with optional constraint \
            ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
-           in as preprocessors automatically.";
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
+           wired as preprocessors.";
         `S Manpage.s_see_also;
-        `P "$(b,oi)(1) — project-aware build, test, and run.";
+        `P "$(b,oi)(1).";
       ]
 
 let term ~skip_local =

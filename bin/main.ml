@@ -38,27 +38,23 @@ let exits =
   ]
 
 let info =
-  Cmd.info "oi" ~version ~exits ~doc:"A fast, stateless OCaml package manager"
+  Cmd.info "oi" ~version ~exits ~doc:"Fast, stateless OCaml package manager"
     ~man:
       [
         `S Manpage.s_description;
         `P
-          "$(b,oi) reads the $(b,*.opam) manifests OCaml projects ship, solves \
-           against opam-repository, and builds, runs, or publishes the result. \
-           Every build is content-addressed and cached, so repeat invocations \
-           are quick, and no global state is required to reproduce most \
-           commands.";
+          "Solve $(b,*.opam) manifests against opam-repository and build, \
+           run, or publish the result. Builds are content-addressed and \
+           cached.";
         `S "QUICK START";
-        `P "$(b,1.) Run any tool published on opam:";
+        `P "$(b,1.) Run a tool from opam:";
         `Pre
           "  oi run utop\n\
           \  oi run ocamlformat -- --help\n\
           \  oi run --with=dune.3.20.0 -- dune --version";
-        `P "$(b,2.) Run an $(b,.ml) script with deps on the first line:";
+        `P "$(b,2.) Run an $(b,.ml) script. Deps on the first line:";
         `Pre "  echo '[@@@opam fmt cmdliner]' > hello.ml\n  oi run hello.ml";
-        `P
-          "$(b,3.) Build, test, and develop in a project. From the project \
-           root:";
+        `P "$(b,3.) Develop in a project. From the project root:";
         `Pre
           "  oi build               # sync deps + dev tools, run dune build\n\
           \  oi test                # dune runtest\n\
@@ -66,58 +62,53 @@ let info =
           \  oi exec -- dune utop   # any command, project env applied\n\
           \  oi add logs            # edit dune-project + re-solve";
         `P
-          "If $(b,direnv) is installed, $(b,oi build) writes $(b,.envrc) so \
-           your shell auto-activates the prefix. Otherwise:";
+          "$(b,oi build) writes $(b,.envrc) when $(b,direnv) is present. \
+           Otherwise:";
         `Pre "  eval \"\\$(oi env)\"";
         `P
-          "$(b,4.) Pull packages from somebody's curated overlay (a git-pinned \
-           opam-repository). The $(i,reporepo) lists known overlay handles; \
-           $(b,oi repo) manages it.";
+          "$(b,4.) Pull from a curated overlay. $(b,oi repo) manages the \
+           reporepo of known handles.";
         `Pre
           "  oi run @avsm/owntracks\n  oi run --with=@avsm/crockford roguedoi";
-        `P "$(b,5.) Inspect, search, dry-run before doing anything:";
+        `P "$(b,5.) Inspect before acting:";
         `Pre
           "  oi show utop                 # build plan + depexts\n\
           \  oi show --all                # every cached layer\n\
           \  oi search dune               # find a binary or package\n\
           \  oi run -n utop               # show the plan, run nothing";
-        `P
-          "$(b,6.) Publish a registry of pre-built layers + source mirror to a \
-           static HTTP server:";
+        `P "$(b,6.) Publish a registry to a static HTTP server:";
         `Pre
           "  oi build --all --export ./registry\n\
           \  rsync -a ./registry/ user@server:/srv/oi-registry/\n\
           \  oi run --registry=https://server/oi-registry @avsm/owntracks";
-        `P "$(b,7.) Generate Dockerfiles for CI:";
+        `P "$(b,7.) Generate Dockerfiles:";
         `Pre
           "  oi docker                                    # project build\n\
           \  oi docker --test --distro=alpine-3.23        # project tests\n\
           \  oi docker --all -o ./registry-build          # multi-distro";
         `S "SCRIPT FORMAT";
-        `P "The first line of a $(b,.ml) script declares its dependencies:";
+        `P "First line of an $(b,.ml) script declares its dependencies:";
         `Pre "  [@@@opam fmt cmdliner>=1.2.0 lwt]";
         `P
           "Each token is an opam package, with optional version constraint \
            ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
-           in as preprocessors automatically. $(b,oi run -vv SCRIPT.ml) prints \
-           the generated dune project.";
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
+           wired in as preprocessors. $(b,oi run -vv SCRIPT.ml) prints the \
+           generated dune project.";
         `S "PROJECT LAYOUT";
         `P
-          "$(b,oi build) installs the project's deps and dev tools into \
-           $(b,_oi/) under the project root. Activate the env per shell:";
+          "$(b,oi build) installs deps and dev tools into $(b,_oi/) under \
+           the project root. Activate per shell:";
         `Pre
           "  eval \"\\$(oi env)\"          # one shell\n\
           \  oi exec -- CMD              # one command\n\
           \  direnv allow                # auto-activate (if direnv installed)";
-        `P
-          "$(b,_oi/) is rebuildable. Add it to $(b,.gitignore). Delete it to \
-           force a fresh sync.";
+        `P "$(b,_oi/) is rebuildable. Add to $(b,.gitignore).";
         `S "AUTOMATION";
         `P
-          "Non-interactive and idempotent with a non-zero exit on failure (see \
-           $(b,EXIT STATUS)). $(b,oi self version --format=json) reports the \
-           schemas a script can parse.";
+          "Non-interactive, idempotent, non-zero exit on failure (see \
+           $(b,EXIT STATUS)). $(b,oi self version --format=json) reports \
+           parseable schemas.";
         `Pre
           "  $(b,Discover)   oi CMD --help=plain, oi config, oi search \
            PATTERN, oi show TARGET\n\
@@ -129,36 +120,46 @@ let info =
           \  $(b,Reproduce)  --toolchain, --with-repo, --registry, \
            --use-registry; oi source TARGET -o DIR\n\
           \  $(b,Sandbox)    --cache-dir, --data-dir, --use-registry=never, \
-           --skip-local, --locked\n\
-          \  $(b,Upgrades)   schema-mismatched caches self-clear; no defensive \
-           oi clean";
+           --skip-local, --locked";
         `S Manpage.s_environment;
         `P
-          "$(b,oi) uses two directories. The data directory holds long-lived \
-           state (opam-repository clones, toolchains). The cache directory \
-           holds rebuildable data (layers, prefixes, source mirror). Each is \
-           overridable.";
+          "Long-lived state lives in the data directory (opam-repository \
+           clones, toolchains). Rebuildable state lives in the cache \
+           directory (layers, prefixes, source mirror).";
         `I
           ( "$(b,OI_DATA_DIR)",
-            "Override the data directory. Falls back to $(b,XDG_DATA_HOME/oi), \
-             then to $(b,~/.local/share/oi)." );
+            "Data directory. Falls back to $(b,XDG_DATA_HOME/oi), then \
+             $(b,~/.local/share/oi)." );
         `I
           ( "$(b,OI_CACHE_DIR)",
-            "Override the cache directory. Falls back to \
-             $(b,XDG_CACHE_HOME/oi), then to $(b,~/.cache/oi)." );
+            "Cache directory. Falls back to $(b,XDG_CACHE_HOME/oi), then \
+             $(b,~/.cache/oi)." );
         `I
           ( "$(b,OI_REPOREPO)",
-            "Override the location of the reporepo clone. Defaults to \
+            "Reporepo clone path. Defaults to \
              $(b,\\$OI_DATA_DIR/reporepo)." );
         `I
           ( "$(b,OI_REPOREPO_URL)",
-            "Override the upstream URL used to clone the reporepo on first \
-             use. Defaults to the built-in upstream. Once the local clone \
-             exists, $(b,oi) never pulls from this URL again. The clone is \
-             yours to edit, commit, and push." );
+            "Upstream URL for the initial reporepo clone. Ignored once the \
+             local clone exists." );
         `S Manpage.s_see_also;
         `P "$(b,oix)(1) — one-shot runner for opam-packaged binaries.";
       ]
+
+(* Cmdliner's [--help=auto] keys off [$TERM] alone — pager/groff (which
+   emit ANSI escapes via [man]-style rendering) win whenever [TERM] is
+   set, even when stdout is a pipe or a file. Rewrite a bare [--help]
+   / [--help=auto] to [--help=plain] before [Cmd.eval] so [oi --help >
+   out.txt] doesn't produce a file full of [\027[1m]/[\027[24m]. *)
+let force_plain_help_when_redirected argv =
+  let isatty = try Unix.isatty Unix.stdout with Unix.Unix_error _ -> false in
+  if isatty then argv
+  else
+    Array.map
+      (function
+        | "--help" | "--help=auto" -> "--help=plain"
+        | a -> a)
+      argv
 
 let () =
   let group =
@@ -182,4 +183,5 @@ let () =
         Oi_cmd.Source.cmd;
       ]
   in
-  exit (Cmd.eval group)
+  let argv = force_plain_help_when_redirected Sys.argv in
+  exit (Cmd.eval ~argv group)

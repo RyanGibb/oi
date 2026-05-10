@@ -8,6 +8,14 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 
 type db = Sqlite3.db
 
+type stats = {
+  layers : int;
+  binaries : int;
+  files : int;
+  findlib : int;
+  tarballs : int;
+}
+
 let exec db sql =
   match Sqlite3.exec db sql with
   | Sqlite3.Rc.OK -> ()
@@ -65,11 +73,11 @@ let schema =
     FOREIGN KEY (layer_hash) REFERENCES layers(hash)
   );
 
-  -- Optional: file path index for [oi cache] / dependency-resolution
-  -- tools that need to know exactly what a layer ships. Populated only
-  -- when the registry is exported with [--with-layers] (the full
-  -- layer-cache mode). Skipped on a bin-index export to keep size
-  -- under a megabyte for typical tool sets.
+  -- Optional: file path index for tools that need the exact ship-list
+  -- of a layer. Populated only when [rebuild ~include_files:true]; the
+  -- default false keeps [index.db] under a megabyte for typical tool
+  -- sets, since [oi search] / [find_binary] / [find_meta] don't read
+  -- this table.
   CREATE TABLE IF NOT EXISTS layer_files (
     layer_hash    TEXT NOT NULL,
     path          TEXT NOT NULL,
@@ -111,7 +119,6 @@ let quote s =
 
 (* -- Indexing ------------------------------------------------------------- *)
 
-(* Scan a layer's fs/ directory for files, return relative paths *)
 let scan_files ~fs fs_dir =
   let files = ref [] in
   let base = Eio.Path.(fs / fs_dir) in
@@ -331,7 +338,6 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
                  (quote hash) (quote os_key) (quote arch) (quote os)
                  (quote distro) (quote os_version) (quote name) (quote version)
                  info.exit_status info.created oh ov);
-            (* Insert deps *)
             List.iteri
               (fun i dep_s ->
                 let dep_name, dep_version = parse_pkg_string dep_s in
@@ -543,22 +549,6 @@ let find_meta db ~findlib_pkg ~os_key =
         (OpamPackage.Version.of_string v1))
     (List.rev !results)
 
-let tarball_info db ~hash =
-  let result = ref None in
-  let cb row =
-    match row with
-    | [| sha; size_s |] -> (
-        try result := Some (sha, Int64.of_string size_s) with _ -> ())
-    | _ -> ()
-  in
-  ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT tarball_sha256, tarball_size FROM layers WHERE hash = %s \
-           AND tarball_sha256 IS NOT NULL"
-          (quote hash)));
-  !result
-
 let all_tarballs db ~os_key =
   let results = ref [] in
   let cb row =
@@ -604,21 +594,6 @@ let files db ~hash =
           (quote hash)));
   List.rev !results
 
-let all_layers db ~os_key =
-  let results = ref [] in
-  let cb row =
-    match row with
-    | [| hash; name; version; status |] ->
-        results := (hash, name, version, int_of_string status) :: !results
-    | _ -> ()
-  in
-  ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT hash, package_name, package_ver, exit_status FROM layers \
-           WHERE os_key = %s ORDER BY package_name, package_ver"
-          (quote os_key)));
-  List.rev !results
 
 let all_binaries db ~os_key =
   let results = ref [] in
@@ -658,18 +633,22 @@ let stats db ~os_key =
     ignore (Sqlite3.finalize stmt);
     n
   in
-  let n_layers = get_count "SELECT COUNT(*) FROM layers WHERE os_key = ?" in
-  let n_binaries =
-    get_count
-      "SELECT COUNT(*) FROM layer_binaries b JOIN layers l ON b.layer_hash = \
-       l.hash WHERE l.os_key = ?"
+  let scoped table =
+    Fmt.str
+      "SELECT COUNT(*) FROM %s t JOIN layers l ON t.layer_hash = l.hash WHERE \
+       l.os_key = ?"
+      table
   in
-  let n_files =
+  let layers = get_count "SELECT COUNT(*) FROM layers WHERE os_key = ?" in
+  let binaries = get_count (scoped "layer_binaries") in
+  let files = get_count (scoped "layer_files") in
+  let findlib = get_count (scoped "layer_meta") in
+  let tarballs =
     get_count
-      "SELECT COUNT(*) FROM layer_files f JOIN layers l ON f.layer_hash = \
-       l.hash WHERE l.os_key = ?"
+      "SELECT COUNT(*) FROM layers WHERE os_key = ? AND tarball_sha256 IS NOT \
+       NULL"
   in
-  (n_layers, n_binaries, n_files)
+  { layers; binaries; files; findlib; tarballs }
 
 (* -- Invalidation --------------------------------------------------------- *)
 
@@ -707,20 +686,13 @@ let delete_layers db ~hashes =
 
 (* -- Remote merge --------------------------------------------------------- *)
 
-(* Build the column-name intersection between a local table and the
-   same table in the attached "remote" schema, so a merge from an
-   older registry that lacks (e.g.) [tarball_sha256] still imports
-   the rows it does have. Uses [pragma_table_info] (the table-valued
-   variant) instead of [PRAGMA table_info] because the latter goes
-   through the [Sqlite3.exec_not_null_no_headers] callback, which
-   silently drops rows where any column is NULL — including PRAGMA's
-   own [dflt_value] column when no default is set, which is most
-   columns in our schema. *)
 (* Column names of [<schema>.<table>]. Uses [PRAGMA table_info]
    driven through [Sqlite3.exec] (not [exec_not_null_no_headers] —
    that variant silently drops rows whose [dflt_value] is NULL,
    which is most of our columns). The [schema] qualifier lets us
-   inspect the attached "remote" database during a merge. *)
+   inspect the attached "remote" database during a merge so that
+   {!copy_table_intersection} can tolerate older registries missing
+   newer columns (e.g. [tarball_sha256]). *)
 let column_names db ~schema ~table =
   let cols = ref [] in
   let cb row _headers =

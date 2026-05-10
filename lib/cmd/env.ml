@@ -141,26 +141,26 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Print $(b,export) statements for $(b,PATH), $(b,OCAMLLIB), and \
-             the other OCaml environment variables, pointing at \
-             $(b,_oi/prefix/). The non-$(b,direnv) equivalent of $(b,.envrc).";
+             the other OCaml variables pointing at $(b,_oi/prefix/). \
+             Non-$(b,direnv) equivalent of $(b,.envrc).";
           `Pre "  eval \"\\$(oi env)\"";
           `P
             "Reuses $(b,_oi/prefix/) when it exists and no extras are \
-             requested. With $(b,--with), $(b,--with-repo), $(b,--toolchain), \
-             or when $(b,_oi/prefix/) is missing, builds a one-shot prefix in \
-             process; $(b,.envrc) and dev tools are not updated. Run $(b,oi \
-             build --deps-only) for that.";
+             requested. With $(b,--with), $(b,--with-repo), \
+             $(b,--toolchain), $(b,--skip-local), or a missing prefix, \
+             builds a one-shot prefix in-process; $(b,.envrc) and dev tools \
+             are not updated. Use $(b,oi build --deps-only) for that.";
           `S "TOOLCHAIN";
-          `P "The active toolchain is picked in this order:";
-          `I ("1.", "$(b,--toolchain=NAME), if given.");
+          `P "Active toolchain, in order:";
+          `I ("1.", "$(b,--toolchain=NAME).");
           `I
             ( "2.",
-              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — from \
+              "$(b,x-oi-toolchain) on any in-scope $(b,@HANDLE) — from \
                $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
-               $(b,x-repos:). Conflicting tags are an error." );
+               $(b,x-repos:). Conflicting tags error out." );
           `I
             ( "3.",
-              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
+              "Reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
         ]
   in
   Cmd.v info

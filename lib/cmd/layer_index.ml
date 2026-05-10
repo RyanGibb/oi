@@ -39,10 +39,11 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
   else begin
     let disk = count_on_disk_layers ~fs ~os_layer_dir:layers_dir in
     let db = D10.Index.open_ ~path:index_path in
-    let indexed, _, _ = D10.Index.stats db ~os_key in
+    let s = D10.Index.stats db ~os_key in
     D10.Index.close db;
-    if disk > indexed then
-      rebuild (Fmt.str "Refreshing (%d on-disk vs %d indexed)" disk indexed)
+    if disk > s.layers then
+      rebuild
+        (Fmt.str "Refreshing (%d on-disk vs %d indexed)" disk s.layers)
   end;
   index_path
 

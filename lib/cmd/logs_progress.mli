@@ -39,22 +39,10 @@ val start_display_compact :
   config:Progress.Config.t ->
   ((unit, unit) Progress.Display.t)
 (** [start_display_compact ~ppf ~config] is [Progress.Display.start
-    ~config Progress.Multi.blank] followed by a single
-    cursor-up-one-line escape on [ppf], to suppress the blank line
-    that the next [add_line] would otherwise leave above the
-    rendered bar.
+    ~config Progress.Multi.blank].
 
-    [ppf] must be the same formatter that was given to
-    [Progress.Config.v ~ppf:…]; we can't read it back out of the
-    [Config.t] (the field is private), so the caller passes it
-    explicitly.
-
-    Cause: [Progress.Display]'s [add_line] emits an unconditional
-    [pp_force_newline] before rendering the row, so the very first
-    [add_line] after a [start] on an empty [Multi] lands the row one
-    line below the cursor's starting position — leaving the
-    starting line blank. The cursor-up here compensates so the row
-    lands where the cursor actually was when [start] was called,
-    which is what every caller wants in practice (the shell's
-    post-prompt line). *)
+    [ppf] is accepted for symmetry with the {!Progress.Config.v} the
+    caller built around the same formatter, but currently isn't used
+    — the bar simply paints below the user's command line, leaving
+    the prompt+command intact when the bar is finalised. *)
 

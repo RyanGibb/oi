@@ -49,6 +49,24 @@ let publish_one ~src ~dst =
         true
       with _ -> false)
 
+(* List every [<sha>.tar.zst] in [<cache>/d10ir/archives/] with its
+   on-disk size. Returns [(sha, size_bytes)] pairs sorted by sha. *)
+let list ~cache =
+  let src = local_dir ~cache in
+  if not (Sys.file_exists src) then []
+  else
+    Sys.readdir src |> Array.to_list
+    |> List.filter_map (fun name ->
+        match Filename.chop_suffix_opt ~suffix:".tar.zst" name with
+        | None -> None
+        | Some sha ->
+            let path = src / name in
+            let size =
+              try (Unix.stat path).st_size with Unix.Unix_error _ -> 0
+            in
+            Some (sha, size))
+    |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+
 (* Publish every [<sha>.tar.zst] under [<cache>/d10ir/archives/] into
    [<output>/d10ir-archives/]. Returns the count of newly-linked /
    copied entries. Files that already exist at the destination are

@@ -143,11 +143,6 @@ val available : unit -> summary list
     for [oi config]. Empty when the reporepo has no toolchain entries — fresh
     machines need to clone or create them. *)
 
-val is_ready : info -> bool
-(** [true] when the install_prefix has an [.oi-toolchain-ready] sentinel
-    (non-relocatable toolchains) or unconditionally for relocatable ones, which
-    need no on-disk preparation. *)
-
 val ensure_installed :
   ?reporter:Build_progress.reporter ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->

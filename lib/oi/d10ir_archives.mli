@@ -13,6 +13,12 @@ val local_dir : cache:Cache.t -> string
 val dst_dir : output:string -> string
 (** [<output>/d10ir-archives]. The published location. *)
 
+val list : cache:Cache.t -> (string * int) list
+(** [list ~cache] enumerates every [<sha>.tar.zst] under {!local_dir} as
+    [(sha, size_bytes)] sorted by sha. The size is the on-disk byte count
+    of the archive itself; missing files (e.g. a stale entry without a
+    [stat]) report [0]. *)
+
 val publish_all : cache:Cache.t -> output:string -> int
 (** [publish_all ~cache ~output] hardlinks (or copies) every
     [<cache>/d10ir/archives/<sha>.tar.zst] into

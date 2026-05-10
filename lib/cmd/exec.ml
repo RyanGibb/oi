@@ -63,15 +63,15 @@ let cmd =
     Arg.(
       required
       & pos 0 (some string) None
-      & info ~docv:"CMD" ~doc:"The command to execute." [])
+      & info ~docv:"CMD" ~doc:"Command to run." [])
   in
   let args =
     Arg.(
       value & pos_right 0 string []
       & info ~docv:"ARG"
           ~doc:
-            "Arguments passed through to $(b,CMD). Use $(b,--) to separate \
-             them from $(b,oi)'s own flags."
+            "Arguments for $(b,CMD). Use $(b,--) to separate them from \
+             $(mname)'s flags."
           [])
   in
   let info =
@@ -81,23 +81,23 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Run $(b,CMD) with $(b,_oi/tools/bin) and $(b,_oi/prefix/bin) \
-             prepended to $(b,PATH) and the OCaml environment variables \
+             prepended to $(b,PATH), and OCaml environment variables \
              pointing at $(b,_oi/prefix/).";
           `P
-            "Auto-syncs first when $(b,_oi/prefix/) is missing or older than \
-             any $(b,*.opam). $(b,--with), $(b,--with-repo), and \
-             $(b,--toolchain) force a re-sync.";
+            "Syncs first when $(b,_oi/prefix/) is missing or older than any \
+             $(b,*.opam). $(b,--with), $(b,--with-repo), $(b,--toolchain), \
+             and $(b,--skip-local) force a re-sync.";
           `S "TOOLCHAIN";
-          `P "The active toolchain is picked in this order:";
-          `I ("1.", "$(b,--toolchain=NAME), if given.");
+          `P "Active toolchain, in order:";
+          `I ("1.", "$(b,--toolchain=NAME).");
           `I
             ( "2.",
-              "The $(b,x-oi-toolchain) tag on any in-scope $(b,@HANDLE) — from \
+              "$(b,x-oi-toolchain) on any in-scope $(b,@HANDLE) — from \
                $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
-               $(b,x-repos:). Conflicting tags are an error." );
+               $(b,x-repos:). Conflicting tags error out." );
           `I
             ( "3.",
-              "The reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
+              "Reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
           `Pre
             "  oi exec dune build\n\
             \  oi exec -- ocamlformat --check .\n\
@@ -109,5 +109,3 @@ let cmd =
       const run $ Terms.common $ Terms.refresh $ Terms.skip_local
       $ Terms.registry $ Terms.use_registry $ Terms.with_repos $ Terms.with_deps
       $ Terms.jobs $ Terms.toolchain $ cmd $ args)
-
-(* -- config -------------------------------------------------------------- *)

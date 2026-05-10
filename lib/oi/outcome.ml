@@ -53,19 +53,6 @@ let kind_to_string = function
   | K_solve_failed -> "solve_failed"
   | K_skipped -> "skipped"
 
-let kind_of_string = function
-  | "ok" -> Some K_ok
-  | "cached" -> Some K_cached
-  | "restored" -> Some K_restored
-  | "build_failed" -> Some K_build_failed
-  | "install_failed" -> Some K_install_failed
-  | "dep_failed" -> Some K_dep_failed
-  | "fetch_failed" -> Some K_fetch_failed
-  | "depext_missing" -> Some K_depext_missing
-  | "solve_failed" -> Some K_solve_failed
-  | "skipped" -> Some K_skipped
-  | _ -> None
-
 (* -- Histogram ----------------------------------------------------------- *)
 
 let bump k = function
@@ -84,53 +71,6 @@ let sort_histogram xs =
       if c1 <> c2 then compare c2 c1
       else compare (kind_to_string k1) (kind_to_string k2))
     xs
-
-(* -- Fetch error classification ------------------------------------------ *)
-
-let contains ~needle haystack =
-  let nl = String.length needle and hl = String.length haystack in
-  if nl = 0 then true
-  else if nl > hl then false
-  else
-    let rec loop i =
-      if i + nl > hl then false
-      else if String.sub haystack i nl = needle then true
-      else loop (i + 1)
-    in
-    loop 0
-
-let extract_http_status msg =
-  let n = String.length msg in
-  let rec loop i =
-    if i + 2 >= n then None
-    else
-      let c0 = msg.[i] and c1 = msg.[i + 1] and c2 = msg.[i + 2] in
-      let is_digit c = c >= '0' && c <= '9' in
-      let word_boundary i = i = 0 || not (is_digit msg.[i - 1]) in
-      let next_boundary = i + 3 = n || not (is_digit msg.[i + 3]) in
-      if
-        (c0 = '4' || c0 = '5')
-        && is_digit c1 && is_digit c2 && word_boundary i && next_boundary
-      then Some (int_of_string (String.sub msg i 3))
-      else loop (i + 1)
-  in
-  loop 0
-
-let classify_fetch_msg msg =
-  let lc = String.lowercase_ascii msg in
-  let has s = contains ~needle:s lc in
-  if has "checksum" || has "hash mismatch" then Checksum_mismatch
-  else if
-    has "timed out" || has "timeout"
-    || has "could not resolve host"
-    || has "name or service not known"
-  then Network_timeout
-  else if (has "git " && (has "failed" || has "error")) || has "fatal: " then
-    Git_failed
-  else
-    match extract_http_status msg with
-    | Some n -> Http_status n
-    | None -> Other msg
 
 (* -- Codecs -------------------------------------------------------------- *)
 

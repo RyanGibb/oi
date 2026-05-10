@@ -74,3 +74,21 @@ val reporepo_hash : string
     used so a downstream [oi build] can reproduce the same opam-file resolution
     by rolling the local reporepo back to that sha. Information-only for now;
     consumed by [oi build] in a future revision. *)
+
+(** {1 Bake markers} *)
+
+val d10_archive : string
+(** [x-d10-archive: <sha>] — sha256 of the consolidated d10ir source archive
+    produced by [oi repo bake] / [oi repo bump]. Set in-place on every
+    reporepo opam after a successful bake; consumers ([oi build] / [oi show])
+    skip the fetch+patch+extras+substs pipeline whenever this is present and
+    look the archive up in [<cache>/d10ir/archives/<sha>.tar.zst]. Hard-error
+    if the registered archive isn't available locally — the user must re-bake. *)
+
+(** {1 Helpers} *)
+
+val read_string_ext : string -> OpamFile.OPAM.t -> string option
+(** [read_string_ext key opam] returns the bare string value of the [key]
+    extension on [opam], or [None] when the field is absent or holds a
+    non-string shape (list, bool, filtered list). Used to read fields like
+    {!d10_archive} where only a single sha is meaningful today. *)

@@ -52,10 +52,6 @@ type meta = {
     provenance (which includes overlay attribution) live in [Oi.Audit] and
     [Oi.Provenance] sidecars next to this file. *)
 
-val save_meta : _ Eio.Path.t -> meta -> unit
-(** [save_meta path meta] writes [meta] as JSON to [path], creating parent
-    directories as needed. *)
-
 val load_meta : _ Eio.Path.t -> meta option
 (** [load_meta path] reads and parses [layer.json] from [path]. Returns [None]
     if the file does not exist or cannot be parsed. *)
@@ -72,9 +68,6 @@ val dir : Config.t -> hash:string -> Eio.Fs.dir_ty Eio.Path.t
 
 val json_path : Config.t -> hash:string -> Eio.Fs.dir_ty Eio.Path.t
 (** [json_path c ~hash] is [<root>/layers/<os_key>/<hash>/layer.json]. *)
-
-val fs_path : Config.t -> hash:string -> Eio.Fs.dir_ty Eio.Path.t
-(** [fs_path c ~hash] is [<root>/layers/<os_key>/<hash>/fs]. *)
 
 val exists : Config.t -> hash:string -> bool
 (** [exists c ~hash] is [true] if [layer.json] exists for this hash. *)
@@ -108,14 +101,6 @@ val store :
     blob. The producer (typically [d10ir.Direct]) writes a single-node d10ir
     [Plan.node] here so the layer is reconstructible from inputs (recipe +
     content-addressed source archive + dep layers). *)
-
-val recipe_path : Config.t -> hash:string -> Eio.Fs.dir_ty Eio.Path.t
-(** [recipe_path c ~hash] is [<root>/layers/<os_key>/<hash>/recipe.json]. *)
-
-val has_recipe : Config.t -> hash:string -> bool
-(** [has_recipe c ~hash] is [true] when a [recipe.json] exists alongside the
-    layer. Older layers (built before d10ir landed) lack one; reconstructing
-    those is impossible without external metadata. *)
 
 val load_recipe_json : Config.t -> hash:string -> string option
 (** [load_recipe_json c ~hash] reads the layer's [recipe.json] verbatim, or

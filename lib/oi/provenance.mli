@@ -102,8 +102,3 @@ val overlay_of_layer :
 val hash_opam_file : path:string -> string
 (** Hex SHA-256 of [path]'s [effective_part]-equivalent bytes. Used by {!Plan}
     to populate {!opam_info.sha256}. Returns [""] if the file can't be read. *)
-
-val url_kind : string -> string
-(** [url_kind url] is ["git"] if [url] starts with [git+] or contains [.git#],
-    ["tar"] for known archive extensions, ["local"] for [file://]/local paths,
-    [""] otherwise. *)

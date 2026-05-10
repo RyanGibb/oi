@@ -12,7 +12,6 @@ let domain_count_default () =
       try
         match Sys.os_type with
         | "Unix" -> (
-            (* Try sysconf via /proc/cpuinfo on Linux, sysctl on macOS. *)
             try
               let ic = Unix.open_process_in "getconf _NPROCESSORS_ONLN" in
               let s = input_line ic in

@@ -2,37 +2,10 @@
 [@@@ai_model "claude-opus-4-7"]
 [@@@ai_provider "Anthropic"]
 
-(* Unified terminal UI for [oi run] / [oi build] / [oi build --all].
-   See [ui.mli] for the public-facing structure. *)
-
-(* -- Shared layout ------------------------------------------------------- *)
-
-(* Column budgets shared across {!Theme}, {!Preflight}, and the per-row
-   layouts in [Pipeline.fetch_with_display] / [Execute.with_default_reporter].
-   Keeping them in one place means changing the visual width of the
-   pipeline UI is a single edit.
-
-   - [row_label_width]: leading prefix on every row (overall, aggregate,
-     per-layer, per-package). 32 fits the longest [pkg.version] strings
-     we see in practice ([expect_test_helpers_core.v0.17.0] = 32) without
-     truncation.
-   - [row_bar_width]: bar width inside [│…│] delimiters. 24 cells gives
-     enough resolution that even a 4 MiB layer's bar advances visibly. *)
+(* Overall-progress UI used by [oi run]. See preflight_bar.mli. *)
 
 let row_label_width = 40
 let row_bar_width = 24
-
-(* Fit [s] into [n] columns: pad with spaces if shorter, truncate with
-   a trailing ".." if longer. Used by per-row prefixes so package names
-   line up regardless of length. *)
-let fit_label n s =
-  let len = String.length s in
-  if len = n then s
-  else if len < n then s ^ String.make (n - len) ' '
-  else if n <= 2 then String.sub s 0 n
-  else String.sub s 0 (n - 2) ^ ".."
-
-(* -- Theme --------------------------------------------------------------- *)
 
 module Theme = struct
   let camel = Progress.Color.hex "#EF7D00"
@@ -47,11 +20,10 @@ module Theme = struct
 
   let spinner () = Progress.Line.spinner ~color:camel ()
 
+  (* [(/)] is shadowed at the top of [pipeline.ml] / [execute.ml] as
+     [Filename.concat] so any percent math there would have to reach
+     for [Stdlib.(/)]; defining this helper here avoids that. *)
   let pct_pp ~(total : int) : int Progress.Printer.t =
-    (* [(/)] is shadowed at the top of [pipeline.ml] / [execute.ml] as
-       [Filename.concat], so percentage math there has to reach for
-       [Stdlib.(/)]. Defined here with no shadow, so callers in those
-       files can just use [Theme.pct_pp ~total]. *)
     let render (n : int) : string =
       let pct : int =
         if total <= 0 then 0
@@ -66,19 +38,13 @@ module Theme = struct
     Progress.Printer.create ~string_len:6 ~to_string:render ()
 end
 
-(* -- Preflight overall progress bar ------------------------------------- *)
-
 module Preflight = struct
   (* See [Theme.bar] above for the camel-orange filled / dim-camel
-     empty palette. The 32-column prefix matches the per-row prefix
-     [Pipeline.fetch_with_display] / [Execute.with_default_reporter]
-     use, so every [│bar│] column lines up vertically.
-
-     [Progress.Line.string] intentionally writes [width - 1] cells
-     (see the [XXX: why is -1 necessary?] note in Progress's source),
-     so [rpad N string] only renders [N - 1] visible chars. We bump
-     the [rpad] target by one to compensate, landing the overall row
-     on the same column as a per-row [pkg fit_str 32] prefix. *)
+     empty palette. [Progress.Line.string] intentionally writes
+     [width - 1] cells (see Progress's source), so [rpad N string]
+     only renders [N - 1] visible chars. We bump the [rpad] target
+     by one to land the overall row on the same column as a per-row
+     [pkg fit_str 32] prefix. *)
   let phase_col_width = row_label_width - 2 + 1
 
   let overall_line ~total =
@@ -112,12 +78,12 @@ module Preflight = struct
         Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()
       in
       (* Open with [Multi.blank] (no built-in reporters) and attach the
-         overall bar via [add_line]. This keeps the [Display.t] typed
-         as [(unit, unit) Display.t] regardless of what's added later,
-         so subsystems ([Pipeline.fetch_remote_layers], [Execute.run])
-         can receive the same display via [?shared_display:(unit, unit)
-         Display.t] without OCaml's inference unifying the type
-         parameter to whatever the OWNED-display path uses. *)
+         overall bar via [add_line]. Keeping the [Display.t] typed as
+         [(unit, unit) Display.t] regardless of what's added later lets
+         subsystems receive the same display via
+         [?shared_display:(unit, unit) Display.t] without OCaml's
+         inference unifying the parameter to whatever the
+         OWNED-display path uses. *)
       let display : (unit, unit) Progress.Display.t =
         Logs_progress.start_display_compact ~ppf:Format.err_formatter
           ~config:cfg
@@ -171,53 +137,3 @@ module Preflight = struct
         (fun () ->
           f ~on_phase ~on_text ~preflight_done ~shared_display:(Some display))
 end
-
-(* -- Legacy single-bar UI (oi build --all) ------------------------------ *)
-
-(* The single-bar [Tty.Progress] interface, retained for [oi build --all]'s
-   cross-invocation counter. New code should reach for {!Preflight} or its
-   [shared_display] handle instead. *)
-
-type t = Tty.Progress.t
-
-let run ?(status_lines = 4) ~sw ~clock ~total ~title f =
-  let bar =
-    Tty.Progress.v ~enabled:(Tty.is_tty ()) ~status_lines ~total title
-  in
-  Tty_eio.Progress.animate ~sw ~clock bar;
-  (* On exit:
-       1. [Tty.Progress.finish] renders the bar one last time at
-          100% and sets [finished := true] so the animate fiber's
-          next tick becomes a no-op. Without this the daemon could
-          redraw the bar back on top of whatever we print next.
-       2. We then erase that final 100% line — Tty.Progress is
-          designed to leave a "done" footprint visible, but oi's
-          callers always print their own summary block immediately
-          after, so the persistent bar is just clutter above the
-          summary.
-
-     The escape is: cursor up one line, erase that line, carriage
-     return. ASCII fallback: do nothing on non-tty (the bar wasn't
-     rendered anyway). *)
-  Fun.protect
-    ~finally:(fun () ->
-      Tty.Progress.finish bar;
-      if Tty.is_tty () then begin
-        Format.eprintf "\x1b[1A\x1b[2K\r%!"
-      end)
-    (fun () -> f bar)
-
-let with_msg = Tty.Progress.message
-
-let tick ?msg t =
-  (match msg with Some m -> Tty.Progress.message t m | None -> ());
-  Tty.Progress.tick t
-
-let log = Tty.Progress.log
-
-(* Suspend BOTH bar systems: nox-tty's [Tty.Progress] (the legacy
-   [oi build --all] bar) and the [progress] library's [Display]
-   (the [Pipeline.fetch] / [D10ir_bar] multi-line UI). [oi build --all]
-   only uses the former, but a caller that overlaps both shouldn't
-   need to know which is active. *)
-let suspend _ f = Tty.Progress.suspend (fun () -> Logs_progress.interject f)

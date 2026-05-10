@@ -112,6 +112,17 @@ type t = {
           preserved, but the executor doesn't order-sensitively
           process them. Empty for older recipes — defaults to [[]] on
           decode. *)
+  external_layers : Layer_hash.t list;
+      (** Layer hashes the host provides — typically a non-relocatable
+          toolchain's compiler-stack packages, which the executor
+          doesn't build but which still appear in consumer nodes'
+          [dep_layer_hashes] because consumer hashes mix the toolchain
+          hash in for invalidation. The executor and validator treat
+          these as already-satisfied: no producer needed in {!nodes},
+          no [{!D10.Layer.succeeded}] required in the d10 store, and
+          no staging from a layer fs/ tree (the binaries are reached
+          via the build env's PATH). Empty for older recipes —
+          defaults to [[]] on decode. *)
   metadata : metadata;
 }
 
@@ -136,7 +147,6 @@ val load : _ Eio.Path.t -> (t, string) result
     is stored — not the full plan — because dependencies are expressed
     by layer hash and chase through the d10 store recursively. *)
 
-val node_codec : node Jsont.t
 val encode_node : node -> string
 val decode_node : string -> (node, string) result
 
@@ -179,8 +189,6 @@ val validate :
     are joined with [archive_root] relative to it. *)
 
 (** {1 Schedule} *)
-
-val find_node : t -> Layer_hash.t -> node option
 
 val producers_table : t -> (Layer_hash.t, node) Hashtbl.t
 (** Map from a node's [layer_hash] to the node, for O(1) producer

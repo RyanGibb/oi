@@ -9,7 +9,9 @@
 type t = { handle : string; version : string }
 
 val pp : t Fmt.t
+(** Pretty-print as [handle@version]. *)
 
 (** {1 Codec} *)
 
 val codec : t Jsont.t
+(** JSON codec ([{"handle": ..., "version": ...}]). *)

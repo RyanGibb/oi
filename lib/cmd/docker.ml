@@ -124,10 +124,7 @@ let cmd =
   let test_mode =
     Arg.(
       value & flag
-      & info
-          ~doc:
-            "Project mode: emit a Dockerfile that runs $(b,oi test) instead of \
-             $(b,oi build)."
+      & info ~doc:"Emit a Dockerfile running $(b,oi test) instead of $(b,oi build)."
           [ "test" ])
   in
   let all =
@@ -135,9 +132,8 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Multi-distro registry-build project: $(b,Dockerfile.oi), one \
-             $(b,Dockerfile.<distro>) per target, and $(b,docker-compose.yml) \
-             that runs $(b,oi build --all --export /out) inside each."
+            "Emit multi-distro project: $(b,Dockerfile.oi), one \
+             $(b,Dockerfile.<distro>) per target, and $(b,docker-compose.yml)."
           [ "all" ])
   in
   let distro =
@@ -149,9 +145,8 @@ let cmd =
       & opt distro_conv (`Debian `Stable)
       & info ~docv:"DISTRO"
           ~doc:
-            "Project-mode base distro (any $(b,dockerfile-opam) tag, e.g. \
-             $(b,debian-13), $(b,alpine-3.23), $(b,fedora-43)). Ignored with \
-             $(b,--all)."
+            "Base distro tag (e.g. $(b,debian-13), $(b,alpine-3.23), \
+             $(b,fedora-43)). Ignored with $(b,--all)."
           [ "distro" ])
   in
   let src_context =
@@ -159,8 +154,8 @@ let cmd =
       value & opt string "."
       & info ~docv:"DIR"
           ~doc:
-            "$(b,--all) only: path to the $(b,oi) source tree relative to the \
-             Docker build context. Defaults to the context root."
+            "Path to the $(b,oi) source tree within the Docker build context. \
+             $(b,--all) only."
           [ "src" ])
   in
   let output =
@@ -169,31 +164,27 @@ let cmd =
       & opt (some string) None
       & info ~docv:"PATH"
           ~doc:
-            "Project mode: write Dockerfile to $(b,PATH) (default: \
-             $(b,Dockerfile.oi-{build,test}.<distro>) in the cwd). $(b,--all) \
-             mode: directory for the multi-file project (default: cwd)."
+            "Output path. Default file: $(b,Dockerfile.oi-{build,test}.<distro>) \
+             in cwd. With $(b,--all): directory for the project (default: cwd)."
           [ "o"; "output" ])
   in
   let info =
-    Cmd.info "docker" ~doc:"Generate Dockerfiles for project builds and CI"
+    Cmd.info "docker" ~doc:"Generate Dockerfiles for project builds and CI."
       ~man:
         [
           `S Manpage.s_description;
-          `P "Three modes:";
+          `P "Emit Dockerfiles for building or testing the current project.";
           `I
             ( "(default)",
-              "Project build: $(b,Dockerfile.oi-build.<distro>) running $(b,oi \
-               build) inside the chosen distro." );
+              "$(b,Dockerfile.oi-build.<distro>) running $(b,oi build)." );
           `I
             ( "$(b,--test)",
-              "Project test: $(b,Dockerfile.oi-test.<distro>) running $(b,oi \
-               test)." );
+              "$(b,Dockerfile.oi-test.<distro>) running $(b,oi test)." );
           `I
             ( "$(b,--all)",
-              "Multi-distro registry build project: $(b,Dockerfile.oi) + \
-               per-distro Dockerfiles + $(b,docker-compose.yml). Each service \
-               runs $(b,oi build --all --export /out) on its bind-mounted \
-               registry tree." );
+              "$(b,Dockerfile.oi), per-distro Dockerfiles, and \
+               $(b,docker-compose.yml). Each service runs $(b,oi build --all \
+               --export /out)." );
           `S Manpage.s_examples;
           `Pre
             "  oi docker\n\

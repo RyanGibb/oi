@@ -45,7 +45,6 @@ type kind =
 
 val kind_of : t -> kind
 val kind_to_string : kind -> string
-val kind_of_string : string -> kind option
 
 (** {1 Histogram helpers} *)
 
@@ -60,13 +59,3 @@ val sort_histogram : (kind * int) list -> (kind * int) list
 
 val codec : t Jsont.t
 val kind_codec : kind Jsont.t
-val fetch_kind_codec : fetch_kind Jsont.t
-
-(** {1 Classification} *)
-
-val classify_fetch_msg : string -> fetch_kind
-(** Best-effort classification of an opam-side fetch error message. The message
-    originates from {!OpamRepository.pull_*}, which itself shells out to git or
-    an HTTP backend, so the strings being matched here are the surface-level
-    forms those tools surface — e.g. ["fatal: …"] from git, [HTTP <code>] from
-    the HTTP backend, ["could not resolve host"] from the resolver. *)

@@ -49,7 +49,7 @@ let data_dir =
   let default_path = home / ".local" / "share" / Workspace.app_name in
   let doc =
     Fmt.str
-      "Override data directory. Can also be set with %s or %s. Default: %s"
+      "Data directory. Falls back to $(b,%s), then $(b,%s). Default: %s."
       app_env xdg_var default_path
   in
   let arg =
@@ -88,10 +88,8 @@ let format_term =
     value & opt format_conv Text
     & info ~docv:"FORMAT"
         ~doc:
-          "Output format. $(b,text) (default) is human-friendly. $(b,json) \
-           switches both successful structured output (where supported) and \
-           any error to a stable JSON envelope — see $(b,oi --help) AUTOMATION \
-           and EXIT STATUS sections."
+          "Output format: $(b,text) (default) or $(b,json). See $(b,oi \
+           --help) AUTOMATION and EXIT STATUS."
         [ "format" ])
 
 (* -- Shared "global" options ------------------------------------------- *)
@@ -116,8 +114,7 @@ let refresh =
     value & flag
     & info
         ~doc:
-          "Re-fetch repos, pinned sources, and git URLs even if fresh. Caches \
-           refresh on their own after 24h."
+          "Re-fetch repos, pinned sources, and git URLs even if fresh."
         [ "refresh" ])
 
 let locked =
@@ -125,12 +122,9 @@ let locked =
     value & flag
     & info
         ~doc:
-          "Refuse anything that would require fetching from the registry or \
-           refreshing the reporepo. Pairs with $(b,oi source TARGET -o DIR) \
-           bundles: agents and CI jobs that pre-warmed the cache should run \
-           with $(b,--locked) so a missing layer fails fast instead of \
-           silently downloading. Implies $(b,--use-registry=never) and \
-           overrides $(b,--refresh)."
+          "Forbid registry fetches and reporepo refreshes; fail fast on \
+           cache miss. Implies $(b,--use-registry=never); overrides \
+           $(b,--refresh)."
         [ "locked" ])
 
 let skip_local =
@@ -138,9 +132,8 @@ let skip_local =
     value & flag
     & info
         ~doc:
-          "Don't probe the current directory for project files ($(b,*.opam), \
-           $(b,pin-depends:), $(b,x-repos:), $(b,packages/) overlay, dev \
-           tools). Use to run a command against global state only."
+          "Ignore local project files ($(b,*.opam), $(b,pin-depends:), \
+           $(b,x-repos:), $(b,packages/), dev tools)."
         [ "skip-local" ])
 
 let with_repos =
@@ -148,7 +141,7 @@ let with_repos =
     value & opt_all string []
     & info ~docv:"URL"
         ~doc:
-          "Stack an opam repository (git URL or reporepo handle) on the solve. \
+          "Add an opam repository (git URL or reporepo handle) to the solve. \
            Repeatable."
         [ "with-repo" ])
 
@@ -156,7 +149,7 @@ let jobs =
   Arg.(
     value
     & opt (some int) None
-    & info ~docv:"N" ~doc:"Cap parallel builds and fetches. Default 4."
+    & info ~docv:"N" ~doc:"Maximum parallel builds and fetches (default 4)."
         [ "j"; "jobs" ])
 
 let with_deps =
@@ -164,9 +157,8 @@ let with_deps =
     value & opt_all string []
     & info ~docv:"PKG"
         ~doc:
-          "Add a solver root: a package name, opam atom ($(b,fmt>=0.9), \
-           $(b,dune.3.20.0)), or git URL (every $(b,*.opam) at its root \
-           becomes a pin). Repeatable."
+          "Add a solver root: package name, opam atom ($(b,fmt>=0.9), \
+           $(b,dune.3.20.0)), or git URL. Repeatable."
         [ "with" ])
 
 let toolchain =
@@ -175,9 +167,7 @@ let toolchain =
     & opt (some string) None
     & info ~docv:"HANDLE"
         ~doc:
-          "Pin the compiler set from the named reporepo toolchain. $(b,oi \
-           config) lists handles. Non-relocatable toolchains (oxcaml) install \
-           into $(b,\\$XDG_CACHE_HOME/oi/toolchains/) on first use."
+          "Select a reporepo toolchain by name. List with $(b,oi config)."
         [ "toolchain" ])
 
 let default_registry = "https://oi.ci.dev"
@@ -185,8 +175,7 @@ let default_registry = "https://oi.ci.dev"
 let registry =
   let doc =
     Fmt.str
-      "Remote layer registry URL (default: %s). Layers fetched from \
-       $(docv)/$(b,<os>/<hash>.tar.zst) before building from source."
+      "Remote layer registry URL (default: %s)."
       default_registry
   in
   Arg.(
@@ -211,10 +200,10 @@ let use_registry_conv =
 
 let use_registry =
   let doc =
-    "What to consult the remote registry for. $(b,all) (default): binary \
-     layers and source archives. $(b,archives): source archives only — every \
-     layer is built from scratch (CI registry-build mode). $(b,never): offline \
-     w.r.t. the registry; upstream source fetches still happen."
+    "Registry consultation mode. $(b,all) (default): layers and source \
+     archives. $(b,archives): source archives only; build all layers from \
+     scratch. $(b,never): no registry traffic; upstream source fetches still \
+     run."
   in
   Arg.(
     value

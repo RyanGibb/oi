@@ -2,9 +2,7 @@
 [@@@ai_model "claude-opus-4-7"]
 [@@@ai_provider "Anthropic"]
 
-(* Pin-depends materialisation. Was [Source.Pin] in [source.ml];
-   lifted here for navigability. Cross-module helpers
-   ([Source.Source_reporepo.try_resolve_url]) are now [Source_reporepo.X]. *)
+(* Pin-depends materialisation. Re-exported as [Source.Pin]. *)
 
 let ( / ) = Filename.concat
 

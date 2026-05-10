@@ -40,6 +40,7 @@ type t = {
   nodes : node list;
   roots : Layer_hash.t list;
   mounts : mount list;
+  external_layers : Layer_hash.t list;
   metadata : metadata;
 }
 
@@ -170,7 +171,7 @@ let codec : t Jsont.t =
   let open Jsont in
   Object.map ~kind:"d10ir-plan"
     (fun schema_version os_key toolchain archive_root nodes roots mounts
-         metadata : plan
+         external_layers metadata : plan
     ->
       {
         schema_version;
@@ -180,6 +181,7 @@ let codec : t Jsont.t =
         nodes;
         roots;
         mounts;
+        external_layers;
         metadata;
       })
   |> Object.mem "schema_version" int ~enc:(fun (p : plan) -> p.schema_version)
@@ -191,6 +193,8 @@ let codec : t Jsont.t =
   |> Object.mem "roots" (list layer_hash_jsont) ~enc:(fun (p : plan) -> p.roots)
   |> Object.mem "mounts" (list mount_jsont) ~dec_absent:[]
        ~enc:(fun (p : plan) -> p.mounts)
+  |> Object.mem "external_layers" (list layer_hash_jsont) ~dec_absent:[]
+       ~enc:(fun (p : plan) -> p.external_layers)
   |> Object.mem "metadata" metadata_jsont
        ~dec_absent:
          { oi_version = ""; generated_at = 0.0; cli_invocation = [] }
@@ -206,8 +210,6 @@ let of_string s =
   match Jsont_bytesrw.decode_string ~locs:true ~file:"<plan.json>" codec s with
   | Ok t -> Ok t
   | Error e -> Error e
-
-let node_codec = node_jsont
 
 let encode_node n =
   match Jsont_bytesrw.encode_string ~format:Jsont.Indent node_jsont n with
@@ -279,23 +281,6 @@ let producers_table t =
   List.iter (fun n -> Hashtbl.replace h n.layer_hash n) t.nodes;
   h
 
-let find_node t hash = Hashtbl.find_opt (producers_table t) hash
-
-(* Merge a collection of plans into a single plan that the executor
-   can schedule across as one unified DAG.
-
-   Nodes are deduplicated by [layer_hash] — when several input
-   plans share a transitive dep, we keep one copy. Roots and
-   mounts are union'd; mounts dedupe by name. Metadata's
-   [cli_invocation] concatenates all the input plans' invocations
-   so the merged plan's audit trail records everything that was
-   batched together.
-
-   Errors out when the input plans disagree on any of the fields
-   that must be globally consistent for the executor (schema
-   version, [os_key], [toolchain.base_layer], [archive_root]).
-   Different overlays / toolchain handles inside a single
-   batch fail validation up front. *)
 let merge = function
   | [] -> Error "merge: empty plan list"
   | first :: rest ->
@@ -368,6 +353,21 @@ let merge = function
                   p.mounts)
               (first :: rest)
           in
+          let seen_external : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+          let external_layers =
+            List.concat_map
+              (fun p ->
+                List.filter
+                  (fun h ->
+                    let key = Layer_hash.to_string h in
+                    if Hashtbl.mem seen_external key then false
+                    else begin
+                      Hashtbl.add seen_external key ();
+                      true
+                    end)
+                  p.external_layers)
+              (first :: rest)
+          in
           let metadata =
             {
               oi_version = first.metadata.oi_version;
@@ -390,6 +390,7 @@ let merge = function
               nodes;
               roots;
               mounts;
+              external_layers;
               metadata;
             }
 
@@ -480,12 +481,22 @@ let validate ?d10 ~fs ~plan_dir t =
         match find_cycles t.nodes with
         | _ :: _ as cycles -> Error (Cycle cycles)
         | [] -> (
+            let external_set =
+              let h = Hashtbl.create (List.length t.external_layers) in
+              List.iter
+                (fun lh -> Hashtbl.add h (Layer_hash.to_string lh) ())
+                t.external_layers;
+              h
+            in
             let dep_unsat =
               List.find_map
                 (fun n ->
                   List.find_map
                     (fun h ->
                       if Hashtbl.mem producers h then None
+                      else if
+                        Hashtbl.mem external_set (Layer_hash.to_string h)
+                      then None
                       else
                         let in_d10 =
                           match d10 with

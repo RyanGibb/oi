@@ -2,10 +2,6 @@
 [@@@ai_model "claude-opus-4-6"]
 [@@@ai_provider "Anthropic"]
 
-let log_src = Logs.Src.create "d10.prefix"
-
-module Log = (val Logs.src_log log_src : Logs.LOG)
-
 let ( / ) = Filename.concat
 
 (* -- Assembly ------------------------------------------------------------ *)

@@ -13,7 +13,7 @@ type clk = float Eio.Time.clock_ty Eio.Resource.t
 
 type t = {
   proc_mgr : pm;
-  fs : Eio.Fs.dir_ty Eio.Path.t; [@warning "-69"]
+  fs : Eio.Fs.dir_ty Eio.Path.t;
   net : net;
   clock : clk;
   stdout : Eio.Flow.sink_ty Eio.Resource.t option;
@@ -452,11 +452,4 @@ module Http = struct
     with exn ->
       Log.debug (fun m -> m "http %s: %s" url (Printexc.to_string exn));
       false
-end
-
-(* -- Git operations ------------------------------------------------------ *)
-
-module Git = struct
-  let head_short t ~dir =
-    run_capture t [ "git"; "-C"; native dir; "rev-parse"; "--short"; "HEAD" ]
 end

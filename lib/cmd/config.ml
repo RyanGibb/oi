@@ -506,52 +506,38 @@ let cmd =
     match c.format with Text -> render_text view | Json -> render_json view
   in
   let info =
-    Cmd.info "config" ~doc:"Show oi's view of this machine and project"
+    Cmd.info "config" ~doc:"Show oi's view of this machine and project."
       ~man:
         [
           `S Manpage.s_description;
-          `P "Print how $(b,oi) sees the current machine and project.";
-          `P
-            "$(b,--format=json) emits a stable JSON document with the same \
-             fields, suitable for scripted consumption.";
-          `I
-            ( "$(b,Platform)",
-              "OS, arch, distribution. The solve picks different packages per \
-               platform — check here first when the result surprises." );
+          `P "Print machine and project state as $(b,oi) sees it.";
+          `P "$(b,--format=json) emits a stable JSON document.";
+          `I ("$(b,Platform)", "$(b,os-key) and OCaml version.");
           `I
             ( "$(b,Directories)",
-              "Cache and data directories in use. $(b,OI_CACHE_DIR) and \
-               $(b,OI_DATA_DIR) override XDG defaults." );
-          `I
-            ( "$(b,Repositories)",
-              "Cloned opam repositories backing the solver, each with last \
-               refresh time." );
+              "Data and cache dirs. Override with $(b,OI_DATA_DIR), \
+               $(b,OI_CACHE_DIR), or XDG defaults." );
+          `I ("$(b,Registry)", "Layer registry URL and index TTL.");
+          `I ("$(b,Source mirror)", "Local opam source mirror: path, blob count, total size.");
           `I
             ( "$(b,Toolchains)",
-              "Toolchains the reporepo defines (handles accepted by \
-               $(b,--toolchain=NAME)), tagged $(b,[relocatable]) or \
-               $(b,[fixed-prefix]), with their primary source URL and any \
-               existing installs under \\$XDG_CACHE_HOME/oi/toolchains." );
+              "Handles accepted by $(b,--toolchain=NAME), tagged \
+               $(b,[relocatable]) or $(b,[fixed-prefix]), with source URL \
+               and install status." );
           `I
-            ( "$(b,Source mirror)",
-              "Local opam $(b,cache_url) mirror at \
-               \\$XDG_CACHE_HOME/oi/mirror, populated as a side effect of \
-               builds. Use $(b,oi build --all --export DIR) to publish a \
-               consistent snapshot." );
+            ( "$(b,Base overlays)",
+              "Overlays declared by the reporepo, each marked \
+               $(b,materialised), $(b,not materialised), or \
+               $(b,definition only)." );
           `I
-            ( "$(b,Project extras)",
-              "$(b,x-repos:) and $(b,pin-depends:) entries declared in the \
-               current directory's $(b,*.opam) files, plus any project-local \
-               opam-repository (a $(b,packages/) tree with a $(b,repo) \
-               marker). Only shown when at least one is present." );
+            ( "$(b,Project)",
+              "Shown when run in a project tree (suppress with \
+               $(b,--skip-local)): $(b,x-repos:), $(b,pin-depends:), overlay \
+               handles, project-local $(b,packages/) opam-repository." );
           `I
             ( "$(b,Dev tools)",
-              "Project-probed tools the next $(b,oi build) would install. \
-               $(b,hit) means the trigger fired ($(b,.ocamlformat) for \
-               $(b,ocamlformat), $(b,dune-project) for $(b,mdx)); $(b,miss) \
-               skips that tool. Tools from the active toolchain's \
-               $(b,x-oi-toolchain-tools) field appear under $(b,Toolchains) \
-               above and install unconditionally." );
+              "Tools the next $(b,oi build) would install. $(b,hit) = \
+               trigger fired; $(b,miss) = skipped." );
         ]
   in
   Cmd.v info Term.(const run $ Terms.common $ Terms.skip_local)

@@ -24,8 +24,6 @@ module Ctx : sig
     jobs : int;
   }
 
-  val pp_conf : conf Fmt.t
-
   (** {2 Context} *)
 
   type t
@@ -122,19 +120,10 @@ module Ctx : sig
       that variables like [ocaml:native] can be resolved at plan time, before
       the package has actually been built. *)
 
-  val switch_state : t -> OpamStateTypes.unlocked OpamStateTypes.switch_state
-
   val platform_env : t -> OpamFilter.env
   (** Variable resolver for platform/global variables only (no per-package
       scope). Suitable for filtering dependency formulas during solving and
       topo-sorting. *)
-
-  val switch_env :
-    ?toolchain:toolchain -> prefix:string -> unit -> (string * string) list
-  (** OCaml switch environment for [prefix]. With [?toolchain] set, the
-      toolchain's [bin]/[lib]/[lib/stublibs] are prepended and OCAMLLIB /
-      OCAMLFIND_CONF are dropped so the non-relocatable compiler picks up stdlib
-      via its baked-in path. *)
 
   val init_opam : root:string -> unit
   (** Initialise opam's global config with an isolated root directory. *)
@@ -217,14 +206,6 @@ module Memo : sig
     OpamPackage.t list ->
     unit
 
-  val lookup_layers : cache_root:string -> key:string -> string list option
-
-  val store_layers :
-    fs:Eio.Fs.dir_ty Eio.Path.t ->
-    cache_root:string ->
-    key:string ->
-    string list ->
-    unit
 end
 
 (** {1 Solving} *)

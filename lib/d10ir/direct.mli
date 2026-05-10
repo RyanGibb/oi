@@ -86,8 +86,6 @@ type event =
 
 type reporter = { event : event -> unit }
 
-val null_reporter : reporter
-
 (** A single build failure as accumulated in {!result.failures}. *)
 type failure = {
   package : Plan.package;
@@ -98,10 +96,6 @@ type failure = {
           (e.g. ["exit 1"], not the full [Printexc.to_string] dump
           of [Eio.Io.E]). *)
 }
-
-val pp_failure : failure Fmt.t
-(** Pretty-print a single failure for a summary table:
-    [pkg.ver  phase=…  log=…\n      <error>]. *)
 
 val pp_failures : failure list Fmt.t
 (** Print a header [Build failures (N):] followed by each failure

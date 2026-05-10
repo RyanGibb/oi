@@ -10,11 +10,6 @@
     The behaviour matches what oi was doing inline in [Oi.Execute]
     today; this is a code move, not new logic. *)
 
-val pkgname_of_install_file : string -> string
-(** [pkgname_of_install_file path] is the package name encoded in the
-    file's basename, e.g. [pkgname_of_install_file "foo/bar.install"
-    = "bar"]. *)
-
 val apply :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   prefix:string ->

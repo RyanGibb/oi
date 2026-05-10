@@ -151,12 +151,10 @@ let version_cmd =
         [
           `S Manpage.s_description;
           `P
-            "Identify the running $(b,oi) and what it can read/write. With \
-             $(b,--format=json), emits the version, host $(b,os_key), and \
-             every schema constant ([oi]'s wire-format JSON, plus on-disk \
-             cache/data/toolchain/solver-cache schemas). Agents should call \
-             this first to verify compatibility before parsing other \
-             $(b,--format=json) output.";
+            "Print the running $(b,oi) version, host $(b,os_key), and every \
+             schema constant. With $(b,--format=json), emit a stable \
+             envelope suitable as a compatibility probe before parsing \
+             other $(b,--format=json) output.";
         ]
   in
   Cmd.v info Term.(const run $ Terms.common)
@@ -177,15 +175,14 @@ let where_cmd =
   in
   let info =
     Cmd.info "where"
-      ~doc:"Show where the running oi binary lives and whether it's writable"
+      ~doc:"Locate the running oi binary"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Print the absolute path to the currently-running $(b,oi) \
-             executable, whether the user can overwrite it, and the install \
-             target $(b,oi self update) would pick (in-place if writable, \
-             $(b,~/.local/bin/oi) otherwise).";
+            "Print the absolute path to the running $(b,oi), whether it is \
+             writable, and the install target $(b,oi self update) would \
+             pick (in-place when writable, $(b,~/.local/bin/oi) otherwise).";
         ]
   in
   Cmd.v info Term.(const run $ Terms.log)
@@ -421,9 +418,8 @@ let update_cmd =
       value & flag
       & info
           ~doc:
-            "Install $(b,oi) built from the upstream git repo's $(b,main) \
-             branch instead of the version pinned in the reporepo. Use to get \
-             unreleased fixes. Override the URL with $(b,OI_DEV_URL)."
+            "Build from upstream $(b,main) instead of the pinned release. \
+             Override the URL with $(b,OI_DEV_URL)."
           [ "dev" ])
   in
   let info =
@@ -432,16 +428,14 @@ let update_cmd =
         [
           `S Manpage.s_description;
           `P
-            "Use $(b,oi) to build $(b,oi) from source, then install the \
-             resulting binary over the currently-running executable. The \
-             update is atomic — the running process keeps executing on the old \
-             image; the next $(b,oi) invocation picks up the new binary.";
+            "Build $(b,oi) from source and atomically replace the running \
+             executable. The current process keeps running on the old \
+             image; the next invocation picks up the new binary.";
           `P
-            "If the current binary's path is not writable (system install, \
-             read-only mount), $(b,oi self update) installs into \
-             $(b,~/.local/bin/oi) instead and warns. Add that directory to \
-             $(b,PATH) to use the updated binary.";
-          `P "Run $(b,oi self where) to preview the install target.";
+            "If the binary path is not writable, install into \
+             $(b,~/.local/bin/oi) and warn. Add that directory to \
+             $(b,PATH).";
+          `P "See $(b,oi self where) for the install target.";
           `S "OPTIONS";
         ]
   in
@@ -457,8 +451,8 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "Subcommands for inspecting ($(b,oi self where)) and updating \
-             ($(b,oi self update)) the currently-running $(b,oi) install.";
+            "Inspect and update the running $(b,oi) install: $(b,oi self \
+             version), $(b,oi self where), $(b,oi self update).";
         ]
   in
   Cmd.group info [ version_cmd; where_cmd; update_cmd ]

@@ -305,5 +305,7 @@ let emit ~d10 ?(cli_invocation = []) ~toolchain_name ~toolchain_layer
     nodes;
     roots;
     mounts = default_mounts ();
+    external_layers =
+      List.map D10ir.Layer_hash.of_string plan.external_layer_hashes;
     metadata;
   }

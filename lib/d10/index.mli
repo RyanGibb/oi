@@ -10,10 +10,13 @@
     {v
     layers:          hash, os_key, arch, os, distro, os_version,
                      package_name, package_ver, exit_status, created,
-                     overlay_handle, overlay_version
+                     overlay_handle, overlay_version,
+                     tarball_sha256, tarball_size
     layer_deps:      layer_hash, dep_name, dep_version, dep_hash
-    layer_files:     layer_hash, path
-    layer_binaries:  layer_hash, binary_name   (files under bin/)
+    layer_binaries:  layer_hash, binary_name        -- files under bin/
+    layer_meta:      layer_hash, package_dir,       -- one row per
+                     findlib_pkg, archive             ocamlfind subpackage
+    layer_files:     layer_hash, path               -- only when [include_files]
     v}
 
     [overlay_handle] / [overlay_version] identify the reporepo overlay that
@@ -21,8 +24,15 @@
     built before tagging was introduced or for packages that came from a
     pin-depends tree.
 
-    The [layer_binaries] table enables [oi run <binary>] to quickly find which
-    package provides a given binary without scanning layer trees. *)
+    [tarball_sha256] / [tarball_size] are populated for every layer published
+    in a registry export ({!record_tarball}). NULL on a bin-index registry that
+    ships only the SQLite index without the per-layer [.tar.zst] payload.
+
+    [layer_binaries] enables [oi run <binary>] to look up the package providing
+    a binary without scanning layer trees. [layer_meta] is the equivalent for
+    ocamlfind: each [lib/<dir>/META] in a layer contributes one row per
+    declared subpackage so [oi search ppx_deriving] can route findlib lookups
+    to the producing opam package. *)
 
 (** {1 Database lifecycle} *)
 
@@ -129,14 +139,6 @@ val find_meta :
     opam version descending. Use [*] as a wildcard for substring search.
     Reads the [layer_meta] table populated by {!rebuild}. *)
 
-val tarball_info :
-  db ->
-  hash:string ->
-  (string * int64) option
-(** [tarball_info db ~hash] returns [(sha256, size)] when the layer's
-    [.tar.zst] is published in this registry, or [None] for a bin-index
-    registry. Replaces the old [OINDEX.txt] sidecar lookup. *)
-
 val all_tarballs :
   db ->
   os_key:string ->
@@ -153,17 +155,25 @@ val deps : db -> hash:string -> (string * string * string) list
 val files : db -> hash:string -> string list
 (** [files db ~hash] returns all file paths stored in the layer. *)
 
-val all_layers : db -> os_key:string -> (string * string * string * int) list
-(** [all_layers db ~os_key] returns all layers for a platform as
-    [(hash, package_name, package_version, exit_status)]. *)
-
 val all_binaries : db -> os_key:string -> (string * string * string) list
 (** [all_binaries db ~os_key] returns all indexed binaries as
     [(binary_name, package_name, package_version)]. *)
 
-val stats : db -> os_key:string -> int * int * int
-(** [stats db ~os_key] returns [(num_layers, num_binaries, num_files)] for the
-    given platform. *)
+type stats = {
+  layers : int;
+  binaries : int;
+  files : int;
+  findlib : int;
+  tarballs : int;
+}
+(** Row counts for a single [os_key], scoped to that platform via the
+    [layers] join. [files] is zero unless the index was rebuilt with
+    [include_files:true]; [tarballs] counts layers that carry a
+    published [.tar.zst] (i.e. would survive a registry export). *)
+
+val stats : db -> os_key:string -> stats
+(** [stats db ~os_key] gathers every count for one platform in a single
+    sqlite round-trip per row. *)
 
 (** {1 Invalidation} *)
 

@@ -53,9 +53,6 @@ exception Cycle of OpamPackage.t list list
     on a promise the cycle prevents from ever resolving. Callers should catch
     this and skip the offending solve group rather than letting it wedge. *)
 
-val pp_cycle : OpamPackage.t list Fmt.t
-(** Render a single cycle as ["a → b → c → a"]. *)
-
 val pp_cycles : OpamPackage.t list list Fmt.t
 (** Render a list of cycles, one per line. *)
 
@@ -73,10 +70,6 @@ val of_solution :
 val nodes : graph -> node list
 (** [nodes g] is the list of all nodes in topological order. *)
 
-val find_node : graph -> OpamPackage.Name.t -> node
-(** [find_node g name] is the node for package [name]. Raises [Not_found] when
-    no such node exists in [g]. *)
-
 val overlay_of_pkg :
   packages_dirs:string list -> OpamPackage.t -> D10.Overlay.t option
 (** Resolve the overlay that contributed [pkg]'s opam file, by walking
@@ -86,12 +79,6 @@ val overlay_of_pkg :
 val layer_hashes : graph -> string list
 (** [layer_hashes g] returns the layer hash for each package in the plan, in
     topological order. Used for prefix assembly. *)
-
-val pp_tree : ?remote_has:(string -> bool) -> graph Fmt.t
-(** [pp_tree ?remote_has] renders the action graph as a topological dependency
-    listing — one line per package, in build order, with each package's direct
-    in-plan deps shown inline. [Source] packages whose layer hash satisfies
-    [remote_has] are shown as "remote" (cyan) instead of "source" (blue). *)
 
 (** {1 Executable plan}
 
@@ -180,6 +167,14 @@ type t = {
           string-rebases [build_prefix → staging] in commands and env before
           running the build. Hermetic per-package installs eliminate the
           shared-prefix mutex and let restores / installs run in parallel. *)
+  external_layer_hashes : string list;
+      (** Layer hashes of toolchain packages the host provides (non-relocatable
+          toolchain switch). Not in {!packages} — they are not built by the
+          d10ir executor and have no d10 layer — but their hashes still appear
+          in consumer nodes' [dep_layer_hashes] (so consumer layers invalidate
+          when the toolchain changes). The d10ir recipe surfaces them via
+          [D10ir.Plan.external_layers] so the executor and validator treat the
+          references as already-satisfied. *)
 }
 
 val elaborate :

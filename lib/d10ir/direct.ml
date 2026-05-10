@@ -201,10 +201,7 @@ let stage_dependencies ~producers ~fs d10 (n : Plan.node) staging =
 
 let resolve_archive_path ~plan_dir ~archive_root (a : Archive.t) =
   let with_root =
-    if Filename.is_relative a.path then
-      if Filename.is_relative archive_root then archive_root / a.path
-      else archive_root / a.path
-    else a.path
+    if Filename.is_relative a.path then archive_root / a.path else a.path
   in
   if Filename.is_relative with_root then plan_dir / with_root else with_root
 
@@ -475,6 +472,14 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
       Hashtbl.replace producer_keys key ();
       Hashtbl.replace producers key n)
     plan.nodes;
+  (* Layer hashes the host provides (non-relocatable toolchain). Treated
+     as already-satisfied: no producer in [plan.nodes], no d10 lookup,
+     no [stage_dependencies] copy (the build env's PATH points at the
+     host prefix that ships the binaries). *)
+  let external_keys = Hashtbl.create (List.length plan.external_layers) in
+  List.iter
+    (fun h -> Hashtbl.replace external_keys (Layer_hash.to_string h) ())
+    plan.external_layers;
 
   let counts =
     object
@@ -513,6 +518,7 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
               match Eio.Promise.await (Hashtbl.find promises key) with
               | `Ok -> `Ok
               | `Failed | `Skipped -> `Failed
+            else if Hashtbl.mem external_keys key then `Ok
             else if succeeded d10 h then `Ok
             else `Failed))
       `Ok n.dep_layer_hashes

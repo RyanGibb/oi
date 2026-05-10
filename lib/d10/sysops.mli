@@ -126,10 +126,3 @@ module Cmd : sig
       [~stdout] / [~stderr]; falls back silently to {!run} when they aren't set.
   *)
 end
-
-(** {1 Git operations} *)
-
-module Git : sig
-  val head_short : t -> dir:_ Eio.Path.t -> string
-  (** [head_short t ~dir] returns the short abbreviated hash of HEAD. *)
-end

@@ -2,8 +2,7 @@
 [@@@ai_model "claude-opus-4-7"]
 [@@@ai_provider "Anthropic"]
 
-(* Reporepo (overlay-of-overlays metadata). Was [Source.Reporepo] in
-   [source.ml]; lifted here for navigability. *)
+(* Reporepo (overlay-of-overlays metadata). Re-exported as [Source.Reporepo]. *)
 
 let ( / ) = Filename.concat
 
@@ -134,6 +133,39 @@ let mkdir_p ~fs d =
 let write_file ~fs path content =
   mkdir_p ~fs (Filename.dirname path);
   Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) content
+
+(* Default age threshold for auto-pulling the reporepo when [--refresh]
+   wasn't explicitly passed. Overridable via [OI_REPOREPO_MAX_AGE]
+   (positive float seconds; non-positive disables). *)
+let default_auto_refresh_after_s = 3600.
+
+let auto_refresh_after_s () =
+  match Sys.getenv_opt "OI_REPOREPO_MAX_AGE" with
+  | None | Some "" -> default_auto_refresh_after_s
+  | Some v -> (
+      match float_of_string_opt v with
+      | Some f -> f
+      | None -> default_auto_refresh_after_s)
+
+(* Age of the most recent reporepo pull in seconds, or [None] if the
+   path isn't a usable clone yet.
+
+   [FETCH_HEAD] is touched by every [git fetch] / [git pull], so its
+   mtime tracks "last upstream sync" precisely. Falling back to
+   [.git/HEAD] covers a freshly-cloned repo (clone writes HEAD but not
+   FETCH_HEAD), and on the way down we silently treat any [Unix.stat]
+   failure as "unknown age" — the caller's existing-state path then
+   runs unchanged. *)
+let last_refresh_age_s ~now path =
+  let try_stat p =
+    try Some (Unix.stat p).st_mtime with Unix.Unix_error _ -> None
+  in
+  let mtime =
+    match try_stat (path / ".git" / "FETCH_HEAD") with
+    | Some m -> Some m
+    | None -> try_stat (path / ".git" / "HEAD")
+  in
+  Option.map (fun m -> now -. m) mtime
 
 let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path
     ~url () =
@@ -648,7 +680,28 @@ let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false)
     ?(reporter = Build_progress.null) () =
   let path = env_path () in
   reporter.event (Status (Fmt.str "Reporepo at %s" path));
-  ensure_clone ~reporter ~fs ~sys ~refresh ~path ~url:(env_url ()) ();
+  (* Auto-pull when the existing clone hasn't seen [git fetch] for
+     longer than [auto_refresh_after_s]. Skipped when [refresh] is
+     already requested (avoid the double-pull), when the clone
+     doesn't exist yet (the clone path itself counts as a fresh
+     fetch), or when the threshold is non-positive. *)
+  let effective_refresh =
+    if refresh then true
+    else
+      let threshold = auto_refresh_after_s () in
+      if threshold <= 0. then false
+      else
+        match last_refresh_age_s ~now:(Unix.time ()) path with
+        | Some age when age > threshold ->
+            Log.info (fun m ->
+                m
+                  "Reporepo at %s is %.0fs old (>%.0fs); auto-refreshing"
+                  path age threshold);
+            true
+        | _ -> false
+  in
+  ensure_clone ~reporter ~fs ~sys ~refresh:effective_refresh ~path
+    ~url:(env_url ()) ();
   Log.debug (fun m -> m "ensure_base: reading reporepo %s" path);
   let entries = try load ~path with Error.E _ -> [] in
   match latest entries ~handle:"relocatable" with

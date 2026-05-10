@@ -7,7 +7,7 @@ let log_src = Logs.Src.create "oi.solver"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
 
-(* -- Dir_context (was lib/oi/dir_context.ml) ----------------------------- *)
+(* -- Dir_context -------------------------------------------------------- *)
 
 (* Multi-directory Dir_context for opam-0install with first-wins lookup
    across multiple [packages_dirs]. Private to this module. *)
@@ -192,7 +192,7 @@ module Dir_context = struct
     { env; packages_dirs; pins; constraints; test; doc; prefer_oldest }
 end
 
-(* -- Synthetic switch state (was lib/oi/opam_ctx.ml) --------------------- *)
+(* -- Synthetic switch state --------------------------------------------- *)
 
 module Ctx = struct
   let log_src = Logs.Src.create "oi.solver.ctx"
@@ -208,18 +208,6 @@ module Ctx = struct
     ocaml_version : string;
     jobs : int;
   }
-
-  let pp_conf fmt c =
-    Fmt.pf fmt
-      "@[<v>arch:            %s@,\
-       os:              %s@,\
-       os-distribution: %s@,\
-       os-version:      %s@,\
-       os-family:       %s@,\
-       ocaml-version:   %s@,\
-       jobs:            %d@]"
-      c.arch c.os c.os_distribution c.os_version c.os_family c.ocaml_version
-      c.jobs
 
   type toolchain = {
     install_prefix : string;
@@ -522,9 +510,6 @@ module Ctx = struct
     in
     { st; conf; prefix; toolchain }
 
-  let switch_state t =
-    (Obj.magic t.st : OpamStateTypes.unlocked OpamStateTypes.switch_state)
-
   let resolve t opam = OpamPackageVar.resolve ~opam t.st
 
   let platform_env t v =
@@ -582,7 +567,6 @@ module Ctx = struct
       Hashtbl.replace vars v value;
       value
     in
-    let _subst_basenames = OpamFile.OPAM.substs opam in
     List.iter
       (fun v -> ignore (record_var v))
       [
@@ -661,7 +645,7 @@ module Ctx = struct
     | _ -> None
 end
 
-(* -- Prefix env wrappers (was lib/oi/prefix.ml) -------------------------- *)
+(* -- Prefix env wrappers ------------------------------------------------ *)
 
 module Env = struct
   let canonical p = try Unix.realpath p with Unix.Unix_error _ -> p
@@ -749,7 +733,7 @@ module Env = struct
     Array.of_list (env_pairs @ base)
 end
 
-(* -- Persistent solve memo (was lib/oi/solve_cache.ml) ------------------ *)
+(* -- Persistent solve memo ---------------------------------------------- *)
 
 module Memo = struct
   let log_src = Logs.Src.create "oi.solver.memo"
@@ -946,22 +930,9 @@ module Memo = struct
     Log.debug (fun m ->
         m "solve-cache stored %s (%d pkgs)" (short_key key) (List.length pkgs))
 
-  let lookup_layers ~cache_root ~key =
-    match
-      read_marshal ~label:"layer-cache" (key_path ~cache_root ~sub:"layers" key)
-    with
-    | Some v -> Some (v : string list)
-    | None -> None
-
-  let store_layers ~fs ~cache_root ~key hashes =
-    let path = key_path ~cache_root ~sub:"layers" key in
-    write_marshal ~fs ~label:"layer-cache" path (hashes : string list);
-    Log.debug (fun m ->
-        m "layer-cache stored %s (%d layers)" (short_key key)
-          (List.length hashes))
 end
 
-(* -- Solving (was lib/oi/solve.ml) --------------------------------------- *)
+(* -- Solving ------------------------------------------------------------ *)
 
 module Inst = Opam_0install.Solver.Make (Dir_context)
 

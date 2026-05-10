@@ -77,8 +77,9 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
 (* -- Bulk clean ---------------------------------------------------------- *)
 
 let cmd =
-  let run (c : Terms.common) all toolchains sources binaries dune_cache repos
-      opam_root pins dry_run target =
+  let run (c : Terms.common) all toolchains sources mirror layers prefixes
+      build runs run_cache solve_cache dune_cache repos opam_root pins dry_run
+      target =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; clock; sys; os_key; cache; _ } =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
@@ -86,27 +87,26 @@ let cmd =
     in
     let data_dir = c.data_dir in
     let bulk_flags =
-      all || toolchains || sources || binaries || dune_cache || repos
-      || opam_root || pins
+      all || toolchains || sources || mirror || layers || prefixes || build
+      || runs || run_cache || solve_cache || dune_cache || repos || opam_root
+      || pins
     in
     match target with
     | Some t ->
         if bulk_flags then begin
           Oi.Say.error
             "PKG positional cannot be combined with bulk flags (--all, \
-             --toolchains, --sources, --layers, --dune, --repos, --opam-root, \
-             --pins)";
+             --toolchains, --sources, --mirror, --layers, --prefixes, \
+             --build, --runs, --run-cache, --solve-cache, --dune, --repos, \
+             --opam-root, --pins)";
           exit 1
         end
         else
           let clk = (clock :> D10.Config.clk) in
-          let _ =
-            pkg_clean ~sys ~fs ~clock:clk ~cache ~os_key ~target:t ~dry_run
-          in
-          ()
+          ignore
+            (pkg_clean ~sys ~fs ~clock:clk ~cache ~os_key ~target:t ~dry_run)
     | None ->
-        let clean_any = bulk_flags in
-        if not clean_any then begin
+        if not bulk_flags then begin
           Fmt.pr "%a@.@." Oi.Style.header_string "Cleanable items";
           let items = Oi.Cache.cleanable_items cache ~data_dir in
           let rows =
@@ -135,7 +135,7 @@ let cmd =
               ]
               rows
           in
-          Tty.Table.pp Fmt.stdout table;
+          Oi.Style.pp_table Fmt.stdout table;
           Oi.Say.newline ();
           Oi.Say.info "use --all to clean everything, or select specific items"
         end
@@ -156,18 +156,24 @@ let cmd =
             end
           in
           (* [--all] sweeps everything in [cleanable_items], so adding
-             a new category there picks it up automatically. Per-flag
-             groups bundle related caches: [--layers] for instance also
-             clears the solve cache, run-cache, build state and
-             prefixes, since all of them index off layer hashes that
-             just got dropped. *)
+             a new category there picks it up automatically. Each label
+             shown in the cleanable-items table has a matching flag,
+             plus convenience bundles: [--sources] clears both the
+             tarball directory and the content-addressed mirror;
+             [--layers] cascades into every cache that indexes off
+             layer hashes (prefixes, run-cache, solve-cache, build,
+             runs) because dropping a layer invalidates those too. *)
           let want_label = function
             | _ when all -> true
             | "toolchains" -> toolchains
-            | "sources" | "mirror" -> sources
-            | "layers" | "runs" | "run-cache" | "solve-cache" | "build"
-            | "prefixes" ->
-                binaries
+            | "sources" -> sources
+            | "mirror" -> sources || mirror
+            | "layers" -> layers
+            | "runs" -> layers || runs
+            | "run-cache" -> layers || run_cache
+            | "solve-cache" -> layers || solve_cache
+            | "build" -> layers || build
+            | "prefixes" -> layers || prefixes
             | "dune" -> dune_cache
             | "repos" -> repos
             | "opam-root" -> opam_root
@@ -182,7 +188,7 @@ let cmd =
         end
   in
   let all =
-    Arg.(value & flag & info ~doc:"Every category below. Full reset." [ "all" ])
+    Arg.(value & flag & info ~doc:"Every category. Full reset." [ "all" ])
   in
   let toolchains =
     Arg.(
@@ -191,12 +197,43 @@ let cmd =
   in
   let sources =
     Arg.(
-      value & flag & info ~doc:"Source tarballs and pin clones." [ "sources" ])
+      value & flag
+      & info ~doc:"Source tarballs and content-addressed mirror." [ "sources" ])
   in
-  let binaries =
+  let mirror =
     Arg.(
       value & flag
-      & info ~doc:"Binary layer cache and per-script build dirs." [ "layers" ])
+      & info ~doc:"Content-addressed source mirror only." [ "mirror" ])
+  in
+  let layers =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Layer cache. Cascades into the prefixes, run cache, solve cache, \
+             build state, and runs since they all index off layer hashes."
+          [ "layers" ])
+  in
+  let prefixes =
+    Arg.(value & flag & info ~doc:"Assembled prefix cache only." [ "prefixes" ])
+  in
+  let build =
+    Arg.(
+      value & flag
+      & info ~doc:"Build state ($(b,_build/), logs, audit log)." [ "build" ])
+  in
+  let runs =
+    Arg.(value & flag & info ~doc:"Cached script builds." [ "runs" ])
+  in
+  let run_cache =
+    Arg.(
+      value & flag
+      & info ~doc:"Fast-exec cache for $(b,oi run) only." [ "run-cache" ])
+  in
+  let solve_cache =
+    Arg.(
+      value & flag
+      & info ~doc:"Solver memoisation only." [ "solve-cache" ])
   in
   let dune_cache =
     Arg.(value & flag & info ~doc:"Dune's shared build cache." [ "dune" ])
@@ -204,21 +241,18 @@ let cmd =
   let repos =
     Arg.(
       value & flag
-      & info ~doc:"Reporepo and $(b,--with-repo) clones." [ "repos" ])
+      & info ~doc:"$(b,--with-repo) clones." [ "repos" ])
   in
   let opam_root =
     Arg.(
       value & flag
-      & info
-          ~doc:
-            "Opam scaffolding under $(b,\\$OI_DATA_DIR/opam-root/). \
-             Regenerated on demand."
+      & info ~doc:"Opam scaffolding under $(b,\\$OI_DATA_DIR/opam-root/)."
           [ "opam-root" ])
   in
   let pins =
     Arg.(
       value & flag
-      & info ~doc:"Pin-depends sources and synthesized packages trees."
+      & info ~doc:"Pin-depends sources and synthesized package trees."
           [ "pins" ])
   in
   let dry_run =
@@ -233,30 +267,29 @@ let cmd =
       & pos 0 (some string) None
       & info ~docv:"PKG[.VERSION]"
           ~doc:
-            "Drop layers for one package. Layers that transitively depend on a \
-             removed entry are cascaded. Mutually exclusive with the bulk \
-             flags."
+            "Drop layers for one package; transitive dependents are cascaded. \
+             Mutually exclusive with the bulk flags."
           [])
   in
   let info =
-    Cmd.info "clean" ~doc:"Free up disk space by deleting cached data"
+    Cmd.info "clean" ~doc:"Delete cached data to free disk space"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Remove rebuildable cache data. With no flags or $(b,PKG), lists \
-             each category and its disk usage. Flags are additive. A project's \
-             $(b,_oi/) and the reporepo (your overlay catalogue) are never \
-             touched — the reporepo is user-authored data, not cache.";
+            "Remove rebuildable cache data. With no flags or $(b,PKG), list \
+             each category and its disk usage. Flags are additive. A \
+             project's $(b,_oi/) and the reporepo are never touched.";
           `P
             "$(b,PKG) drops every cached version of that package; \
-             $(b,PKG.VERSION) drops one. Layers that transitively depend on a \
-             removed entry are dropped too, so a poisoned build can't survive \
-             in a downstream layer. Re-run $(b,oi build) to rebuild.";
+             $(b,PKG.VERSION) drops one. Layers that transitively depend on \
+             a removed entry are dropped too. Re-run $(b,oi build) to \
+             rebuild.";
           `Pre "  oi clean --layers\n  oi clean dune\n  oi clean dune.3.22.1 -n";
         ]
   in
   Cmd.v info
     Term.(
-      const run $ Terms.common $ all $ toolchains $ sources $ binaries
-      $ dune_cache $ repos $ opam_root $ pins $ dry_run $ target)
+      const run $ Terms.common $ all $ toolchains $ sources $ mirror $ layers
+      $ prefixes $ build $ runs $ run_cache $ solve_cache $ dune_cache $ repos
+      $ opam_root $ pins $ dry_run $ target)

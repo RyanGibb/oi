@@ -225,43 +225,6 @@ let of_solution ctx ?d10 ~packages_dirs pkgs =
 let find_node g name = OpamPackage.Name.Map.find name g.nodes_by_name
 let nodes g = List.map (find_node g) g.topo_order
 
-let pp_method_short ~remote_has fmt : Identity.method_ -> unit = function
-  | Binary -> Fmt.pf fmt "%a" Style.ok_string "binary"
-  | Source ->
-      if remote_has then Fmt.pf fmt "%a" Style.info_string "remote"
-      else Fmt.pf fmt "%a" Style.source_string "source"
-
-(* Topological listing: one line per package in build order, with each
-   package's direct in-plan deps shown inline. Deps are rendered as bare
-   names (no version) for compactness and sorted alphabetically; the
-   topological ordering guarantees a dep always appears above its
-   dependents, so the user can read the listing top-to-bottom as the
-   build will execute. *)
-let pp_tree ?(remote_has = fun _ -> false) fmt g =
-  let nodes = nodes g in
-  let pkg_width =
-    List.fold_left
-      (fun acc n -> max acc (String.length (OpamPackage.to_string n.pkg)))
-      0 nodes
-  in
-  Fmt.pf fmt "@[<v>";
-  List.iter
-    (fun n ->
-      let pkg_s = OpamPackage.to_string n.pkg in
-      let pad = String.make (pkg_width - String.length pkg_s) ' ' in
-      let dep_names =
-        List.map OpamPackage.Name.to_string n.deps |> List.sort String.compare
-      in
-      Fmt.pf fmt "%a%s  %a" Style.header_string pkg_s pad
-        (pp_method_short ~remote_has:(remote_has n.layer_hash))
-        n.method_;
-      (match dep_names with
-      | [] -> ()
-      | xs -> Fmt.pf fmt "  %a %s" Style.dim_string "←" (String.concat ", " xs));
-      Fmt.pf fmt "@,")
-    nodes;
-  Fmt.pf fmt "@]"
-
 let layer_hashes g =
   List.map (fun name -> (find_node g name).layer_hash) g.topo_order
 
@@ -302,6 +265,15 @@ type t = {
   os_key : string;
   ocaml_version : string;
   build_prefix : string;
+  external_layer_hashes : string list;
+      (** Layer hashes of toolchain packages whose binaries the host
+          provides (a non-relocatable toolchain switch, currently). They
+          are not in {!packages} — they are not built by the d10ir
+          executor and have no d10 layer of their own — but their hashes
+          still appear in every consumer node's [dep_layer_hashes] (so
+          consumer layers invalidate when the toolchain changes). The
+          d10ir recipe surfaces them via {!D10ir.Plan.external_layers}
+          so the executor knows to treat the references as satisfied. *)
 }
 
 let find_pkg_source_dir ~packages_dirs pkg =
@@ -462,14 +434,7 @@ let resolve_node ctx ~packages_dirs ~cache_root ~prefix g (node : node) :
      [oi repo bump] should produce anyway. When absent, [None] — the
      build runs the regular fetch / patches / extras / substs pipeline
      and consolidates inline via {!Archive_builder}. *)
-  let d10_archive =
-    let exts = OpamFile.OPAM.extensions opam in
-    match OpamStd.String.Map.find_opt "x-d10-archive" exts with
-    | None -> None
-    | Some v -> (
-        let module V = OpamParserTypes.FullPos in
-        match v.V.pelem with V.String s -> Some s | _ -> None)
-  in
+  let d10_archive = Keys.read_string_ext Keys.d10_archive opam in
   {
     pkg = pkg_s;
     opam;
@@ -526,10 +491,20 @@ let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
      Topological ordering guarantees a node's deps are marked before
      it is resolved. *)
   let all_nodes = nodes g in
+  let external_layer_hashes = ref [] in
   let packages =
     List.filter_map
       (fun (node : node) ->
-        if is_toolchain_pkg node.pkg then None
+        if is_toolchain_pkg node.pkg then begin
+          (* Keep the toolchain packages' layer hashes around so the
+             recipe emitter can mark them as host-provided. Otherwise
+             consumer nodes reference [node.layer_hash] in their
+             [dep_layer_hashes] but there's no producer in the plan
+             and no d10 layer either, and [D10ir.Direct.dep_status]
+             flags them as [`Failed]. *)
+          external_layer_hashes := node.layer_hash :: !external_layer_hashes;
+          None
+        end
         else begin
           let p =
             resolve_node ctx ~packages_dirs ~cache_root ~prefix:build_prefix g
@@ -541,7 +516,11 @@ let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
         end)
       all_nodes
   in
-  { packages; cache_root; os_key; ocaml_version; build_prefix }
+  let external_layer_hashes =
+    List.sort_uniq String.compare !external_layer_hashes
+  in
+  { packages; cache_root; os_key; ocaml_version; build_prefix;
+    external_layer_hashes }
 
 (* -- Pretty-printing ----------------------------------------------------- *)
 

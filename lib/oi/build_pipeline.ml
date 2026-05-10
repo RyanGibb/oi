@@ -859,6 +859,21 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
       end;
       reporter.event (Plan_ready merged);
       reporter.event (Phase_started { phase = Building; label = "build" });
+      (* Pre-flight validation: same check as [oi ir run] / [oi ir lint],
+         hoisted here so [oi run] / [oi build] surface plan structure
+         bugs (e.g. a dep_layer_hash with no producer and no d10 entry —
+         what a non-relocatable toolchain looked like before
+         [external_layers] was added) as a clear error instead of
+         letting [Direct.run] cascade-skip every node and bubble up as
+         a misleading "solved but does not install bin/<X>". *)
+      (match
+         D10ir.Plan.validate ~d10:d10_cfg ~fs:env.fs ~plan_dir merged
+       with
+      | Ok () -> ()
+      | Error err ->
+          Error.config_error
+            "d10ir recipe failed validation before build: %a"
+            D10ir.Plan.pp_validate_error err);
       let result =
         D10ir.Direct.run ~config:direct_cfg ~d10:d10_cfg ~fs:env.fs
           ~proc_mgr:env.proc_mgr

@@ -41,9 +41,5 @@ let wrap_reporter (r : Logs.reporter) : Logs.reporter =
   in
   { Logs.report }
 
-let start_display_compact ~ppf ~config =
-  let d = Progress.Display.start ~config Progress.Multi.blank in
-  (* See the .mli for the full explanation. Move-cursor-up-one
-     compensates for [add_line]'s built-in [pp_force_newline]. *)
-  Format.fprintf ppf "\x1b[1A%!";
-  d
+let start_display_compact ~ppf:_ ~config =
+  Progress.Display.start ~config Progress.Multi.blank

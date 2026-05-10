@@ -54,14 +54,9 @@ val event_codec : event Jsont.t
 (** Leaf codecs are exposed so {!Manifest} can re-use them when encoding
     audit-derived shapes inside its envelope without restating the schema. *)
 
-val event_target_codec : event_target Jsont.t
 val log_pointer_codec : log_pointer Jsont.t
 
 (** {1 Storage} *)
-
-val local_log_path : cache_root:string -> string
-(** [local_log_path ~cache_root] is [<cache_root>/build/audit.jsonl] — the
-    cache-local append log written by every [oi] invocation on this host. *)
 
 val append : fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> event -> unit
 (** [append ~cache_root e] appends [e] as a single JSON line to

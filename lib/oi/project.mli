@@ -63,9 +63,6 @@ module Script : sig
 
   val parse_deps_from_file : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> dep list
 
-  val parse_dep : string -> dep
-  (** Script-style dep spec: [.] is a findlib sub-library separator. *)
-
   val parse_cli_dep : string -> dep
   (** CLI-style dep spec: [.] after the package name is opam's [pkg.version]
       shorthand. *)

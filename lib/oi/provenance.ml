@@ -36,21 +36,6 @@ type t = {
 let empty_phases =
   { fetch = None; build = None; install = None; restore = None }
 
-(* -- URL classification --------------------------------------------------- *)
-
-let url_kind url =
-  if url = "" then ""
-  else if String.starts_with ~prefix:"git+" url then "git"
-  else if String.starts_with ~prefix:"file://" url then "local"
-  else
-    let ends ext = String.ends_with ~suffix:ext url in
-    if
-      List.exists ends
-        [ ".tar.gz"; ".tar.bz2"; ".tar.xz"; ".tar.zst"; ".tgz"; ".zip" ]
-    then "tar"
-    else if url.[0] = '/' then "local"
-    else ""
-
 (* -- Opam content hash --------------------------------------------------- *)
 
 let hash_opam_file ~path =

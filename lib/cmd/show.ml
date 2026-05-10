@@ -1,6 +1,7 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
+
 (* -- plan ---------------------------------------------------------------- *)
 
 (* Rendering helpers for [oi show]'s default succinct page. *)
@@ -464,7 +465,7 @@ let render_state =
    Per-group failures (solver errors etc.) are logged and the group
    is dropped from the merge — partial output is more useful than no
    output for a 50-root overlay where one root has a conflict. *)
-let show_merged_plan ~(harness : Harness.env) ~handle ~refresh =
+let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
   let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache;
         data_dir; http_session; _ } = harness in
   let env : Oi.Build_pipeline.env =
@@ -483,9 +484,13 @@ let show_merged_plan ~(harness : Harness.env) ~handle ~refresh =
     Oi.Pipeline.make_conf ~platform
       ~ocaml_version:Workspace.ocaml_version
   in
+  let bar_label =
+    String.concat " " (List.map (fun h -> "@" ^ h) handles)
+  in
   let req : Oi.Build_pipeline.request =
     {
-      targets = [ Overlay_all handle ];
+      targets =
+        List.map (fun h : Oi.Build_pipeline.target -> Overlay_all h) handles;
       with_repos = [];
       pins = [];
       extra_repos = [];
@@ -495,12 +500,12 @@ let show_merged_plan ~(harness : Harness.env) ~handle ~refresh =
       conf = conf_host;
       local_packages_dir = None;
       project_root = None;
-        force_source = false;
+      force_source = false;
       refresh;
     }
   in
   let solved =
-    Progress_ui.with_ui ~target:("@" ^ handle)
+    Progress_ui.with_ui ~target:bar_label
       ~clock:(clock :> _ Eio.Resource.t)
       ~enabled:(Tty.is_tty ())
     @@ fun ui_reporter ->
@@ -537,7 +542,7 @@ let show_merged_plan ~(harness : Harness.env) ~handle ~refresh =
       0 solved.groups
   in
   if all_plans = [] then begin
-    Fmt.pr "No solvable groups for @%s.@." handle;
+    Fmt.pr "No solvable groups for %s.@." bar_label;
     exit 1
   end;
   (* Dedup [package_plan]s by layer hash. Same hash from different
@@ -583,7 +588,7 @@ let show_merged_plan ~(harness : Harness.env) ~handle ~refresh =
       p.dep_layers
   in
   Fmt.pr "%a@.@." Oi.Style.header_string
-    (Fmt.str "Merged plan for @%s on %s" handle os_key);
+    (Fmt.str "Merged plan for %s on %s" bar_label os_key);
   Oi.Dep_tree.render ~label_first ~label_ref ~key_of ~children roots;
   let n_layers = Hashtbl.length by_hash in
   let n_source =
@@ -812,7 +817,7 @@ let show_overlay ~cache_root ~os_key ~handle =
   Stdlib.Option.iter D10.Index.close db;
   Fmt.pr "%a@.@." Oi.Style.header_string
     (Fmt.str "Overlay @%s on %s" handle os_key);
-  Tty.Table.pp Fmt.stdout
+  Oi.Style.pp_table Fmt.stdout
     (Tty.Table.of_rows ~header_style:Oi.Style.header
        [
          Tty.Table.column "PACKAGE";
@@ -920,7 +925,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
         ]
         table_rows
     in
-    Tty.Table.pp Fmt.stdout table;
+    Oi.Style.pp_table Fmt.stdout table;
     Fmt.pr "@.%a %d layer(s), %a total@." Oi.Style.header_string "Summary:"
       (List.length rows) Oi.Cache.pp_size !total
   end
@@ -943,19 +948,34 @@ let cmd =
          [x-root-packages] is empty), merge the recipes, and print the
          deduped layer-hash dependency tree. Same view that
          [oi build @HANDLE] would execute. *)
-    let bare_handle =
-      match targets with [ t ] -> Target.bare_handle t | _ -> None
+    (* All-bare-handle inputs route to the merged-plan view: [oi
+       show @avsm @samoht] solves every overlay's roots and renders
+       a single deduped tree. Mixed inputs ([@HANDLE] + [pkg.version])
+       fall through to the regular per-target flow. *)
+    let bare_handles =
+      match targets with
+      | [] -> None
+      | _ ->
+          let hs = List.filter_map Target.bare_handle targets in
+          if List.compare_lengths hs targets = 0 then Some hs else None
     in
     let cache_root = Oi.Cache.root_s cache in
-    (match (bare_handle, show_all, show_cache_listing) with
+    (match (bare_handles, show_all, show_cache_listing) with
     | _, true, _ ->
-        show_cache ~fs ~sys ~cache_root ~os_key ~handle:bare_handle;
+        let h =
+          match bare_handles with Some [ h ] -> Some h | _ -> None
+        in
+        show_cache ~fs ~sys ~cache_root ~os_key ~handle:h;
         exit 0
-    | Some handle, false, true ->
-        show_overlay ~cache_root ~os_key ~handle;
+    | Some [ h ], false, true ->
+        show_overlay ~cache_root ~os_key ~handle:h;
         exit 0
-    | Some handle, false, false ->
-        show_merged_plan ~harness ~handle ~refresh;
+    | Some _, false, true ->
+        Oi.Error.config_error
+          "oi show --cache: pass exactly one bare @HANDLE to filter \
+           the listing"
+    | Some handles, false, false ->
+        show_merged_plan ~harness ~handles ~refresh;
         exit 0
     | None, false, _ -> ());
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
@@ -1329,9 +1349,18 @@ let cmd =
       (* Render the elaborated plan as a Unicode dep tree. Each
          [package_plan] keys by its layer_hash (so two identical
          packages from different solve groups collapse to one
-         back-reference); children come from [dep_layers]. Roots
-         are package_plans whose layer_hash is no other plan's
-         dep. *)
+         back-reference); children come from [dep_layers].
+
+         Tree roots come from [names] — the solver-root set the
+         user actually asked for (CLI targets, [project_deps] from
+         local *.opam files, [--with] script deps, URL-project
+         roots). Falling back on graph-roots — packages no other
+         package depends on — buries the user's declared deps when
+         they happen to be transitive deps of a sibling: e.g. on
+         a project depending on [dune; dockerfile; …], graph-roots
+         hide [dune] under [dockerfile.dune.…] because [dockerfile]
+         pulls [dune] in transitively. The user's mental model is
+         "show me my depends as roots", not "show me leaves". *)
       let nodes = exec_plan.packages in
       let by_hash =
         let h = Hashtbl.create 64 in
@@ -1350,11 +1379,68 @@ let cmd =
               Hashtbl.replace consumed d.hash ())
             p.dep_layers)
         nodes;
-      let roots =
-        List.filter
+      let by_name =
+        let h = Hashtbl.create 64 in
+        List.iter
           (fun (p : Oi.Plan.package_plan) ->
-            not (Hashtbl.mem consumed p.layer_hash))
-          nodes
+            let n =
+              OpamPackage.Name.to_string
+                (OpamPackage.name (opam_pkg_of_package_plan p))
+            in
+            if not (Hashtbl.mem h n) then Hashtbl.add h n p)
+          nodes;
+        h
+      in
+      let solver_root_names =
+        List.map OpamPackage.Name.to_string names
+        |> List.sort_uniq String.compare
+      in
+      (* Position in the topologically-sorted plan: deps come first,
+         dependents later. Sorting roots by this index makes leaf-
+         roots expand at top level before any dependent root reaches
+         them, so e.g. on a project depending on both [dune] and
+         [dockerfile], [dune] gets a full subtree of its own instead
+         of being rendered first as a back-reference under
+         [dockerfile]. *)
+      let topo_pos =
+        let h = Hashtbl.create 64 in
+        List.iteri
+          (fun i (p : Oi.Plan.package_plan) ->
+            if not (Hashtbl.mem h p.layer_hash) then Hashtbl.add h p.layer_hash i)
+          nodes;
+        h
+      in
+      let by_topo a b =
+        let pa =
+          Stdlib.Option.value
+            (Hashtbl.find_opt topo_pos a.Oi.Plan.layer_hash)
+            ~default:max_int
+        in
+        let pb =
+          Stdlib.Option.value
+            (Hashtbl.find_opt topo_pos b.Oi.Plan.layer_hash)
+            ~default:max_int
+        in
+        compare pa pb
+      in
+      let roots =
+        let from_solver =
+          List.filter_map
+            (fun n -> Hashtbl.find_opt by_name n)
+            solver_root_names
+          |> List.sort by_topo
+        in
+        if from_solver <> [] then from_solver
+        else
+          (* Fallback for plans built without a meaningful root set
+             (rare — would require [names = []], which the upstream
+             "nothing to show" guard already rejects). Keep the
+             graph-root behaviour so the tree still renders something
+             useful instead of hard-erroring. *)
+          List.filter
+            (fun (p : Oi.Plan.package_plan) ->
+              not (Hashtbl.mem consumed p.layer_hash))
+            nodes
       in
       let label_first (p : Oi.Plan.package_plan) =
         let h = p.layer_hash in
@@ -1424,8 +1510,9 @@ let cmd =
       value & pos_all string []
       & info ~docv:"TARGET"
           ~doc:
-            "Opam package, binary name, or $(b,@HANDLE/PKG). Omitted: read \
-             $(b,*.opam) in the current directory."
+            "Opam package, binary name, $(b,pkg.VERSION), bare $(b,@HANDLE), \
+             or $(b,@HANDLE/PKG). Repeatable. Omitted: read $(b,*.opam) in \
+             the cwd."
           [])
   in
   let tree =
@@ -1433,9 +1520,8 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Render the dependency graph as a Unicode tree. Each layer is \
-             shown once at its first occurrence (with its short layer hash); \
-             subsequent visits are dim back-references prefixed with \
+            "Render the dependency graph as a Unicode tree (default view). \
+             Back-references to layers expanded earlier are prefixed with \
              $(b,\u{21B0})."
           [ "tree"; "graph" ])
   in
@@ -1444,9 +1530,8 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Print the full per-package build plan: layer hashes, source \
-             URLs, and resolved build / install commands. Several screens \
-             of output for a non-trivial target."
+            "Print the full per-package plan: layer hashes, source URLs, \
+             resolved build/install commands."
           [ "plan"; "details" ])
   in
   let summary =
@@ -1454,16 +1539,14 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Print the metadata + depexts summary (target version, package \
-             counts, depexts with missing ones marked, pinned overlays). \
-             This was the historical default before $(b,--tree) became the \
-             default view."
+            "Print metadata, package counts, depexts (missing marked), and \
+             pinned overlays."
           [ "summary"; "meta" ])
   in
   let only_depexts =
     Arg.(
       value & flag
-      & info ~doc:"Depexts only, one per line. Pipe to a package manager."
+      & info ~doc:"Print depexts only, one per line."
           [ "only-depexts" ])
   in
   let os_override =
@@ -1472,10 +1555,9 @@ let cmd =
       & opt (some string) None
       & info ~docv:"OS"
           ~doc:
-            "Evaluate depexts for $(b,OS) instead of the host. Accepts any \
-             $(b,dockerfile-opam) tag (e.g. $(b,alpine-3.23), \
-             $(b,ubuntu-22.04)) or bare distro name. Skips the host-installed \
-             check."
+            "Evaluate depexts for $(b,OS) instead of the host. Any \
+             $(b,dockerfile-opam) tag ($(b,alpine-3.23), $(b,ubuntu-22.04)) \
+             or bare distro name. Skips the host-installed check."
           [ "os" ])
   in
   let show_all =
@@ -1483,8 +1565,8 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "List every cached layer. Pairs with bare $(b,@HANDLE) for a \
-             handle-scoped listing."
+            "List every cached layer. With bare $(b,@HANDLE), filter to that \
+             overlay."
           [ "all" ])
   in
   let show_cache_listing =
@@ -1492,63 +1574,43 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "With bare $(b,@HANDLE), list the overlay's declared / cached \
-             packages instead of the merged build plan. Without bare \
-             $(b,@HANDLE) this flag is ignored."
+            "With bare $(b,@HANDLE), list the overlay's declared and cached \
+             packages instead of the merged plan. Ignored otherwise."
           [ "cache" ])
   in
   let info =
-    Cmd.info "show" ~doc:"Summarise a package's build plan and depexts"
+    Cmd.info "show" ~doc:"Summarise a target's build plan and depexts"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Solve for $(b,TARGET) and print its metadata, package count, \
-             reporepo pins, and declared system dependencies. No sources are \
-             fetched and no builds run.";
+            "Solve for $(b,TARGET) and print its plan, metadata, and \
+             depexts. No sources fetched, no builds run.";
           `P "With no $(b,TARGET), reads $(b,*.opam) in the cwd.";
           `P
-            "Bare $(b,@HANDLE) renders the merged build plan that \
-             $(b,oi build @HANDLE) would execute: every overlay root is \
-             solved, the per-group recipes are merged via \
-             $(b,d10ir) (deduped by layer hash), and the result prints \
-             as a Unicode dependency tree. $(b,--cache) falls back to \
-             the per-overlay package listing; $(b,--all) lists cached \
-             layers across the whole cache.";
+            "Multiple $(b,TARGET)s are solved as a single group. Bare \
+             $(b,@HANDLE) targets switch to the merged-overlay view: every \
+             overlay root is solved and rendered as one deduped tree.";
           `S "MODES";
-          `I
-            ( "(default)",
-              "Dependency graph as a Unicode tree (deduplicated; back-refs \
-               marked with $(b,\u{21B0}))." );
-          `I
-            ( "$(b,--tree)",
-              "Same as the default — explicit form." );
-          `I
-            ( "$(b,--summary)",
-              "Metadata, package counts, binaries, depexts (with missing \
-               ones marked), pinned overlays. Was the default in earlier \
-               oi versions." );
-          `I
-            ( "$(b,--plan)",
-              "Full per-package build plan: layer hashes, source URLs, \
-               resolved build/install commands." );
-          `I
-            ( "$(b,--only-depexts)",
-              "Depexts only, one per line. Pipe to a package manager." );
-          `I
-            ( "Bare $(b,@HANDLE)",
-              "Merged build plan for every overlay root, deduped by \
-               layer hash. Useful for spotting packages that resolve to \
-               multiple distinct layer hashes across the overlay's \
-               roots." );
-          `I
-            ( "Bare $(b,@HANDLE) $(b,--cache)",
-              "Per-overlay package listing (cache state and known \
-               binaries). The pre-merge default." );
-          `I
-            ( "$(b,--all)",
-              "Cached layers across all overlays. Combine with bare \
-               $(b,@HANDLE) to filter to one overlay's cached layers." );
+          `I ("(default)",
+              "Dependency tree.");
+          `I ("$(b,--tree)", "Same as the default.");
+          `I ("$(b,--summary)",
+              "Metadata, package counts, binaries, depexts, pinned \
+               overlays.");
+          `I ("$(b,--plan)",
+              "Full per-package plan: layer hashes, source URLs, build/install \
+               commands.");
+          `I ("$(b,--only-depexts)",
+              "Depexts only, one per line.");
+          `I ("bare $(b,@HANDLE)…",
+              "Merged build plan across every overlay root, deduped by \
+               layer hash.");
+          `I ("bare $(b,@HANDLE) $(b,--cache)",
+              "Per-overlay package listing (cache state, known binaries).");
+          `I ("$(b,--all)",
+              "Cached layers across the whole cache. With bare $(b,@HANDLE), \
+               filter to that overlay.");
           `S Manpage.s_examples;
           `Pre
             "  oi show utop\n\
@@ -1556,7 +1618,7 @@ let cmd =
             \  sudo apt install \\$(oi show --only-depexts @avsm/tangled)\n\
             \  oi show --only-depexts --os=fedora-43\n\
             \  oi show --all\n\
-            \  oi show @avsm";
+            \  oi show @avsm @samoht";
         ]
   in
   Cmd.v info
@@ -1565,9 +1627,3 @@ let cmd =
       $ Terms.toolchain $ targets $ Terms.with_repos
       $ Terms.with_deps $ tree $ plan_view $ summary $ only_depexts
       $ os_override $ show_all $ show_cache_listing)
-
-(* -- env ----------------------------------------------------------------- *)
-
-(* -- tool installation --------------------------------------------------- *)
-
-(* -- add ----------------------------------------------------------------- *)

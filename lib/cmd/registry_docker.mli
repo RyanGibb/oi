@@ -55,9 +55,6 @@ val one_distro_filename : Distro.t -> string
 (** Filename (without directory) for a per-distro Dockerfile, e.g.
     [Dockerfile.alpine-3.23]. *)
 
-val service_name : Distro.t -> string
-(** docker-compose service name for a distro, e.g. [alpine-3.23]. *)
-
 val docker_compose_yaml :
   distros:Distro.t list -> registry_host_path:string -> unit -> string
 (** [docker_compose_yaml ~distros ~registry_host_path ()] emits a compose file

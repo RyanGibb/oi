@@ -512,56 +512,46 @@ let cmd =
       value & opt string ""
       & info ~docv:"DIR"
           ~doc:
-            "Output directory (required). Created if missing; existing entries \
-             are kept."
+            "Output directory (required). Created if missing; existing \
+             entries are kept."
           [ "o"; "output" ])
   in
   let targets =
     Arg.(
       value & pos_all string []
-      & info ~docv:"TARGET" ~doc:"Package name or $(b,@HANDLE/PKG). Repeatable."
+      & info ~docv:"TARGET"
+          ~doc:"Package name or $(b,@HANDLE/PKG). Repeatable."
           [])
   in
   let info =
-    Cmd.info "source" ~doc:"Fetch sources for a target into a flat bundle"
+    Cmd.info "source" ~doc:"Vendor a target's sources into a self-contained bundle"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Solve $(b,TARGET)'s dep closure (including \
-             $(b,with-test)/$(b,with-doc)) and write a self-contained source \
-             bundle to $(b,DIR). Hand off to $(b,oi build), $(b,dune pkg \
-             lock), or $(b,opam install --deps-only).";
+            "Solve $(b,TARGET)'s dep closure (including $(b,with-test) and \
+             $(b,with-doc)), fetch every source archive, and lay them out \
+             under $(b,DIR) as a vendored workspace. Hand off to $(b,oi \
+             build), $(b,dune pkg lock), or $(b,opam install --deps-only).";
           `S "OUTPUT LAYOUT";
-          `I
-            ( "$(b,DIR/vendor/<pkg>/)",
-              "Each consumer package's main source. Tarballs unpacked, \
-               $(b,git+) URLs cloned at the pinned commit. Packages sharing an \
-               archive share a directory." );
-          `I
-            ( "$(b,DIR/reporepo/)",
-              "Snapshot of the opam metadata the solve consulted." );
-          `I
-            ( "$(b,DIR/root.opam)",
+          `I ("$(b,DIR/vendor/<pkg>/)",
+              "Per-package source tree. Tarballs unpacked, $(b,git+) URLs \
+               cloned at the pinned commit. Packages sharing an archive \
+               share a directory.");
+          `I ("$(b,DIR/reporepo/)",
+              "Snapshot of the opam metadata the solve consulted.");
+          `I ("$(b,DIR/root.opam)",
               "Bundle manifest. $(b,depends:) pins externally-resolved \
-               packages (non-dune sources and virtuals); dune-buildable \
-               in-tree packages are built from $(b,vendor/) and not listed. \
-               $(b,x-repos:) and $(b,x-reporepo-hash:) stamp the reporepo for \
-               reproducible re-solves." );
-          `I
-            ( "$(b,DIR/dune-project), $(b,DIR/dune)",
-              "Workspace marker plus $(b,(vendored_dirs vendor)) so dune \
-               relaxes warnings-as-errors and strict checks for $(b,vendor/)."
-            );
+               packages; dune-buildable in-tree packages build from \
+               $(b,vendor/). $(b,x-repos:) and $(b,x-reporepo-hash:) stamp \
+               the reporepo.");
+          `I ("$(b,DIR/dune-project), $(b,DIR/dune)",
+              "Workspace marker; $(b,(vendored_dirs vendor)) relaxes \
+               warnings-as-errors over $(b,vendor/).");
           `S "NOTES";
-          `P
-            "$(b,{with-test}) / $(b,{with-doc}) deps of every package in the \
-             closure are included so $(b,dune build) over the bundle compiles \
-             tests and docs.";
-          `P
-            "Toolchain packages are pinned via $(b,--toolchain), not \
-             $(b,depends:).";
           `P "$(b,extra-sources:) blocks are skipped.";
+          `P "Toolchain packages are pinned via $(b,--toolchain), not \
+              $(b,depends:).";
           `S Manpage.s_examples;
           `Pre
             "  oi source @avsm/owntracks-cli -o ./bundle\n\

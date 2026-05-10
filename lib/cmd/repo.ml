@@ -9,9 +9,8 @@ let reporepo_term =
     & opt string (Terms.reporepo_path ())
     & info ~docv:"DIR"
         ~doc:
-          "Local directory that contains the reporepo clone to operate on. \
-           Falls back to $(b,\\$OI_REPOREPO), and then to \
-           $(b,\\$OI_DATA_DIR/reporepo) under the XDG data hierarchy."
+          "Local reporepo clone. Falls back to $(b,\\$OI_REPOREPO), then \
+           $(b,\\$OI_DATA_DIR/reporepo)."
         [ "reporepo" ])
 
 let reporepo_url_term =
@@ -20,11 +19,9 @@ let reporepo_url_term =
     & opt string (Terms.reporepo_url ())
     & info ~docv:"URL"
         ~doc:
-          "Git URL to clone the reporepo from when the local clone does not \
-           yet exist. Falls back to $(b,\\$OI_REPOREPO_URL) and then to the \
-           built-in upstream. Once the local clone exists, $(b,oi) never pulls \
-           from this URL again. The working copy is yours to edit, commit, and \
-           push."
+          "Git URL used for the initial clone when no local reporepo exists. \
+           Falls back to $(b,\\$OI_REPOREPO_URL), then the built-in upstream. \
+           Ignored once the clone exists."
         [ "reporepo-url" ])
 
 let depend_term =
@@ -32,11 +29,9 @@ let depend_term =
     value & opt_all string []
     & info ~docv:"HANDLE[=VERSION]"
         ~doc:
-          "Make this overlay depend on another one. The form \
-           $(b,HANDLE=VERSION) pins a specific recorded version; a bare \
-           $(b,HANDLE) accepts any version. May be given more than once. When \
-           omitted on a non-base overlay, $(b,oi) auto-fills the current \
-           latest versions of $(b,default) and $(b,relocatable)."
+          "Declare a dependency on another overlay. $(b,HANDLE=VERSION) pins \
+           a recorded version; bare $(b,HANDLE) accepts any. Repeatable. \
+           Defaults to the current $(b,default) and $(b,relocatable)."
         [ "depend"; "d" ])
 
 let parse_depend_spec s =
@@ -157,7 +152,7 @@ let render_overlay_table ~with_status rows =
       (overlay_columns ~with_status)
       rows
   in
-  Tty.Table.pp Fmt.stdout table
+  Oi.Style.pp_table Fmt.stdout table
 
 let toolchain_row (e : Oi.Source.Reporepo.entry) =
   let name = toolchain_cli_name e in
@@ -186,7 +181,7 @@ let render_toolchain_table rows =
       ]
       rows
   in
-  Tty.Table.pp Fmt.stdout table
+  Oi.Style.pp_table Fmt.stdout table
 
 let ref_term =
   Arg.(
@@ -194,12 +189,8 @@ let ref_term =
     & opt (some string) None
     & info ~docv:"REF"
         ~doc:
-          "Track a specific branch or tag instead of the repository's default \
-           branch. The ref name is remembered in the reporepo so that later \
-           $(b,oi repo bump) invocations keep following the same branch rather \
-           than silently falling back to the default. For example, \
-           $(b,--ref=relocatable) is how you pin $(b,dra27/opam-repository), \
-           whose payload lives on the $(b,relocatable) branch."
+          "Track $(i,REF) (branch or tag) instead of the upstream default \
+           branch. Persisted; future $(b,oi repo bump) keeps following it."
         [ "ref"; "r" ])
 
 let toolchain_repo_term =
@@ -209,13 +200,8 @@ let toolchain_repo_term =
     & info ~docv:"NAME"
         ~doc:
           "Tag this overlay with a builtin toolchain (e.g. $(b,oxcaml), \
-           $(b,ocaml-5.4), $(b,ocaml-5.5)). The choice is recorded as \
-           $(b,x-oi-toolchain) in the overlay's opam file and changes how \
-           $(b,oi repo bump) computes the auto-injected base depends: instead \
-           of pinning the default $(b,relocatable)/$(b,default) pair, it pins \
-           whatever overlays the named toolchain itself layers under. Pass \
-           $(b,--toolchain=oxcaml) to mark an overlay as oxcaml-targeted and \
-           lock it against $(b,default) only."
+           $(b,ocaml-5.4)). Recorded as $(b,x-oi-toolchain); replaces the \
+           default base-depends with the toolchain's own."
         [ "toolchain" ])
 
 (* Look up a builtin toolchain's [depends] for use as [~base_handles]
@@ -313,9 +299,7 @@ module Ls = struct
       Arg.(
         value & flag
         & info
-            ~doc:
-              "Skip the per-entry $(b,git ls-remote) check and print the \
-               reporepo contents without contacting the network."
+            ~doc:"Skip the $(b,git ls-remote) upstream check (offline)."
             [ "no-check" ])
     in
     let info =
@@ -324,45 +308,29 @@ module Ls = struct
           [
             `S Manpage.s_description;
             `P
-              "Two sections: $(b,OVERLAYS) (base repos and user overlays, with \
-               upstream status) and $(b,TOOLCHAINS) (toolchain definitions).";
+              "Print two tables: $(b,OVERLAYS) (with upstream status) and \
+               $(b,TOOLCHAINS).";
             `S "OVERLAYS";
             `P
-              "An overlay is a curated set of opam packages pinned to a \
-               specific git commit. Pull one into a solve with \
-               $(b,--with-repo=@HANDLE) or $(b,--with=@HANDLE/PKG), or declare \
-               $(b,x-repos: [\"@HANDLE\"]) in a project's $(b,*.opam) to apply \
-               it automatically.";
+              "Curated opam packages pinned to git commits. Reference with \
+               $(b,--with-repo=@HANDLE), $(b,--with=@HANDLE/PKG), or \
+               $(b,x-repos: [\"@HANDLE\"]) in $(b,*.opam).";
             `P
-              "Base repos ($(b,default), $(b,relocatable)) are pulled in by \
-               every solve and listed first. User overlays follow in handle \
-               order. Add new entries with $(b,oi repo add); fast-forward \
-               stale ones with $(b,oi repo bump HANDLE).";
-            `P
-              "Columns: $(b,HANDLE), $(b,VERSION), pinned $(b,COMMIT), \
-               $(b,TOOLCHAIN) target (from $(b,x-oi-toolchain), $(b,—) for \
-               base repos), $(b,STATUS), source $(b,URL).";
-            `P "Status is computed by $(b,git ls-remote) (four in parallel):";
-            `I ("$(b,up-to-date)", "Pinned commit matches the upstream branch.");
+              "Base repos ($(b,default), $(b,relocatable)) sort first; user \
+               overlays follow. Columns: $(b,HANDLE), $(b,VERSION), \
+               $(b,COMMIT), $(b,TOOLCHAIN), $(b,STATUS), $(b,URL).";
+            `P "$(b,STATUS) (from parallel $(b,git ls-remote)):";
+            `I ("$(b,up-to-date)", "Pin matches upstream.");
             `I ("$(b,stale)", "Upstream has moved past the pin.");
             `I ("$(b,unreachable)", "Remote could not be contacted.");
-            `P "$(b,--no-check) skips the check and drops the column.";
             `S "TOOLCHAINS";
             `P
-              "A toolchain is a compiler plus its supporting overlays. Pass \
-               $(b,--toolchain=NAME) to any oi command to select one; \
-               otherwise the entry flagged $(b,DEFAULT) is used. An overlay \
-               tagged $(b,x-oi-toolchain: NAME) implies that toolchain when \
-               pulled into a solve.";
+              "Compiler bundles. Select with $(b,--toolchain=NAME); the \
+               $(b,DEFAULT) entry is used otherwise.";
             `P
-              "$(b,relocatable) toolchains build into $(b,_oi/prefix/) like \
-               any other package; $(b,fixed-prefix) toolchains install into a \
-               shared root under $(b,\\$XDG_CACHE_HOME/oi/toolchains) (visible \
-               under $(b,oi config)).";
-            `P
-              "Columns: $(b,NAME) (the value to pass to $(b,--toolchain)), \
-               $(b,VERSION), $(b,MODE), $(b,DEFAULT), and the primary \
-               $(b,COMPILER) package.";
+              "Columns: $(b,NAME), $(b,VERSION), $(b,MODE) \
+               ($(b,relocatable) or $(b,fixed-prefix)), $(b,DEFAULT), \
+               $(b,COMPILER).";
           ]
     in
     Cmd.v info
@@ -431,7 +399,7 @@ module Show = struct
       Arg.(
         required
         & pos 0 (some string) None
-        & info ~docv:"HANDLE" ~doc:"The overlay handle to inspect." [])
+        & info ~docv:"HANDLE" ~doc:"Overlay handle to inspect." [])
     in
     let info =
       Cmd.info "show"
@@ -440,14 +408,9 @@ module Show = struct
           [
             `S Manpage.s_description;
             `P
-              "$(b,oi repo show) prints the recorded history of a single \
-               overlay handle. For each version it lists the git URL and \
-               commit it pins, the tracked branch if one was set with \
-               $(b,--ref), and the other overlays that version depends on.";
-            `P
-              "Use this to audit what a particular user's overlay pulls in, \
-               and to tell at a glance whether bumping that overlay would drag \
-               other overlays along with it.";
+              "Print the recorded history of $(b,HANDLE). For each version: \
+               git URL, pinned commit, tracked $(b,--ref), and depended-on \
+               overlays.";
           ]
     in
     Cmd.v info
@@ -509,9 +472,7 @@ module Add = struct
         required
         & pos 0 (some string) None
         & info ~docv:"HANDLE"
-            ~doc:
-              "A short opam-valid name for the overlay, for example $(b,avsm) \
-               or $(b,samoht)."
+            ~doc:"Short opam-valid overlay name (e.g. $(b,avsm))."
             [])
     in
     let url =
@@ -519,9 +480,7 @@ module Add = struct
         required
         & pos 1 (some string) None
         & info ~docv:"URL"
-            ~doc:
-              "The git URL of the upstream opam-repository to pin under this \
-               handle."
+            ~doc:"Git URL of the upstream opam-repository."
             [])
     in
     let force =
@@ -529,11 +488,8 @@ module Add = struct
         value & flag
         & info
             ~doc:
-              "Write a new $(b,YYYYMMDD.N) entry for $(i,HANDLE) even when the \
-               handle already exists. Use this to point an overlay at a \
-               different upstream URL without losing history. Older entries \
-               stay in place and continue to pin the previous URL, so you can \
-               roll back to them if the switch turns out badly."
+              "Add a new $(b,YYYYMMDD.N) entry even if $(i,HANDLE) exists. \
+               Older entries are kept."
             [ "force"; "f" ])
     in
     let info =
@@ -542,14 +498,12 @@ module Add = struct
           [
             `S Manpage.s_description;
             `P
-              "Register $(b,HANDLE) in the reporepo, pinned to the current \
-               commit on $(b,URL)'s default branch (or $(b,--ref BRANCH)).";
+              "Register $(b,HANDLE), pinned to the current commit on \
+               $(b,URL)'s default branch (or $(b,--ref BRANCH)).";
             `P
-              "Non-base overlays auto-record dependencies on the current \
-               latest $(b,default) and $(b,relocatable) versions, so the new \
-               overlay travels with the base set it was built against. \
-               $(b,--toolchain=NAME) instead pins the toolchain's own base set \
-               (e.g. $(b,oxcaml) → just $(b,default)).";
+              "Non-base overlays auto-depend on the current $(b,default) \
+               and $(b,relocatable). $(b,--toolchain=NAME) substitutes the \
+               toolchain's own base set.";
             `S Manpage.s_examples;
             `Pre
               "  oi repo add default \
@@ -616,18 +570,7 @@ module Bump = struct
                (n, u, cks))
         |> List.sort compare
       in
-      let sha =
-        match
-          OpamStd.String.Map.find_opt "x-d10-archive"
-            (OpamFile.OPAM.extensions opam)
-        with
-        | Some v -> (
-            match v.OpamParserTypes.FullPos.pelem with
-            | OpamParserTypes.FullPos.String s -> Some s
-            | _ -> None)
-        | None -> None
-      in
-      Some ((url, extras), sha)
+      Some ((url, extras), Oi.Keys.read_string_ext Oi.Keys.d10_archive opam)
     with _ -> None
 
   let iter_handle_opams ~reporepo ~handle f =
@@ -718,6 +661,20 @@ module Bump = struct
         | Some (_, Some _) -> ()
         | _ -> incr n);
     !n
+
+  (* Bake strip is disabled: [oi]'s toolchain-bootstrap flow
+     ([Toolchain.install_via_opam] et al.) feeds the unbaked opam file
+     to opam directly, which fetches the pristine [url{}] tarball and
+     applies [patches:] / [extra-files:] before running [build:]. There
+     is no clean signal at bake time for "this package will only ever be
+     consumed via its d10-archive", so we can't safely delete patch
+     metadata. Stripping it broke [oxcaml-compiler.5.2.0minus31]'s
+     [ignore-opam.patch] (which adds [init_deps] to oxcaml's
+     [(data_only_dirs ...)] list), and the same risk applies to any
+     bootstrap package whose [build:] depends on a [patches:] edit.
+     Disk-space recovery can come back when we have an explicit
+     "archive-only" marker per package. *)
+  let strip_resolved_artifacts ~fs:_ ~reporepo:_ ~handle:_ = 0
 
   let bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
       ~default =
@@ -851,7 +808,16 @@ module Bump = struct
           else
             Fmt.pr "  --no-bake: skipping fresh bakes; %d package(s) without \
                     x-d10-archive will be left unbaked@."
-              (count_packages_missing_archive ~reporepo ~handle)
+              (count_packages_missing_archive ~reporepo ~handle);
+          (* The bake step has folded each package's patches + extra-files
+             into the consolidated d10ir archive, so the freshly
+             materialised [packages/<pkg>/<ver>/files/] dirs are now
+             dead weight. Reclaim them before committing — typical
+             saving is 5-10x on baked overlays where patches dominate. *)
+          let stripped = strip_resolved_artifacts ~fs ~reporepo ~handle in
+          if stripped > 0 then
+            Fmt.pr "Stripped patches+extra-files from %d baked package(s)@."
+              stripped
         end;
         auto_commit ~sys ~reporepo ~op:(Fmt.str "bump %s" handle)
       in
@@ -893,16 +859,16 @@ module Bump = struct
       Arg.(
         value
         & pos 0 (some string) None
-        & info ~docv:"HANDLE" ~doc:"The overlay handle to bump." [])
+        & info ~docv:"HANDLE" ~doc:"Overlay handle to bump." [])
     in
     let all =
       Arg.(
         value & flag
         & info
             ~doc:
-              "Bump every overlay in the reporepo. Per-entry overrides \
-               ($(b,--url), $(b,--ref), $(b,--toolchain), $(b,--depend), \
-               $(b,--default)) are not allowed in this mode."
+              "Bump every overlay. Per-entry overrides ($(b,--url), \
+               $(b,--ref), $(b,--toolchain), $(b,--depend), $(b,--default)) \
+               are forbidden."
             [ "all" ])
     in
     let url =
@@ -910,9 +876,7 @@ module Bump = struct
         value
         & opt (some string) None
         & info ~docv:"URL"
-            ~doc:
-              "Override the upstream URL. Defaults to whatever the latest \
-               recorded version of the overlay pins."
+            ~doc:"Override the upstream URL recorded by the overlay."
             [ "url" ])
     in
     let default =
@@ -921,10 +885,8 @@ module Bump = struct
           value & flag
           & info
               ~doc:
-                "Mark this toolchain as the default — [oi run] / [oi build] \
-                 without [--toolchain] will pick it. Auto-clears any other \
-                 default. Only valid on entries with [x-oi-toolchain-name] \
-                 set."
+                "Mark this toolchain as the default. Auto-clears any other \
+                 default. Requires $(b,x-oi-toolchain-name)."
               [ "default" ])
       in
       let unset =
@@ -932,9 +894,8 @@ module Bump = struct
           value & flag
           & info
               ~doc:
-                "Clear the default-toolchain flag from this entry. After \
-                 clearing, no toolchain is default and [oi run] without \
-                 [--toolchain] will hard-error until one is set."
+                "Clear the default-toolchain flag. Solving commands without \
+                 $(b,--toolchain) then hard-error."
               [ "no-default" ])
       in
       let combine s u =
@@ -953,23 +914,22 @@ module Bump = struct
           [
             `S Manpage.s_description;
             `P
-              "Re-fetch the upstream commit on $(b,HANDLE)'s tracked branch \
-               and record a new $(b,YYYYMMDD.N) meta-entry. Then walk the \
-               upstream's packages, sha-pin every URL, and write the result to \
-               $(b,<reporepo>/v2/<HANDLE>/). Pass $(b,--all) to bump every \
-               overlay.";
+              "Re-fetch the upstream tip of $(b,HANDLE)'s tracked branch, \
+               record a new $(b,YYYYMMDD.N) entry, sha-pin every package URL, \
+               and rewrite $(b,<reporepo>/v2/<HANDLE>/). Pass $(b,--all) for \
+               every overlay.";
             `P
-              "Idempotent on the meta-entry: prints $(b,No change) when \
-               nothing in commit/URL/ref/depends/flags has moved. The $(b,v2/) \
-               tree is rebuilt either way to catch upstream tag drift.";
+              "Bakes consolidated source archives for new or changed \
+               packages, then strips $(b,patches:) and $(b,extra-files:) \
+               from baked opam files (the archive subsumes them).";
+            `P
+              "Idempotent: prints $(b,No change) when commit, URL, ref, \
+               depends, and flags are unchanged. The $(b,v2/) tree is \
+               rebuilt either way.";
             `P
               "Non-base overlays auto-relock against the current \
-               $(b,default)/$(b,relocatable) (or the toolchain's own base set \
-               when $(b,x-oi-toolchain) is set); $(b,--depend) overrides.";
-            `P
-              "$(b,--default) flips $(b,x-oi-default-toolchain) on \
-               toolchain-defining entries; setting it on one auto-clears any \
-               other.";
+               $(b,default)/$(b,relocatable), or the toolchain's own base \
+               set when $(b,x-oi-toolchain) is set. $(b,--depend) overrides.";
           ]
     in
     let no_bake =
@@ -977,13 +937,8 @@ module Bump = struct
         value & flag
         & info
             ~doc:
-              "Skip the post-bump bake step that writes \
-               $(b,x-d10-archive: \"<sha>\") into every opam file in the \
-               freshly materialised overlay. The bake is what makes the \
-               consolidated source archive sha part of the bump commit; \
-               disabling it leaves the opam files referencing only the \
-               original $(b,url{src; checksum}). Useful when iterating on \
-               metadata without paying the source-fetch cost."
+              "Skip the bake step. Opam files reference upstream \
+               $(b,url{src; checksum}) only."
             [ "no-bake" ])
     in
     let rebake =
@@ -991,13 +946,8 @@ module Bump = struct
         value & flag
         & info
             ~doc:
-              "Force a full re-bake: discard the previous bump's \
-               $(b,x-d10-archive) shas and regenerate the consolidated \
-               source archive (and its sha) for every package, even those \
-               whose upstream URL + checksums are unchanged. Use this when \
-               the archive contents themselves change shape — e.g. a new \
-               bake-time transform like dune-project version injection — \
-               so that downstream layer-hashes pick up the new shas. \
+              "Force a full re-bake of every package's $(b,x-d10-archive), \
+               even unchanged ones. Use after a bake-time transform changes. \
                Mutually exclusive with $(b,--no-bake)."
             [ "rebake" ])
     in
@@ -1010,20 +960,11 @@ end
 
 module Bake = struct
   (* Read [x-d10-archive] off a baked opam file. Used to collect the
-     set of shas to publish for a given handle, without re-reading
-     the whole opam metadata stack. *)
+     set of shas to publish for a given handle. *)
   let read_archive_sha opam_path =
     try
-      let opam =
-        OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
-      in
-      let exts = OpamFile.OPAM.extensions opam in
-      match OpamStd.String.Map.find_opt "x-d10-archive" exts with
-      | Some v -> (
-          match v.OpamParserTypes.FullPos.pelem with
-          | OpamParserTypes.FullPos.String s -> Some s
-          | _ -> None)
-      | None -> None
+      OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
+      |> Oi.Keys.read_string_ext Oi.Keys.d10_archive
     with _ -> None
 
   let collect_handle_shas ~reporepo ~handle =
@@ -1066,6 +1007,12 @@ module Bake = struct
           in
           Fmt.pr "  %d baked, %d failed@." baked failed
         end;
+        (* Same strip step as [oi repo bump]: the freshly-baked
+           archives subsume each package's [files/] dir. *)
+        let stripped = Bump.strip_resolved_artifacts ~fs ~reporepo ~handle in
+        if stripped > 0 then
+          Fmt.pr "  Stripped patches+extra-files from %d baked package(s)@."
+            stripped;
         let shas = collect_handle_shas ~reporepo ~handle in
         let n = Oi.D10ir_archives.publish_shas ~cache ~output:to_dir shas in
         Fmt.pr "  %a %d archive(s) published to %s/d10ir-archives/@."
@@ -1089,9 +1036,7 @@ module Bake = struct
       Arg.(
         value & pos 0 (some string) None
         & info ~docv:"HANDLE"
-            ~doc:
-              "Overlay handle to bake. Omit to bake every overlay in the \
-               reporepo."
+            ~doc:"Overlay to bake. Omit for every overlay."
             [])
     in
     let to_dir =
@@ -1100,36 +1045,31 @@ module Bake = struct
         & opt (some string) None
         & info ~docv:"DIR"
             ~doc:
-              "Output directory. Archives are hardlinked (or copied across \
-               filesystems) into $(b,DIR/d10ir-archives/<sha>.tar.zst), \
-               matching the layout $(b,oi build) clients expect from a \
-               remote registry."
+              "Output directory. Archives are published as \
+               $(b,DIR/d10ir-archives/<sha>.tar.zst)."
             [ "to" ])
     in
     let info =
       Cmd.info "bake"
         ~doc:
           "Bake an overlay's consolidated source archives and publish them \
-           to a directory."
+           to a directory"
         ~man:
           [
             `S Manpage.s_description;
             `P
-              "Walks $(b,<reporepo>/v2/HANDLE/) (or every overlay when \
-               $(b,HANDLE) is omitted) and runs the same bake step \
-               $(b,oi repo bump) does — fetching upstream sources, applying \
-               patches, and writing each consolidated tarball to \
-               $(b,<cache>/d10ir/archives/<sha>.tar.zst). Then hardlinks \
-               every $(b,x-d10-archive) sha into \
-               $(b,DIR/d10ir-archives/), the layout an $(b,oi build) \
-               client expects from a remote registry.";
+              "Bake every package in $(b,<reporepo>/v2/HANDLE/) (or every \
+               overlay) that lacks $(b,x-d10-archive): fetch sources, apply \
+               patches, write a consolidated tarball, and record its sha. \
+               Then strip $(b,patches:) and $(b,extra-files:) from baked \
+               opam files.";
             `P
-              "Use $(b,oi repo bake) when you want to ship source archives \
-               without re-bumping a handle's upstream commit (which is \
-               $(b,oi repo bump)'s job). The two compose: bake is a no-op \
-               on packages already carrying $(b,x-d10-archive); bump runs \
-               bake as a side effect so a fresh bump+publish flow can use \
-               either command.";
+              "Hardlink every $(b,x-d10-archive) into \
+               $(b,DIR/d10ir-archives/) — the layout $(b,oi build) expects \
+               from a remote registry.";
+            `P
+              "No-op on packages already carrying $(b,x-d10-archive). \
+               $(b,oi repo bump) runs the same bake as a side effect.";
             `S Manpage.s_examples;
             `Pre
               "  oi repo bake @avsm --to=./registry\n\
@@ -1188,18 +1128,15 @@ module Set_roots = struct
       Arg.(
         required
         & pos 0 (some string) None
-        & info ~docv:"HANDLE" ~doc:"The overlay to update." [])
+        & info ~docv:"HANDLE" ~doc:"Overlay to update." [])
     in
     let pkgs =
       Arg.(
         value & pos_right 0 string []
         & info ~docv:"PKG"
             ~doc:
-              "Root package groups for the overlay. Each argument becomes one \
-               solve group that $(b,oi build --all) iterates. A bare name is a \
-               single-package solve; a comma-separated list is a multi-package \
-               group that solves together (used for compiler variants, e.g. \
-               $(b,ocaml-option-flambda,ocaml-option-static,ocaml)). No \
+              "Root package group. Each argument is one solve group; a \
+               comma-separated list solves together (compiler variants). No \
                $(b,PKG) clears the list."
             [])
     in
@@ -1210,20 +1147,14 @@ module Set_roots = struct
           [
             `S Manpage.s_description;
             `P
-              "Writes $(b,x-root-packages: [...]) on a new bumped version of \
-               $(b,HANDLE). $(b,oi build --all) iterates each handle's root \
-               groups: a single-package group builds as one $(b,@HANDLE/PKG); \
-               a comma-separated group solves together so the resulting layers \
-               capture a specific variant.";
-            `P
-              "Passing zero $(b,PKG) arguments clears the list. The new \
-               version is stamped $(b,YYYYMMDD.N) in exactly the same way as \
-               $(b,oi repo bump). The previous entry is kept as history so \
-               that you can roll back to it.";
+              "Write $(b,x-root-packages: [...]) on a new bumped version of \
+               $(b,HANDLE). $(b,oi build --all) iterates each group: bare \
+               names build as $(b,@HANDLE/PKG); comma-separated lists solve \
+               together. Stamps $(b,YYYYMMDD.N); previous entry is kept.";
             `S Manpage.s_examples;
-            `P "Record three independent root packages:";
+            `P "Three independent root packages:";
             `Pre "  oi repo set-roots relocatable dune utop merlin";
-            `P "Record a compiler variant alongside plain packages:";
+            `P "A compiler variant alongside plain packages:";
             `Pre
               "  oi repo set-roots relocatable \
                ocaml-option-flambda,ocaml-option-static,ocaml dune utop";
@@ -1264,8 +1195,7 @@ module Remove = struct
         & pos 0 (some string) None
         & info ~docv:"HANDLE[=VERSION]"
             ~doc:
-              "The overlay to remove. Without $(b,=VERSION) every recorded \
-               version of the handle is deleted."
+              "Overlay to remove. Bare $(b,HANDLE) removes every version."
             [])
     in
     let info =
@@ -1274,17 +1204,12 @@ module Remove = struct
           [
             `S Manpage.s_description;
             `P
-              "$(b,oi repo remove) deletes an overlay entry from the reporepo. \
-               With $(b,HANDLE=VERSION) only the named version is removed. \
-               With a bare $(b,HANDLE) every recorded version of that handle \
-               is removed.";
+              "Delete an overlay entry. $(b,HANDLE=VERSION) removes one \
+               version; bare $(b,HANDLE) removes all.";
             `P
-              "Only the reporepo is edited; the upstream git repositories are \
-               never touched. Any overlay bundles that have already been \
-               cloned under the data directory are also left alone, so \
-               re-adding the handle later does not force another full clone. \
-               Run $(b,oi clean --repos) if you want the on-disk clones \
-               removed too.";
+              "Only the reporepo is edited. Cloned overlay bundles under the \
+               data directory are kept. Use $(b,oi clean --repos) to remove \
+               them.";
           ]
     in
     Cmd.v info
@@ -1347,12 +1272,8 @@ module Push = struct
         & opt (some string) None
         & info [ "push-url" ] ~docv:"URL"
             ~doc:
-              "Persistently set $(b,origin)'s push URL on the local reporepo \
-               checkout via $(b,git remote set-url --push origin URL), and \
-               then push. This is useful when the clone URL is read-only HTTPS \
-               but you push over SSH. The fetch URL is left alone, so \
-               subsequent $(b,oi repo) commands keep pulling from the original \
-               location.")
+              "Set $(b,origin)'s push URL via $(b,git remote set-url --push). \
+               Persistent; fetch URL is left alone.")
     in
     let info =
       Cmd.info "push"
@@ -1361,29 +1282,19 @@ module Push = struct
           [
             `S Manpage.s_description;
             `P
-              "$(b,oi repo push) performs a three-step synchronisation of the \
-               reporepo working copy. First, it stages and auto-commits any \
-               uncommitted changes, so that edits made by $(b,oi repo bump) \
-               and its siblings are captured. Second, it runs $(b,git pull \
-               --rebase) to bring in upstream history. Third, it runs $(b,git \
-               push) if the local branch is now ahead of its upstream tracking \
-               branch. The command is idempotent: a run against a clean, \
-               up-to-date reporepo does nothing.";
+              "Three steps: auto-commit any uncommitted changes, $(b,git pull \
+               --rebase), then $(b,git push) if ahead. Idempotent.";
             `P
-              "Authentication uses the system $(b,git) configuration. Whatever \
-               credentials work for $(b,git push) inside the reporepo \
-               directory work here too. $(b,oi) shells out to $(b,git) and \
-               never handles credentials itself.";
+              "Authentication uses the system $(b,git) configuration. \
+               $(b,oi) shells out and never handles credentials.";
             `P
-              "Pass $(b,--push-url URL) to switch the push remote on the local \
-               checkout. This is the flag to reach for when the clone URL is \
-               read-only HTTPS but you have SSH push access. The change is \
-               persistent: $(b,oi) edits $(b,.git/config) once, and subsequent \
-               $(b,oi repo push) runs reuse the new URL.";
+              "$(b,--push-url URL) sets the push remote on the local \
+               checkout. Useful when the clone URL is read-only HTTPS but \
+               push goes over SSH.";
             `S Manpage.s_examples;
-            `P "Bump an overlay and publish the new pin in one shot:";
+            `P "Bump and publish:";
             `Pre "  oi repo bump avsm && oi repo push";
-            `P "Switch the reporepo's push URL to SSH, then push:";
+            `P "Switch the push URL to SSH:";
             `Pre
               "  oi repo push --push-url \
                git@tangled.org:anil.recoil.org/reporepo.git";
@@ -1404,14 +1315,36 @@ end
    enforces some invariants ("at most one default", well-formed opam
    files); [oi repo lint] surfaces the rest as a precommit-grade check. *)
 module Lint = struct
-  type problem = { handle : string; version : string; msg : string }
+  (* Each problem carries a stable label ([where]) plus the absolute
+     opam-file path(s) to jump to. Reporepo-wide problems (multiple
+     defaults, missing default) attach every offending entry's
+     [opam_path] so the user can fix them all in one pass. *)
+  type problem = { where : string; paths : string list; msg : string }
 
-  let collect_problems (entries : Oi.Source.Reporepo.entry list) : problem list
-      =
+  let version_compare a b =
+    OpamPackage.Version.compare
+      (OpamPackage.Version.of_string a)
+      (OpamPackage.Version.of_string b)
+
+  let latest_per_handle (entries : Oi.Source.Reporepo.entry list) =
+    let tbl = Hashtbl.create 32 in
+    List.iter
+      (fun (e : Oi.Source.Reporepo.entry) ->
+        match Hashtbl.find_opt tbl e.handle with
+        | None -> Hashtbl.replace tbl e.handle e
+        | Some (prev : Oi.Source.Reporepo.entry)
+          when version_compare e.version prev.version > 0 ->
+            Hashtbl.replace tbl e.handle e
+        | Some _ -> ())
+      entries;
+    tbl
+
+  let collect_problems ~reporepo (entries : Oi.Source.Reporepo.entry list) :
+      problem list =
     let problems = ref [] in
-    let add ~handle ~version fmt =
+    let add ~where ~paths fmt =
       Fmt.kstr
-        (fun msg -> problems := { handle; version; msg } :: !problems)
+        (fun msg -> problems := { where; paths; msg } :: !problems)
         fmt
     in
     let toolchain_names =
@@ -1421,11 +1354,23 @@ module Lint = struct
       |> List.sort_uniq String.compare
     in
     let known_toolchain n = List.mem n toolchain_names in
+    let latest = latest_per_handle entries in
     List.iter
       (fun (e : Oi.Source.Reporepo.entry) ->
-        let here fmt = add ~handle:e.handle ~version:e.version fmt in
+        let where = Fmt.str "%s.%s" e.handle e.version in
+        let here fmt = add ~where ~paths:[ e.opam_path ] fmt in
         if e.handle = "" then here "empty handle";
         if e.version = "" then here "empty version";
+        (* url/commit consistency. An entry with a [url:] must carry
+           the 40-char sha it's pinned to; conversely, a definition-
+           only entry (no url) must not pretend to pin a commit. *)
+        if e.url = "" && e.commit <> "" then
+          here "[commit] is set (%s) but [url] is empty" e.commit;
+        if e.url <> "" && e.commit = "" then
+          here "[url: %s] is set but no commit is pinned" e.url;
+        if e.commit <> "" && not (Oi.Source.Reporepo.is_sha_string e.commit)
+        then
+          here "pinned commit %S is not a 40-char hex sha" e.commit;
         (match e.toolchain_name with
         | None ->
             if e.relocatable <> None then
@@ -1449,7 +1394,7 @@ module Lint = struct
               here
                 "toolchain %S missing [%s] (e.g. \"ocaml-base-compiler.5.4.1\")"
                 name Oi.Keys.toolchain_compiler);
-        match e.toolchain with
+        (match e.toolchain with
         | None -> ()
         | Some t ->
             if not (known_toolchain t) then
@@ -1457,16 +1402,81 @@ module Lint = struct
                 "[%s: %s] does not match any [%s] in this reporepo (known: %s)"
                 Oi.Keys.toolchain t Oi.Keys.toolchain_name
                 (if toolchain_names = [] then "none"
-                 else String.concat ", " toolchain_names))
+                 else String.concat ", " toolchain_names));
+        (* For url-bearing entries, the materialised [v2/<handle>/]
+           tree must exist on disk. A missing tree means "ran
+           [oi repo add] / received a checkout that hasn't been
+           bumped"; downstream commands hard-error in confusing ways
+           without this check. *)
+        if e.url <> "" then begin
+          let v2 = reporepo / "v2" / e.handle / "packages" in
+          if not (Sys.file_exists v2) then
+            here
+              "missing materialised tree at v2/%s/packages/ — run 'oi repo \
+               bump %s' to populate"
+              e.handle e.handle
+        end;
+        (* Out-of-date dependencies. Only check the LATEST version of
+           each handle: older entries are kept around for history and
+           are by definition pinned to old depends. The check
+           highlights toolchain depends specially since "your overlay
+           is using a stale toolchain" is the common case the user
+           cares about. *)
+        (match Hashtbl.find_opt latest e.handle with
+        | Some l when l.opam_path = e.opam_path ->
+            List.iter
+              (fun (h, vopt) ->
+                match vopt with
+                | None -> ()
+                | Some pinned -> (
+                    match Hashtbl.find_opt latest h with
+                    | None ->
+                        here
+                          "depends on unknown handle %S (no entry for it in \
+                           this reporepo)"
+                          h
+                    | Some (latest_dep : Oi.Source.Reporepo.entry)
+                      when version_compare pinned latest_dep.version < 0 -> (
+                        match latest_dep.toolchain_name with
+                        | Some tname ->
+                            here
+                              "uses out-of-date toolchain %S: pinned [%s = \
+                               %s] but latest is %s. Run 'oi repo bump %s' to \
+                               update."
+                              tname h pinned latest_dep.version e.handle
+                        | None ->
+                            here
+                              "out-of-date depend [%s = %s]: latest is %s. \
+                               Run 'oi repo bump %s' to update."
+                              h pinned latest_dep.version e.handle)
+                    | Some _ -> ()))
+              e.depends
+        | _ -> ()))
       entries;
-    let defaults =
+    (* Default-toolchain validation. Match {!Reporepo.load}'s
+       semantics: count one default per HANDLE using its latest
+       version. Older versions of the same handle still carrying the
+       flag are stale (older bump didn't get cleared by a later
+       --default rotation); they don't break [load] but the user
+       should clear them to avoid confusion. *)
+    let latest_defaults =
+      Hashtbl.fold
+        (fun _ (e : Oi.Source.Reporepo.entry) acc ->
+          if e.default_toolchain then e :: acc else acc)
+        latest []
+    in
+    let stale_defaults =
       List.filter
-        (fun (e : Oi.Source.Reporepo.entry) -> e.default_toolchain)
+        (fun (e : Oi.Source.Reporepo.entry) ->
+          e.default_toolchain
+          &&
+          match Hashtbl.find_opt latest e.handle with
+          | Some l -> l.opam_path <> e.opam_path
+          | None -> false)
         entries
     in
-    let here fmt = add ~handle:"(reporepo)" ~version:"" fmt in
-    (match defaults with
-    | [ _ ] -> () (* exactly one default — fine *)
+    (match latest_defaults with
+    | [ _ ] -> () (* exactly one handle is default — fine *)
     | [] ->
         let hint =
           if toolchain_names = [] then "no toolchain definitions found"
@@ -1474,7 +1484,7 @@ module Lint = struct
             Fmt.str "mark one with: oi repo bump <handle> --default. Known: %s"
               (String.concat ", " toolchain_names)
         in
-        here
+        add ~where:"(reporepo)" ~paths:[]
           "no entry has [%s: true] — %s. Without a default, [oi run] / [oi \
            sync] / etc. hard-error when the user omits [--toolchain]."
           Oi.Keys.default_toolchain hint
@@ -1485,12 +1495,28 @@ module Lint = struct
               Fmt.str "%s.%s" e.handle e.version)
             many
         in
-        here
-          "multiple entries flagged [%s: true]: %s — only one toolchain handle \
-           may be the default. Clear the flag on stale versions and on the \
-           losing handle."
+        let paths =
+          List.map (fun (e : Oi.Source.Reporepo.entry) -> e.opam_path) many
+        in
+        add ~where:"(reporepo)" ~paths
+          "multiple handles flagged [%s: true]: %s — only one toolchain handle \
+           may be the default. Clear the flag on the losing handle with 'oi \
+           repo bump <handle> --no-default'."
           Oi.Keys.default_toolchain
           (String.concat ", " labels));
+    List.iter
+      (fun (e : Oi.Source.Reporepo.entry) ->
+        let where = Fmt.str "%s.%s" e.handle e.version in
+        add ~where ~paths:[ e.opam_path ]
+          "stale [%s: true] on a non-latest version of %s (latest is %s). \
+           Clear with 'oi repo bump %s --no-default' on this version, or just \
+           remove this opam file if it's no longer needed."
+          Oi.Keys.default_toolchain e.handle
+          (match Hashtbl.find_opt latest e.handle with
+          | Some l -> l.version
+          | None -> "?")
+          e.handle)
+      stale_defaults;
     List.rev !problems
 
   let cmd =
@@ -1506,7 +1532,7 @@ module Lint = struct
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url ();
       let entries = Oi.Source.Reporepo.load ~path:reporepo in
-      let problems = collect_problems entries in
+      let problems = collect_problems ~reporepo entries in
       if problems = [] then begin
         Fmt.pr "%a %d entries, no problems found.@." Oi.Style.ok_string "OK:"
           (List.length entries);
@@ -1514,11 +1540,11 @@ module Lint = struct
       end
       else begin
         List.iter
-          (fun { handle; version; msg } ->
-            let where =
-              if version = "" then handle else Fmt.str "%s.%s" handle version
-            in
-            Fmt.pr "%a %s: %s@." Oi.Style.error_string "error:" where msg)
+          (fun { where; paths; msg } ->
+            Fmt.pr "%a %s: %s@." Oi.Style.error_string "error:" where msg;
+            List.iter
+              (fun p -> Fmt.pr "    %a@." Oi.Style.dim_string p)
+              paths)
           problems;
         Fmt.pr "@.%d problem(s) in %s@." (List.length problems) reporepo;
         exit 1
@@ -1530,30 +1556,41 @@ module Lint = struct
           [
             `S Manpage.s_description;
             `P
-              "$(b,oi repo lint) walks every entry in the reporepo and reports \
-               any violations of the contract the rest of $(b,oi) relies on:";
+              "Check every entry for the invariants $(b,oi) relies on. Each \
+               problem prints the offending opam file path so it can be \
+               opened and fixed directly.";
             `I
               ( "Default toolchain.",
-                "Exactly one entry must carry $(b,x-oi-default-toolchain: \
-                 true). Without one, every solving command that omits \
-                 $(b,--toolchain) hard-errors." );
+                "Exactly one toolchain handle's latest version carries \
+                 $(b,x-oi-default-toolchain: true). Older versions of that \
+                 handle still flagged are reported as stale." );
             `I
               ( "Toolchain references.",
-                "Every entry's $(b,x-oi-toolchain: NAME) must resolve to some \
-                 other entry's $(b,x-oi-toolchain-name)." );
+                "Every $(b,x-oi-toolchain: NAME) resolves to some entry's \
+                 $(b,x-oi-toolchain-name)." );
             `I
               ( "Toolchain definitions.",
-                "Entries with $(b,x-oi-toolchain-name) set must also declare \
+                "Entries with $(b,x-oi-toolchain-name) also declare \
                  $(b,x-oi-relocatable), $(b,x-oi-toolchain-compiler), and a \
                  non-empty $(b,x-oi-toolchain-roots)." );
             `I
               ( "Field discipline.",
-                "Toolchain-only fields ($(b,x-oi-relocatable), \
-                 $(b,x-oi-toolchain-roots)) on an entry that does not also set \
-                 $(b,x-oi-toolchain-name) are flagged as misplaced." );
-            `P
-              "Exits non-zero on any failure, suitable for a pre-commit hook \
-               or CI gate.";
+                "Toolchain-only fields are not set on non-toolchain entries." );
+            `I
+              ( "Source identity.",
+                "$(b,url:) and $(b,commit:) are either both set (with a \
+                 40-char sha) or both empty." );
+            `I
+              ( "Materialised tree.",
+                "Url-bearing handles have a $(b,v2/HANDLE/packages/) directory \
+                 — runs of $(b,oi repo bump) keep this populated." );
+            `I
+              ( "Out-of-date dependencies.",
+                "Each handle's latest version's $(b,depends:) pins are \
+                 compared to the latest of each depended handle in the \
+                 reporepo. Out-of-date toolchain pins are called out \
+                 specially." );
+            `P "Exits non-zero on failure.";
           ]
     in
     Cmd.v info Term.(const run $ Terms.log $ reporepo_term $ reporepo_url_term)
@@ -1567,32 +1604,19 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "A $(i,reporepo) is a directory of pinned opam-repository commits. \
-             Each entry ($(i,handle)) names somebody's package set and pins it \
-             to a git commit. The reporepo also defines the toolchains \
-             $(b,--toolchain=NAME) accepts (entries with \
-             $(b,x-oi-toolchain-name)).";
+            "A $(i,reporepo) is a directory of pinned opam-repository \
+             commits. Each $(i,handle) names a package set; entries with \
+             $(b,x-oi-toolchain-name) define toolchains.";
           `P
-            "Handles are short aliases. $(b,oi run @avsm/irmin) takes \
-             $(b,irmin) from avsm's overlay; $(b,oi run --with-repo=avsm) \
-             pulls the whole overlay into the solve. In an opam file, \
-             $(b,x-repos: [\"@avsm\"]) does the same automatically; the field \
-             also accepts raw URLs as an unpinned escape hatch.";
+            "Reference handles as $(b,@HANDLE/PKG), $(b,--with-repo=@HANDLE), \
+             or $(b,x-repos: [\"@HANDLE\"]) in $(b,*.opam).";
           `P
-            "On a new machine, the first $(b,oi repo) command auto-clones the \
-             upstream reporepo. After that, the working copy is yours to edit, \
-             commit, and push. Typical workflow: $(b,oi repo bump) to pick up \
-             upstream commits, then $(b,oi repo push) to share.";
-          `P
-            "$(b,oi repo bump) is idempotent — prints $(b,No change) when the \
-             upstream commit already matches, so it's safe under cron or a \
-             pre-commit hook.";
+            "First $(b,oi repo) command auto-clones the upstream reporepo. \
+             The working copy is yours to edit, commit, and push.";
           `S "FILES";
           `I
             ( "$(b,\\$OI_REPOREPO) (default: $(b,\\$OI_DATA_DIR/reporepo))",
-              "Local git working copy. First $(b,oi repo) subcommand runs \
-               $(b,git clone \\$OI_REPOREPO_URL \\$OI_REPOREPO). $(b,cd) in to \
-               edit by hand." );
+              "Local git working copy." );
           `S "EXAMPLE WORKFLOW";
           `Pre
             "  oi repo list                 # auto-clones on first use\n\

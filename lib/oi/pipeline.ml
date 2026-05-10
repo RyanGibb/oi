@@ -190,9 +190,7 @@ let fetch_parallelism ?jobs () =
           match int_of_string_opt s with Some n when n > 0 -> n | _ -> default)
       | None -> default)
 
-
-(* -- Multi-bar fetch UI -------------------------------------------------- *)
-
+(* -- Layer fetch ---------------------------------------------------------- *)
 
 (* Pull every layer in [available] from [remote]. UI is decoupled —
    we only emit typed events through [reporter]; the cmdliner layer
@@ -262,11 +260,10 @@ let fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available
 
 let fetch_layer_hashes ?(reporter = Build_progress.null) ?jobs ~session
     ~remote ~d10 ~index ~hashes ~pkg_of () =
-  let _ =
-    fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index
-      ~available:hashes ~pkg_of ()
-  in
-  ()
+  ignore
+    (fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index
+       ~available:hashes ~pkg_of ())
+
 let assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes =
   let d10 = make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key in
   D10.Prefix.assemble_cached d10 ~layer_hashes

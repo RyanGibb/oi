@@ -104,9 +104,9 @@ let cmd =
       & pos 0 (some string) None
       & info ~docv:"PKG"
           ~doc:
-            "The opam package to add. A plain name ($(b,fmt)) takes the \
-             version the solver picks; a dotted form ($(b,fmt.0.9.5)) or a \
-             relop ($(b,fmt>=0.9)) pins the dependency to a specific version."
+            "Opam package to add. Plain name ($(b,fmt)) lets the solver \
+             pick; dotted form ($(b,fmt.0.9.5)) or relop ($(b,fmt>=0.9)) \
+             pins a version."
           [])
   in
   let package =
@@ -115,28 +115,23 @@ let cmd =
       & opt (some string) None
       & info ~docv:"NAME"
           ~doc:
-            "The name of the $(b,\\(package …\\)) stanza in $(b,dune-project) \
-             that receives the new dependency. Required only when the project \
-             declares more than one package."
+            "Target $(b,\\(package …\\)) stanza in $(b,dune-project). \
+             Required when more than one package is declared."
           [ "p"; "package" ])
   in
   let info =
-    Cmd.info "add" ~doc:"Add a new dependency to the current project"
+    Cmd.info "add" ~doc:"Add a dependency to the current project"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Bring $(b,PKG) into the current project in four steps: solve with \
-             $(b,PKG) added; if the solve succeeds, edit $(b,dune-project); \
-             run $(b,dune build) so dune regenerates $(b,*.opam); re-sync to \
-             reconcile the prefix.";
-          `P
-            "Failed solves leave the tree untouched, so $(b,oi add) doubles as \
-             a compatibility probe.";
+            "Add $(i,PKG) to $(b,dune-project), regenerate $(b,*.opam), and \
+             re-sync the prefix. Solve runs first; on failure, no files are \
+             touched.";
           `P
             "Requires $(b,\\(generate_opam_files\\)) in $(b,dune-project). \
-             Pass $(b,-p NAME) to pick a stanza when the project declares more \
-             than one package.";
+             Use $(b,-p NAME) to pick a stanza when the project declares \
+             several packages.";
         ]
   in
   Cmd.v info
@@ -144,5 +139,3 @@ let cmd =
       const run $ Terms.common $ Terms.refresh $ Terms.registry
       $ Terms.use_registry $ Terms.with_repos $ Terms.toolchain $ package
       $ pkg_spec)
-
-(* -- exec ---------------------------------------------------------------- *)

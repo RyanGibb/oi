@@ -80,12 +80,6 @@ val resolve : entry list -> roots:root list -> entry list
     every overlay's package data. The [v1] prefix is a schema marker; a future
     incompatible change becomes [v2]. *)
 
-val v1_root : path:string -> string
-(** [<reporepo>/v1]. *)
-
-val overlay_dir : path:string -> handle:string -> string
-(** [<reporepo>/v2/<handle>]. *)
-
 val iter_opam_files :
   path:string ->
   ?include_handles:string list ->
@@ -166,7 +160,13 @@ val ensure_base :
     reporepo and returns the [packages/] directories under [v2/<handle>/] in
     solver priority order. Auto-clones the reporepo itself if it doesn't
     already exist on disk. Errors when any base handle's [v2/] tree is missing
-    — run [oi repo bump <handle>] to populate. *)
+    — run [oi repo bump <handle>] to populate.
+
+    When [refresh] is [false] (the default), the clone is auto-pulled if its
+    last [git fetch]/[git pull] happened more than 1 hour ago — measured from
+    the mtime of [.git/FETCH_HEAD] (falling back to [.git/HEAD] for a fresh
+    clone that hasn't been fetched yet). Override the threshold via
+    [OI_REPOREPO_MAX_AGE] (positive float seconds; non-positive disables). *)
 
 val base_entries : unit -> entry list
 (** Resolved base overlays without cloning. Useful for display in [oi config].
@@ -266,3 +266,7 @@ val remove :
   unit
 
 val ls_remote_sha : sys:D10.Sysops.t -> ?ref_:string -> string -> string
+
+val is_sha_string : string -> bool
+(** [is_sha_string s] is [true] iff [s] is a 40-character hex string (a git
+    commit sha). Used by [oi repo lint] to validate pinned commits. *)

@@ -149,11 +149,11 @@ let list_cmd =
               ]
               rows
           in
-          Tty.Table.pp Fmt.stdout table;
+          Oi.Style.pp_table Fmt.stdout table;
           Fmt.pr "@.%a %d layer(s)@." Oi.Style.header_string "Total:" total
         end
   in
-  let info = Cmd.info "list" ~doc:"List every cached layer for the host" in
+  let info = Cmd.info "list" ~doc:"List cached layers" in
   Cmd.v info Term.(const run $ Terms.common)
 
 (* -- show ---------------------------------------------------------------- *)
@@ -402,7 +402,7 @@ let show_cmd =
     Arg.(
       required
       & pos 0 (some string) None
-      & info ~docv:"PACKAGE" ~doc:"Package name (prefix match)." [])
+      & info ~docv:"PACKAGE" ~doc:"Package name; matched as a prefix." [])
   in
   let info = Cmd.info "show" ~doc:"Show details for a package's layers" in
   Cmd.v info Term.(const run $ Terms.common $ package)
@@ -490,21 +490,21 @@ let binaries_cmd =
               ]
               rows
           in
-          Tty.Table.pp Fmt.stdout table;
+          Oi.Style.pp_table Fmt.stdout table;
           Fmt.pr "@.%a %d binar%s@." Oi.Style.header_string "Total:"
             (List.length bins)
             (if List.length bins = 1 then "y" else "ies")
         end
   in
   let info =
-    Cmd.info "binaries" ~doc:"List binaries known to the layer index"
+    Cmd.info "binaries" ~doc:"List binaries indexed in the layer cache"
   in
   Cmd.v info Term.(const run $ Terms.common)
 
 (* -- index --------------------------------------------------------------- *)
 
 let index_cmd =
-  let run (c : Terms.common) =
+  let run (c : Terms.common) include_files =
     Harness.run @@ fun ~sw env ->
     let h =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
@@ -515,7 +515,8 @@ let index_cmd =
     let index_path = layers_root / "index.db" in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(d10.fs / layers_root);
     let db = D10.Index.open_ ~path:index_path in
-    let totals = ref (0, 0, 0) in
+    let totals = ref D10.Index.{ layers = 0; binaries = 0; files = 0;
+                                 findlib = 0; tarballs = 0 } in
     let rows = ref [] in
     if Sys.file_exists layers_root then
       Array.iter
@@ -535,58 +536,122 @@ let index_cmd =
               Oi.Provenance.overlay_of_layer ~fs:h.fs ~cache_root ~os_key:entry
                 ~hash
             in
-            D10.Index.rebuild c ~overlay_for db;
-            let nl, nb, nf = D10.Index.stats db ~os_key:entry in
-            let l, b, f = !totals in
-            totals := (l + nl, b + nb, f + nf);
-            rows :=
+            D10.Index.rebuild c ~overlay_for ~include_files db;
+            let s = D10.Index.stats db ~os_key:entry in
+            let t = !totals in
+            totals := {
+              layers = t.layers + s.layers;
+              binaries = t.binaries + s.binaries;
+              files = t.files + s.files;
+              findlib = t.findlib + s.findlib;
+              tarballs = t.tarballs + s.tarballs;
+            };
+            let base =
               [
                 Tty.Span.text entry;
-                Tty.Span.text (string_of_int nl);
-                Tty.Span.text (string_of_int nb);
-                Tty.Span.text (string_of_int nf);
+                Tty.Span.text (string_of_int s.layers);
+                Tty.Span.text (string_of_int s.binaries);
+                Tty.Span.text (string_of_int s.findlib);
+                Tty.Span.text (string_of_int s.tarballs);
               ]
-              :: !rows
+            in
+            let cells =
+              if include_files then base @ [ Tty.Span.text (string_of_int s.files) ]
+              else base
+            in
+            rows := cells :: !rows
           end)
         (Sys.readdir layers_root);
     D10.Index.close db;
     if !rows = [] then Fmt.pr "No layers indexed.@."
     else begin
-      let table =
-        Tty.Table.of_rows ~header_style:Oi.Style.header
+      let cols =
+        let base =
           [
             Tty.Table.column "OS_KEY";
             Tty.Table.column ~align:`Right "LAYERS";
             Tty.Table.column ~align:`Right "BINARIES";
-            Tty.Table.column ~align:`Right "FILES";
+            Tty.Table.column ~align:`Right "FINDLIB";
+            Tty.Table.column ~align:`Right "TARBALLS";
           ]
-          (List.rev !rows)
+        in
+        if include_files then base @ [ Tty.Table.column ~align:`Right "FILES" ]
+        else base
       in
-      Tty.Table.pp Fmt.stdout table
+      let table =
+        Tty.Table.of_rows ~header_style:Oi.Style.header cols (List.rev !rows)
+      in
+      Oi.Style.pp_table Fmt.stdout table
     end;
-    let l, b, f = !totals in
-    Fmt.pr "@.%a %d layers, %d binaries, %d files@." Oi.Style.header_string
-      "Total:" l b f;
+    let t = !totals in
+    let trailer =
+      if include_files then
+        Fmt.str "%d layers, %d binaries, %d findlib, %d tarballs, %d files"
+          t.layers t.binaries t.findlib t.tarballs t.files
+      else
+        Fmt.str "%d layers, %d binaries, %d findlib, %d tarballs"
+          t.layers t.binaries t.findlib t.tarballs
+    in
+    Fmt.pr "@.%a %s@." Oi.Style.header_string "Total:" trailer;
     Fmt.pr "Index: %s@." index_path
   in
-  let info = Cmd.info "index" ~doc:"Rebuild the SQLite layer index" in
-  Cmd.v info Term.(const run $ Terms.common)
+  let include_files =
+    Arg.(
+      value & flag
+      & info ~doc:"Index every file path. Bloats $(b,index.db); off by default."
+          [ "include-files" ])
+  in
+  let info = Cmd.info "index" ~doc:"Rebuild the layer index" in
+  Cmd.v info Term.(const run $ Terms.common $ include_files)
 
 (* -- stats --------------------------------------------------------------- *)
+
+type stats_view = {
+  os_key : string;
+  index_present : bool;
+  s : D10.Index.stats;
+  archives : int;
+}
 
 let stats_envelope_codec =
   let open Jsont in
   Object.map ~kind:"oi_cache_stats"
-    (fun _schema_version os_key index_present layers binaries files ->
-      (os_key, index_present, layers, binaries, files))
+    (fun _schema_version os_key index_present n_layers n_bin n_findlib
+         n_tar n_files n_archives ->
+      let s : D10.Index.stats =
+        {
+          layers = n_layers;
+          binaries = n_bin;
+          files = n_files;
+          findlib = n_findlib;
+          tarballs = n_tar;
+        }
+      in
+      { os_key; index_present; s; archives = n_archives })
   |> Object.mem "schema_version" string ~enc:(fun _ ->
       Oi.Stamp.json_schema_version)
-  |> Object.mem "os_key" string ~enc:(fun (k, _, _, _, _) -> k)
-  |> Object.mem "index_present" bool ~enc:(fun (_, p, _, _, _) -> p)
-  |> Object.mem "layers" int ~enc:(fun (_, _, l, _, _) -> l)
-  |> Object.mem "binaries" int ~enc:(fun (_, _, _, b, _) -> b)
-  |> Object.mem "files" int ~enc:(fun (_, _, _, _, f) -> f)
+  |> Object.mem "os_key" string ~enc:(fun v -> v.os_key)
+  |> Object.mem "index_present" bool ~enc:(fun v -> v.index_present)
+  |> Object.mem "layers" int ~enc:(fun v -> v.s.layers)
+  |> Object.mem "binaries" int ~enc:(fun v -> v.s.binaries)
+  |> Object.mem "findlib" int ~enc:(fun v -> v.s.findlib)
+  |> Object.mem "tarballs" int ~enc:(fun v -> v.s.tarballs)
+  |> Object.mem "files" int ~enc:(fun v -> v.s.files)
+  |> Object.mem "archives" int ~enc:(fun v -> v.archives)
   |> Object.finish
+
+(* Count [<sha>.tar.zst] files under [<cache>/d10ir/archives/]. The
+   d10ir archive store is content-addressed by source-tree sha; one
+   archive may back many layer hashes when a package is built across
+   distros / toolchain variants. *)
+let count_d10ir_archives ~cache =
+  let dir = Oi.D10ir_archives.local_dir ~cache in
+  if not (Sys.file_exists dir) then 0
+  else
+    Array.fold_left
+      (fun n entry ->
+        if Filename.check_suffix entry ".tar.zst" then n + 1 else n)
+      0 (Sys.readdir dir)
 
 let stats_cmd =
   let run (c : Terms.common) =
@@ -598,20 +663,23 @@ let stats_cmd =
     with_d10 h @@ fun d10 ->
     let index_path = index_path_s d10 in
     let index_present = Sys.file_exists index_path in
-    let nl, nb, nf =
+    let s =
       if index_present then begin
         let db = D10.Index.open_ ~path:index_path in
         let s = D10.Index.stats db ~os_key:d10.os_key in
         D10.Index.close db;
         s
       end
-      else (0, 0, 0)
+      else D10.Index.{ layers = 0; binaries = 0; files = 0; findlib = 0;
+                       tarballs = 0 }
     in
+    let archives = count_d10ir_archives ~cache:h.cache in
+    let view = { os_key = d10.os_key; index_present; s; archives } in
     match c.format with
     | Json -> (
         match
           Jsont_bytesrw.encode_string ~format:Jsont.Indent stats_envelope_codec
-            (d10.os_key, index_present, nl, nb, nf)
+            view
         with
         | Ok s ->
             print_string s;
@@ -623,12 +691,110 @@ let stats_cmd =
             "oi cache index"
         else begin
           Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Stats" d10.os_key;
-          Fmt.pr "  layers:   %d@," nl;
-          Fmt.pr "  binaries: %d@," nb;
-          Fmt.pr "  files:    %d@,@]@." nf
+          Fmt.pr "  layers:    %d@," s.layers;
+          Fmt.pr "  binaries:  %d@," s.binaries;
+          Fmt.pr "  findlib:   %d@," s.findlib;
+          Fmt.pr "  tarballs:  %d@," s.tarballs;
+          if s.files > 0 then Fmt.pr "  files:     %d@," s.files;
+          Fmt.pr "  archives:  %d@,@]@." archives
         end
   in
-  let info = Cmd.info "stats" ~doc:"Summarise the layer cache for this host" in
+  let info = Cmd.info "stats" ~doc:"Summarise the layer cache" in
+  Cmd.v info Term.(const run $ Terms.common)
+
+(* -- archives ------------------------------------------------------------ *)
+
+type archive_entry = { sha : string; size : int }
+
+let archive_entry_codec =
+  let open Jsont in
+  Object.map ~kind:"d10ir_archive" (fun sha size -> { sha; size })
+  |> Object.mem "sha" string ~enc:(fun e -> e.sha)
+  |> Object.mem "size" int ~enc:(fun e -> e.size)
+  |> Object.finish
+
+let archives_envelope_codec =
+  let open Jsont in
+  Object.map ~kind:"oi_cache_archives"
+    (fun _schema_version dir entries ->
+      (dir, entries))
+  |> Object.mem "schema_version" string ~enc:(fun _ ->
+      Oi.Stamp.json_schema_version)
+  |> Object.mem "dir" string ~enc:(fun (d, _) -> d)
+  |> Object.mem "archives" (list archive_entry_codec) ~enc:(fun (_, e) -> e)
+  |> Object.finish
+
+let pp_size n =
+  let f = float_of_int n in
+  if n < 1024 then Fmt.str "%dB" n
+  else if n < 1024 * 1024 then Fmt.str "%.1fK" (f /. 1024.)
+  else if n < 1024 * 1024 * 1024 then Fmt.str "%.1fM" (f /. (1024. *. 1024.))
+  else Fmt.str "%.2fG" (f /. (1024. *. 1024. *. 1024.))
+
+let archives_cmd =
+  let run (c : Terms.common) =
+    Harness.run @@ fun ~sw env ->
+    let h =
+      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+        c.cache_dir
+    in
+    let dir = Oi.D10ir_archives.local_dir ~cache:h.cache in
+    let entries =
+      Oi.D10ir_archives.list ~cache:h.cache
+      |> List.map (fun (sha, size) -> { sha; size })
+    in
+    match c.format with
+    | Json -> (
+        match
+          Jsont_bytesrw.encode_string ~format:Jsont.Indent
+            archives_envelope_codec (dir, entries)
+        with
+        | Ok s ->
+            print_string s;
+            print_newline ()
+        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+    | Text ->
+        Fmt.pr "%a %s@.@." Oi.Style.header_string "d10ir archives" dir;
+        if entries = [] then Fmt.pr "  (empty)@."
+        else begin
+          let total =
+            List.fold_left (fun acc e -> acc + e.size) 0 entries
+          in
+          let rows =
+            List.map
+              (fun e ->
+                [
+                  Tty.Span.styled Oi.Style.dim (short_hash e.sha);
+                  Tty.Span.text (pp_size e.size);
+                ])
+              entries
+          in
+          let table =
+            Tty.Table.of_rows ~header_style:Oi.Style.header
+              [
+                Tty.Table.column "SHA";
+                Tty.Table.column ~align:`Right "SIZE";
+              ]
+              rows
+          in
+          Oi.Style.pp_table Fmt.stdout table;
+          Fmt.pr "@.%a %d archive(s), %s total@." Oi.Style.header_string
+            "Total:" (List.length entries) (pp_size total)
+        end
+  in
+  let info =
+    Cmd.info "archives"
+      ~doc:"List baked d10ir source archives"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Enumerate every $(b,<sha>.tar.zst) under \
+             $(b,\\$OI_CACHE_DIR/d10ir/archives/), the consolidated source \
+             archives produced by $(b,oi repo bake) and consumed by \
+             $(b,oi build) when an opam carries an $(b,x-d10-archive) marker.";
+        ]
+  in
   Cmd.v info Term.(const run $ Terms.common)
 
 (* -- explain ------------------------------------------------------------- *)
@@ -725,29 +891,25 @@ let explain_cmd =
     Arg.(
       required
       & pos 0 (some string) None
-      & info ~docv:"HASH" ~doc:"Full layer hash (e.g. from $(b,oi cache list))."
+      & info ~docv:"HASH" ~doc:"Full layer hash, as printed by $(b,oi cache list)."
           [])
   in
   let info =
     Cmd.info "explain"
-      ~doc:"Trace a layer's provenance and dependencies as a tree"
+      ~doc:"Trace a layer's provenance and dependency closure"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Walk the dependency closure of $(b,HASH), reading each layer's \
-             $(b,provenance.json) sidecar. Default output is a compact tree of \
-             $(b,package layer-hash) lines.";
+            "Walk the dependency closure of $(b,HASH) and print each layer's \
+             provenance as a tree of $(i,package layer-hash) lines.";
           `P
-            "$(b,--format=json) emits the closure as one JSON document. Every \
-             node carries the full provenance shape (opam origin, source URL + \
-             checksums, depexts, build_env) plus a $(b,depends_on) array of \
-             child nodes with the same shape.";
+            "With $(b,--format=json), emit one document carrying the full \
+             provenance per node (opam origin, source URL and checksums, \
+             depexts, build_env) and a $(b,depends_on) array of children.";
           `P
-            "Use this to answer 'what exactly went into this build?' without \
-             re-walking $(b,provenance.json) sidecars by hand. Failed layers \
-             have no provenance and are not explainable here — see $(b,oi \
-             cache show) for those.";
+            "Failed layers have no provenance; use $(b,oi cache show) for \
+             those.";
         ]
   in
   Cmd.v info Term.(const run $ Terms.common $ hash)
@@ -756,28 +918,31 @@ let explain_cmd =
 
 let cmd =
   let info =
-    Cmd.info "cache" ~doc:"Inspect the d10 content-addressed layer cache"
+    Cmd.info "cache" ~doc:"Inspect the d10 layer cache"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Read-only views into the layer cache that backs $(b,oi build) and \
-             $(b,oi run). The cache lives at \
-             $(b,\\$OI_CACHE_DIR/layers/<os_key>/), with a SQLite index at \
-             $(b,\\$OI_CACHE_DIR/layers/index.db) keyed by binary name and \
-             package.";
+            "Read-only views into the content-addressed layer cache that \
+             backs $(b,oi build) and $(b,oi run). Layers live under \
+             $(b,\\$OI_CACHE_DIR/layers/<os_key>/) with a sqlite index at \
+             $(b,\\$OI_CACHE_DIR/layers/index.db); baked source archives \
+             live under $(b,\\$OI_CACHE_DIR/d10ir/archives/).";
           `P
-            "$(b,oi cache index) rebuilds the index from disk; the other \
-             subcommands query it (or read $(b,layer.json) sidecars directly).";
-          `P
-            "$(b,oi cache explain HASH) walks a layer's full dependency \
-             closure with provenance — pair with $(b,--format=json) for \
-             scripted analysis.";
+            "$(b,oi cache index) rebuilds the index; other subcommands query \
+             it or read $(b,layer.json) sidecars. $(b,oi cache archives) \
+             surfaces the d10ir source-archive store.";
           `S "SEE ALSO";
-          `P
-            "$(b,oi clean)(1) drops layers; $(b,oi build --export)(1) \
-             publishes them to a registry tree.";
+          `P "$(b,oi clean)(1), $(b,oi build --export)(1).";
         ]
   in
   Cmd.group info
-    [ list_cmd; show_cmd; binaries_cmd; index_cmd; stats_cmd; explain_cmd ]
+    [
+      list_cmd;
+      show_cmd;
+      binaries_cmd;
+      archives_cmd;
+      index_cmd;
+      stats_cmd;
+      explain_cmd;
+    ]

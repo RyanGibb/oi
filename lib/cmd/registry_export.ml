@@ -102,10 +102,11 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
           m "No remote layer index at %s/%s/index.db (skipping merge)"
             registry os_key)
   end;
-  let nl, nb, _ = D10.Index.stats db ~os_key in
+  let s = D10.Index.stats db ~os_key in
   D10.Index.close db;
   finalize_sqlite_for_publish index_path;
-  Oi.Say.field "index" "%s: %d layers, %d binaries" os_key nl nb;
+  Oi.Say.field "index" "%s: %d layers, %d binaries, %d tarball(s)" os_key
+    s.layers s.binaries s.tarballs;
   let n_d10ir = export_d10ir_archives ~cache ~output in
   if n_d10ir > 0 then
     Oi.Say.field "d10ir-archives" "%d archive(s) at %s/d10ir-archives/" n_d10ir

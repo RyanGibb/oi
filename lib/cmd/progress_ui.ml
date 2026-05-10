@@ -57,7 +57,12 @@ type agg_payload = string * string * int * string * string
 let ansi_camel_full = "\027[38;2;239;125;0m"  (* #EF7D00 OCaml camel *)
 let ansi_camel_glow = "\027[38;2;255;176;71m" (* #FFB047 leading flame tip *)
 let ansi_camel_mid = "\027[38;2;229;141;38m"  (* #E58D26 transition shade *)
-let ansi_camel_dim = "\027[38;2;92;70;50m"    (* #5C4632 unfilled bg *)
+(* Unfilled background. Brightened from the original #5C4632 (R=92,
+   G=70, B=50) because that was so close to the dark-terminal
+   background that the bar's idle/0% state read as a blank line —
+   the user reported "│                      │" between the
+   delimiters where they expected to see at least a faint trail. *)
+let ansi_camel_dim = "\027[38;2;139;107;71m"  (* #8B6B47 unfilled bg *)
 let ansi_reset = "\027[0m"
 
 let _ansi_byte_overhead =
@@ -119,13 +124,6 @@ let render_bar ~width (current : int) (total : int) =
     Buffer.add_string buf "│";
     Buffer.contents buf
 
-let _render_pct ~total c =
-  if total <= 0 then "0%"
-  else
-    let p = c * 100 / max 1 total in
-    let p = if p < 0 then 0 else if p > 100 then 100 else p in
-    Fmt.str "%d%%" p
-
 (* OCaml.org camel orange. Used for both per-row and aggregate
    spinners so the bar reads as one consistent piece. The same
    colour is exported by [Preflight_bar.Theme.camel] for legacy
@@ -172,10 +170,6 @@ let agg_total_cells =
   agg_phase_w + 1 + agg_spark_w + 1 + agg_bar_w + 1 + agg_progress_w + 1
   + agg_pct_w
 
-(* The bar uses 3-byte UTF-8 box-drawing chars in EVERY cell, plus
-   a fixed bundle of ANSI true-color escapes (one per shade region
-   plus a final reset). [bar_with_color_bytes] returns the exact
-   byte count of the colored bar — stable across fill ratios. *)
 (* Sparkline: each of [agg_spark_w] cells carries its own ANSI
    true-color prefix (whose palette is keyed off the in-flight job
    count for that history slot), with one final reset escape after
@@ -213,13 +207,16 @@ let render_agg (lab, sparkline, bar_pct, progress, pct : agg_payload) =
    of red cells means the run is parallelism-bound, a tail of grey
    means the queue is draining.
 
-   The 9 levels run from [⠀] (braille blank, "0 jobs") through
-   [▁▂▃▄▅▆▇] up to [█] (8+ jobs). Every cell's ANSI prefix is
-   exactly 19 bytes (RGB components zero-padded to 3 digits) so
-   the total byte count of the sparkline is stable regardless of
-   what mix of levels it contains. *)
+   The 9 levels run from [⋅] (faint mid-dot, "0 jobs" — was the
+   braille blank U+2800 which renders as an invisible space on
+   every terminal we've tested, leaving the sparkline column
+   reading as 20 blank cells at idle) through [▁▂▃▄▅▆▇] up to
+   [█] (8+ jobs). Every cell's ANSI prefix is exactly 19 bytes
+   (RGB components zero-padded to 3 digits) so the total byte
+   count of the sparkline is stable regardless of what mix of
+   levels it contains. *)
 let spark_chars = [|
-  "\226\160\128"; (* ⠀ U+2800 braille blank *)
+  "\226\139\133"; (* ⋅ U+22C5 dot operator — faint idle dot *)
   "\226\150\129"; (* ▁ *)
   "\226\150\130"; (* ▂ *)
   "\226\150\131"; (* ▃ *)
@@ -612,10 +609,6 @@ let with_lock s f = Mutex.protect s.mutex f
    name (e.g. "doi2bib") rather than a generic "preparing" — the
    target is always the most informative bit at zero seconds. *)
 let composed_label s =
-  (* The byte progress that used to surface here moved to the right
-     column. The left column is now strictly: phase tag, optionally
-     elaborated by a free-form Status message ("Loaded N packages",
-     "Resolving toolchain", …). *)
   if s.phase_label = "" then s.target_label
   else if s.status_msg = "" then s.phase_label
   else Fmt.str "%s: %s" s.phase_label s.status_msg
@@ -626,12 +619,6 @@ let pad_exact ~w s =
   if n = w then s
   else if n > w then String.sub s 0 w
   else Fmt.str "%-*s" w s
-
-let _pad_right ~w s =
-  let n = String.length s in
-  if n = w then s
-  else if n > w then String.sub s 0 w
-  else Fmt.str "%*s" w s
 
 (* The agg bar's fill ratio in [0..100]. Combined task progress
    across the whole pipeline (fetch + build): the bar grows in
@@ -844,14 +831,6 @@ let phase_short = function
   | Baking -> "bake"
   | Building -> "build"
   | Assembling -> "assemble"
-
-let _format_bytes (n : int64) =
-  let f = Int64.to_float n in
-  if f < 1024. then Fmt.str "%.0f B" f
-  else if f < 1024. *. 1024. then Fmt.str "%.1f KB" (f /. 1024.)
-  else if f < 1024. *. 1024. *. 1024. then
-    Fmt.str "%.1f MB" (f /. 1024. /. 1024.)
-  else Fmt.str "%.2f GB" (f /. 1024. /. 1024. /. 1024.)
 
 let recompute_phase_bytes_done s =
   (* Sum bytes_done from completed fetches plus current bytes from
@@ -1132,6 +1111,13 @@ let with_ui ?(target = "") ~clock ~enabled f =
     in
     let cleanup () =
       with_lock s (fun () ->
+          (* Remove every dynamic sub-row (per-build, per-solve, per-
+             fetch) but leave the aggregate row in place: when the
+             display has no rows left, [Progress.Display.finalise]
+             computes [move_up (n-1) = move_up -1] and emits a
+             malformed [\x1b[-1A] escape that some terminals render
+             literally as "[-1A". Letting [finalise] tear down the
+             one remaining agg row keeps the count non-negative. *)
           Hashtbl.iter
             (fun _ r ->
               (try Progress.Reporter.finalise r.reporter with _ -> ());
@@ -1153,19 +1139,10 @@ let with_ui ?(target = "") ~clock ~enabled f =
           Hashtbl.clear s.fetch_rows;
           Hashtbl.clear s.fetches;
           Hashtbl.clear s.fetch_sizes;
-          (try Progress.Reporter.finalise s.agg with _ -> ());
-          try Progress.Display.remove_line display s.agg with _ -> ());
+          try Progress.Reporter.finalise s.agg with _ -> ());
       Logs_progress.clear_active ();
       Oi.Say.set_around_emit (fun f -> f ());
-      (try Progress.Display.finalise display with _ -> ());
-      (* [Logs_progress.start_display_compact] sent a [\x1b[1A]
-         (move-cursor-up-one) at start so the first bar row would
-         overdraw the line that contained the user's command, sparing
-         a visual newline. [Progress.Display.finalise] doesn't know
-         about that move, so it clears one fewer line than was
-         consumed — the user's command line ends up erased. We
-         compensate by printing the missing newline ourselves. *)
-      Format.fprintf Format.err_formatter "\n%!"
+      try Progress.Display.finalise display with _ -> ()
     in
     Fun.protect ~finally:cleanup @@ fun () ->
     let done_p, done_r = Eio.Promise.create () in

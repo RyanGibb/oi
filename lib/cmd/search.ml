@@ -19,9 +19,7 @@ let glob_matches ~pattern name =
           if anchored_end then
             String.ends_with ~suffix:last name
             && String.length name - String.length last >= pos
-          else
-            let _ = last in
-            true
+          else true
       | "" :: rest -> walk pos rest
       | seg :: rest -> (
           let rec find_from start =
@@ -442,7 +440,7 @@ let cmd =
               Tty.Table.of_rows ~header_style:Oi.Style.header cols
                 [ row_spans r ]
             in
-            Tty.Table.pp Fmt.stdout table;
+            Oi.Style.pp_table Fmt.stdout table;
             (match r.hash with
             | None -> ()
             | Some h ->
@@ -465,7 +463,7 @@ let cmd =
           Tty.Table.of_rows ~header_style:Oi.Style.header cols
             (List.map row_spans sorted)
         in
-        Tty.Table.pp Fmt.stdout table
+        Oi.Style.pp_table Fmt.stdout table
     end;
     D10.Index.close db
   in
@@ -475,21 +473,17 @@ let cmd =
       & pos 0 (some string) None
       & info ~docv:"PATTERN"
           ~doc:
-            "The name or glob to search for. The $(b,*) character is a \
-             wildcard. Matching is against binary names and opam package \
-             names. Prefix with $(b,@HANDLE/) to restrict the search to a \
-             single overlay without passing $(b,--overlay) separately. Bare \
-             $(b,@HANDLE) lists everything in that overlay (equivalent to \
-             $(b,@HANDLE/*))."
+            "Name or glob ($(b,*) wildcard). Matched against binary names, \
+             opam package names, and ocamlfind library names. \
+             $(b,@HANDLE/PATTERN) restricts to one overlay; bare \
+             $(b,@HANDLE) lists everything in it ($(b,@HANDLE/*))."
           [])
   in
   let all_versions =
     Arg.(
       value & flag
       & info
-          ~doc:
-            "List every cached version of each match. By default only the \
-             latest version per overlay is shown."
+          ~doc:"List every version. Default: latest per overlay only."
           [ "all-versions" ])
   in
   let overlay =
@@ -497,56 +491,41 @@ let cmd =
       value & opt_all string []
       & info ~docv:"HANDLE"
           ~doc:
-            "Restrict results to an overlay. May be given more than once to \
-             include several overlays. Equivalent to the $(b,@HANDLE/PATTERN) \
-             shorthand."
+            "Restrict results to an overlay. Repeatable. \
+             $(b,@HANDLE/PATTERN) is shorthand."
           [ "overlay" ])
   in
   let long =
     Arg.(
       value & flag
       & info
-          ~doc:
-            "For built matches, print the direct dependencies of each result. \
-             Declared-only rows have no build and therefore no dependency \
-             list."
+          ~doc:"List direct dependencies under each built match."
           [ "l"; "long" ])
   in
   let info =
     Cmd.info "search"
-      ~doc:"Find binaries and opam packages across caches and overlays"
+      ~doc:"Find binaries, libraries, and opam packages across caches and overlays"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Look up $(b,PATTERN) across the local layer cache, the remote \
-             registry, and every reporepo overlay's package list. One row per \
-             match.";
+            "Match $(b,PATTERN) against the local layer cache, the remote \
+             registry, and every reporepo overlay's package list. One row \
+             per match.";
           `S "COLUMNS";
-          `I
-            ( "$(b,KIND)",
-              "$(b,bin) (binary in some layer's $(b,fs/bin/)) or $(b,pkg) \
-               (opam metadata)." );
-          `I
-            ( "$(b,OVERLAY)",
-              "$(b,@handle) the match came from, or $(b,-) for pin-depends / \
-               untagged layers." );
-          `I
-            ( "$(b,NAME.VERSION)",
-              "Package, with the binary name prefixed for $(b,bin) rows." );
+          `I ("$(b,KIND)",
+              "$(b,bin) (binary in $(b,fs/bin/)), $(b,lib) (ocamlfind \
+               library), or $(b,pkg) (opam metadata).");
+          `I ("$(b,OVERLAY)",
+              "$(b,@handle) the match came from, or $(b,-) for \
+               pin-depends/untagged layers.");
+          `I ("$(b,NAME.VERSION)",
+              "Package; binary or library name prefixed for $(b,bin) and \
+               $(b,lib) rows.");
           `I ("$(b,HASH)", "Short layer hash.");
-          `I
-            ( "$(b,STATE)",
-              "$(b,local) (cached), $(b,remote) (fetchable), or $(b,declared) \
-               (metadata only, no build)." );
-          `S "OPTIONS";
-          `I
-            ( "$(b,--all-versions)",
-              "Every cached/declared version (default: latest only)." );
-          `I
-            ( "$(b,--overlay=HANDLE)",
-              "Filter to one overlay. $(b,@HANDLE/PATTERN) is shorthand." );
-          `I ("$(b,-l)", "Print direct deps of each built match.");
+          `I ("$(b,STATE)",
+              "$(b,local) (cached), $(b,remote) (fetchable), or \
+               $(b,declared) (metadata only).");
           `S Manpage.s_examples;
           `Pre
             "  oi search dune\n\

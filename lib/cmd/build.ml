@@ -978,7 +978,6 @@ let cmd =
           |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
           |> List.sort String.compare
     in
-    (* [target_handle] hoisted to outer scope. *)
     (* Expand each raw group into package-name groups. A group
        containing just an [@handle] fallback (no [x-root-packages])
        fans out into one singleton group per package the overlay
@@ -1057,8 +1056,7 @@ let cmd =
        finishes. *)
     (* [solve_failures], [target_group] and [group_results] hoisted
        to outer scope; populated below from [Build_pipeline.solve]'s
-       per-group results. The pre-migration write_solve_failure_log
-       helper is now inside Build_pipeline.solve_group. *)
+       per-group results. *)
     (* -- Build_pipeline.solve + .build ----------------------------------- *)
     (* The whole multi-group orchestration funnels into [Build_pipeline]:
        it runs the solver per group, elaborates each into a [Plan.t] +
@@ -1461,37 +1459,36 @@ let cmd =
     Arg.(
       value & pos_all string []
       & info ~docv:"PKG"
-          ~doc:"Packages to build. Empty in project mode or with $(b,--all)." [])
+          ~doc:"Build target(s). Omit in project mode or with $(b,--all)." [])
   in
   let all =
     Arg.(
       value & flag
       & info
           ~doc:
-            "Build every overlay's $(b,x-root-packages) (and each remaining \
-             overlay's full content via $(b,@HANDLE)). The $(b,default) \
-             overlay is skipped unless $(b,--only default) is given."
+            "Build every overlay's $(b,x-root-packages); fall back to the \
+             whole overlay otherwise. Skips $(b,default) unless named in \
+             $(b,--only)."
           [ "all" ])
   in
   let only =
     Arg.(
       value & opt_all string []
       & info ~docv:"HANDLE"
-          ~doc:"Restrict $(b,--all) to these handles. Repeatable." [ "only" ])
+          ~doc:"Restrict $(b,--all) to $(i,HANDLE). Repeatable." [ "only" ])
   in
   let skip =
     Arg.(
       value & opt_all string []
       & info ~docv:"HANDLE"
-          ~doc:"Exclude these handles from $(b,--all). Repeatable." [ "skip" ])
+          ~doc:"Exclude $(i,HANDLE) from $(b,--all). Repeatable." [ "skip" ])
   in
   let depext_only =
     Arg.(
       value & flag
       & info
           ~doc:
-            "Solve only; print system packages required by the result, one per \
-             line. Pipe to a system package manager."
+            "Solve only; print required system packages, one per line."
           [ "depext" ])
   in
   let export =
@@ -1500,13 +1497,9 @@ let cmd =
       & opt (some string) None
       & info ~docv:"DIR"
           ~doc:
-            "After the build, publish a registry into $(b,DIR): every \
-             layer as $(b,<hash>.tar.zst), the consolidated source \
-             archives baked by $(b,oi repo bump) into \
-             $(b,d10ir-archives/), the opam source mirror as \
-             $(b,sources/), and an $(b,index.db) carrying \
-             package / binary / ocamlfind / dep metadata. Errors out \
-             without a $(b,PKG), $(b,@HANDLE), $(b,--all), or project."
+            "Publish a registry into $(i,DIR) after the build: layers, \
+             source archives, and $(b,index.db). Requires a build spec or \
+             project. Mutually exclusive with $(b,--depext)."
           [ "export" ])
   in
   let archives_only =
@@ -1514,11 +1507,8 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Solve as usual but only fetch source archives into the local \
-             mirror at $(b,\\$OI_CACHE_DIR/mirror/) — no build, no prefix \
-             assembly, no install. Use to seed a server-side source mirror \
-             from any build spec ($(b,PKG), $(b,@HANDLE), $(b,@HANDLE/PKG), \
-             $(b,--all)). Mutually exclusive with $(b,--export) and \
+            "Fetch source archives into the local mirror; skip build and \
+             install. Mutually exclusive with $(b,--export) and \
              $(b,--depext)."
           [ "archives-only" ])
   in
@@ -1527,12 +1517,9 @@ let cmd =
       value & flag
       & info
           ~doc:
-            "Only meaningful with $(b,--archives-only). Skip the solver and \
-             walk every $(b,(handle, pkg, version)) tuple in the reporepo, \
-             fetching every recorded archive into the mirror. Includes the \
-             $(b,default) overlay (opam-repository), so this is the \
-             complete-mirror mode for a server. $(b,--only) / $(b,--skip) \
-             still filter overlays."
+            "With $(b,--archives-only), mirror every recorded version in the \
+             reporepo (including $(b,default)). Honours $(b,--only) / \
+             $(b,--skip)."
           [ "every-version" ])
   in
   let save_d10ir =
@@ -1541,11 +1528,8 @@ let cmd =
       & opt (some string) None
       & info ~docv:"DIR"
           ~doc:
-            "Save the d10ir recipe(s) generated for each solve group into \
-             $(b,DIR) alongside running the build. One $(b,<root-pkg>.d10ir.json) \
-             file is written per group; for $(b,@HANDLE) / $(b,--all) builds \
-             that produces multiple recipes. Unlike $(b,oi ir bake), this \
-             does not skip the build."
+            "Write each solve group's recipe to $(i,DIR) as \
+             $(b,<root-pkg>.d10ir.json). Build still runs."
           [ "save-d10ir" ])
   in
   let info =
@@ -1554,27 +1538,25 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "Solve and build the requested target into the layer cache. With \
-             no $(b,PKG), syncs the cwd's $(b,*.opam) deps + dev tools into \
-             $(b,_oi/) and runs $(b,dune build --profile=release).";
+            "Solve and build $(i,PKG) into the layer cache. With no \
+             $(i,PKG), build the cwd project: sync $(b,*.opam) deps and dev \
+             tools into $(b,_oi/), then run $(b,dune build \
+             --profile=release).";
           `S "TARGETS";
-          `I ("(none)", "Cwd's $(b,*.opam) project.");
+          `I ("(none)", "Cwd $(b,*.opam) project.");
           `I ("$(b,PKG)", "Single package.");
-          `I ("$(b,@HANDLE/PKG)", "Package from overlay $(b,HANDLE).");
-          `I ("$(b,@HANDLE)", "Every package in overlay $(b,HANDLE).");
+          `I ("$(b,@HANDLE/PKG)", "Package from overlay $(i,HANDLE).");
+          `I ("$(b,@HANDLE)", "Every package in overlay $(i,HANDLE).");
           `I ("$(b,--all)", "Every overlay's $(b,x-root-packages).");
           `S "PROJECT EXTRAS";
-          `P "In project mode, the cwd's metadata feeds the solve:";
+          `P "In project mode the cwd metadata feeds the solve:";
           `I
             ( "$(b,*.opam)",
-              "$(b,depends:), $(b,pin-depends:), and $(b,x-repos:) merge into \
-               the solve." );
+              "$(b,depends:), $(b,pin-depends:), $(b,x-repos:) merge in." );
           `I
             ( "$(b,packages/) + $(b,repo)",
-              "When the project root contains a $(b,repo) marker, its \
-               $(b,packages/) tree is injected as the highest-priority \
-               opam-repository — patch a transitive dep's opam file without \
-               vendoring its sources." );
+              "Project-local $(b,packages/) tree is layered as the \
+               highest-priority opam repository." );
           `S Manpage.s_examples;
           `Pre
             "  oi build\n\
@@ -1654,15 +1636,14 @@ let test_cmd =
   let dry_run =
     Arg.(
       value & flag
-      & info ~doc:"Print the test command; do nothing." [ "n"; "dry-run" ])
+      & info ~doc:"Print the test command without running it."
+          [ "n"; "dry-run" ])
   in
   let targets =
     Arg.(
       value & pos_all string []
       & info ~docv:"PKG"
-          ~doc:
-            "Single package or $(b,@HANDLE/PKG). Builds it (and its deps), \
-             then runs $(b,dune runtest) in the package's build dir."
+          ~doc:"Test target: $(b,PKG) or $(b,@HANDLE/PKG)."
           [])
   in
   let info =
@@ -1671,13 +1652,12 @@ let test_cmd =
         [
           `S Manpage.s_description;
           `P
-            "With no $(b,PKG): syncs the cwd's $(b,*.opam) deps + dev tools \
-             into $(b,_oi/) and runs $(b,dune runtest --profile=release).";
+            "Build $(i,PKG) (same as $(b,oi build)) then run $(b,dune \
+             runtest) in its build directory.";
           `P
-            "With $(b,PKG) or $(b,@HANDLE/PKG): builds the package's layer \
-             closure (same as $(b,oi build PKG)), then runs $(b,dune runtest) \
-             in the package's build dir against the assembled prefix.";
-          `P "Use $(b,oi docker --test) to generate a CI Dockerfile.";
+            "With no $(i,PKG), test the cwd project: $(b,dune runtest \
+             --profile=release) against the assembled $(b,_oi/) prefix.";
+          `P "See $(b,oi docker --test) for a CI Dockerfile.";
           `S Manpage.s_examples;
           `Pre "  oi test\n  oi test @avsm/owntracks";
         ]

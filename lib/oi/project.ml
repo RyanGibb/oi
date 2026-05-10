@@ -225,7 +225,7 @@ let empty =
     packages_dir = None;
   }
 
-(* -- Script dependency parser (was lib/oi/script.ml) --------------------- *)
+(* -- Script dependency parser ------------------------------------------- *)
 
 module Script = struct
   let log_src = Logs.Src.create "oi.project.script"
@@ -384,7 +384,7 @@ module Script = struct
         output_string oc dune_content)
 end
 
-(* -- URL-supplied projects (was lib/oi/url_project.ml) ------------------- *)
+(* -- URL-supplied projects ---------------------------------------------- *)
 
 module Url = struct
   let log_src = Logs.Src.create "oi.project.url"
@@ -574,7 +574,7 @@ module Url = struct
       empty urls
 end
 
-(* -- dune-project reader/writer (was lib/oi/dune_project.ml) ------------- *)
+(* -- dune-project reader/writer ----------------------------------------- *)
 
 module Dune = struct
   module Sexp = Sexplib0.Sexp
@@ -691,7 +691,7 @@ module Dune = struct
     Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / t.path) content
 end
 
-(* -- Dev-tool probes (was lib/oi/tool.ml) -------------------------------- *)
+(* -- Dev-tool probes ---------------------------------------------------- *)
 
 module Tool = struct
   type trigger = Ocamlformat_file | Dune_project_using of string

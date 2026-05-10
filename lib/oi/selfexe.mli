@@ -24,9 +24,6 @@ val home : unit -> string
 (** [$HOME], or the user's [pw_dir] from [/etc/passwd] if [$HOME] is unset. [/]
     as a last resort. *)
 
-val local_bin : unit -> string
-(** [$HOME/.local/bin]. Created on demand by callers if needed. *)
-
 (** {1 Install target} *)
 
 type target =

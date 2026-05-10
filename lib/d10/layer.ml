@@ -263,7 +263,6 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
 
 (* -- Export -------------------------------------------------------------- *)
 
-(* Recursively list files under [root], returning paths relative to [root]. *)
 let list_files_under root =
   let root_s = Eio.Path.native_exn root in
   let prefix_len = String.length root_s + 1 in
@@ -343,5 +342,4 @@ let export_all (c : Config.t) ~dst =
             count hashes)
         0 os_keys
     in
-    let _ = os_keys in
     count

@@ -45,5 +45,3 @@ let of_string s =
       in
       { os; distro; os_version; arch }
   | _ -> { os = "unknown"; distro = s; os_version = ""; arch = "" }
-
-let pp fmt t = Fmt.string fmt (to_string t)

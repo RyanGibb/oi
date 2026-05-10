@@ -15,32 +15,9 @@ type slice = {
 }
 (** A registry-side data slice for one OS key. *)
 
-val read_slice :
-  fs:Eio.Fs.dir_ty Eio.Path.t ->
-  output_dir:string ->
-  os_key:string ->
-  slice option
-(** Load [<output_dir>/<os_key>/{logs/manifest.json,audit.jsonl}] into a slice.
-    Returns [None] when the manifest is missing or fails to decode. Missing
-    audit files become an empty event list (which is normal for an all-success
-    build). *)
-
-val read_all_slices :
-  fs:Eio.Fs.dir_ty Eio.Path.t -> output_dir:string -> slice list
-(** Walk every direct subdirectory of [output_dir] and try [read_slice] for
-    each. Subdirectories without a manifest are skipped silently. *)
-
 val handles : slice list -> string list
 (** Distinct overlay handles seen across every event's [context.overlay] in
     [slices]. Sorted alphabetically. *)
-
-val markdown : handle:string -> generated_at:float -> slice list -> string
-(** Render the per-handle markdown report. Includes a summary, reproduction
-    commands, and one section per failing package with outcome detail and the
-    audit event's log tail.
-
-    Only events whose [context.overlay.handle] matches [handle] are considered.
-    Returns [""] when no failures touch [handle]. *)
 
 val write_all :
   fs:Eio.Fs.dir_ty Eio.Path.t ->

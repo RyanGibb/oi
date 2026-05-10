@@ -63,9 +63,6 @@ val registry : string Cmdliner.Term.t
 
 (** {1 Env-reading helpers tied to the terms} *)
 
-val getenv_or : default:string -> string -> string
-(** Returns the env-var value if set and non-empty, else [default]. *)
-
 val reporepo_path : unit -> string
 (** Active reporepo path: [$OI_REPOREPO] or {!Oi.Source.Reporepo.default_path}.
 *)
