@@ -100,6 +100,50 @@ let succeeded c ~hash =
   | Some m -> m.exit_status = 0
   | None -> false
 
+(* Streaming copy that preserves the source file's mode bits. Only used
+   as the [EXDEV] fallback for [link_or_copy] below — for the same-FS
+   common case, [Unix.link] is cheaper and avoids the byte-pump. *)
+let copy_file_preserve_mode ~src ~dst =
+  let st = Unix.lstat src in
+  let in_fd = Unix.openfile src [ Unix.O_RDONLY ] 0 in
+  Fun.protect
+    ~finally:(fun () -> try Unix.close in_fd with Unix.Unix_error _ -> ())
+    (fun () ->
+      let out_fd =
+        Unix.openfile dst
+          [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ]
+          st.Unix.st_perm
+      in
+      Fun.protect
+        ~finally:(fun () -> try Unix.close out_fd with Unix.Unix_error _ -> ())
+        (fun () ->
+          let buf = Bytes.create 65536 in
+          let rec loop () =
+            let n = Unix.read in_fd buf 0 (Bytes.length buf) in
+            if n > 0 then begin
+              let written = ref 0 in
+              while !written < n do
+                written :=
+                  !written
+                  + Unix.write out_fd buf !written (n - !written)
+              done;
+              loop ()
+            end
+          in
+          loop ()))
+
+(* Hardlink fast-path with a cross-device fallback. [Unix.link] fails with
+   [EXDEV] when [src] and [dst] live on different filesystems — typical
+   inside containers where the d10 cache is on a BuildKit cache mount and
+   the per-build prefix is on the image's overlay. Fall back to a
+   streaming copy so the layer's [fs/] tree still gets populated.
+   The fallback is per-file, not per-tree, so a single cross-mount build
+   doesn't disable hardlinks for the rest of the run. *)
+let link_or_copy ~src ~dst =
+  try Unix.link src dst
+  with Unix.Unix_error (Unix.EXDEV, _, _) ->
+    copy_file_preserve_mode ~src ~dst
+
 let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
     ~exit_status ?recipe_json () =
   let d = dir_s c ~hash in
@@ -126,7 +170,7 @@ let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
       | Some Unix.S_REG ->
           Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
             Eio.Path.(c.fs / Filename.dirname dst);
-          replace_existing (Unix.link src) dst
+          replace_existing (fun d -> link_or_copy ~src ~dst:d) dst
       | _ -> ())
     files;
   save_meta (json_path c ~hash)

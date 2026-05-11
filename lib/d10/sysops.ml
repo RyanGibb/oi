@@ -207,11 +207,19 @@ let link_tree t ~src ~dst =
      drained through the Eio buffer_sink, which is slow at best and
      has hung in the wild when stdout and stderr are merged.
 
-     Failures propagate. A partial hardlink pass leaves the build
-     prefix incomplete, which downstream turns into cryptic
-     "Unbound module X" errors at compile time; better to surface the
-     cp failure directly so callers can retry or abort cleanly. *)
-  run_quiet t [ "cp"; "-Rfl"; src_s ^ "/."; dst_s ^ "/" ]
+     Try the hardlink pass first ([cp -Rfl]); if [src] and [dst] live on
+     different filesystems (typical in containers: BuildKit cache mounts
+     are usually overlay/tmpfs, the image's writable layer is overlay too
+     but a different one), [cp] fails with [EXDEV] and a non-zero exit.
+     Fall back to a real archive-mode copy ([cp -Rfa]) so the build
+     prefix still gets a complete tree. Slower for a one-time fill but
+     unblocks every cross-mount setup we've seen. *)
+  try run_quiet t [ "cp"; "-Rfl"; src_s ^ "/."; dst_s ^ "/" ]
+  with Eio.Exn.Io _ ->
+    Log.debug (fun m ->
+        m "link_tree %s -> %s: hardlink pass failed; falling back to copy"
+          src_s dst_s);
+    run_quiet t [ "cp"; "-Rfa"; src_s ^ "/."; dst_s ^ "/" ]
 
 (* -- Low-level command execution ----------------------------------------- *)
 

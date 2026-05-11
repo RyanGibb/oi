@@ -100,20 +100,45 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
     "# writes ./registry/<os_key>/"
 
 let cmd =
-  let run (c : Terms.common) refresh test_mode all distro src_context output =
+  let run (c : Terms.common) refresh registry oi_version no_recipe test_mode all
+      distro src_context output targets =
     Harness.run @@ fun ~sw env ->
-    let { Harness.fs; sys; platform; cache; _ } =
+    let {
+      Harness.fs;
+      proc_mgr;
+      clock;
+      sys;
+      platform;
+      os_key;
+      cache;
+      http_session;
+      _;
+    } =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
         c.cache_dir
     in
     let data_dir = c.data_dir in
     if test_mode && all then
       Oi.Error.config_error "oi docker: --test and --all are mutually exclusive";
+    if targets <> [] && all then
+      Oi.Error.config_error
+        "oi docker: --all and positional TARGET(s) are mutually exclusive";
+    if targets <> [] && test_mode then
+      Oi.Error.config_error
+        "oi docker: --test and positional TARGET(s) are mutually exclusive";
     let cwd_s, _ = Workspace.resolved_cwd fs in
     if all then
       let dir = Stdlib.Option.value output ~default:cwd_s in
       emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context
         ~output:dir ()
+    else if targets <> [] then
+      if no_recipe then
+        Docker_target.emit_no_recipe ~distro ~oi_version ~registry ~output
+          ~targets
+      else
+        Docker_target.emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
+          ~session:http_session ~platform ~refresh ~registry ~distro
+          ~oi_version ~output ~targets
     else if test_mode then
       emit_project ~cmd:"oi test" ~suffix:"test" ~tag_label:"my-project-test"
         ~generator:"oi docker --test" ~cwd_s ~distro ~output
@@ -168,8 +193,42 @@ let cmd =
           ~doc:
             "Output path. Default file: \
              $(b,Dockerfile.oi-{build,test}.<distro>) in cwd. With $(b,--all): \
-             directory for the project (default: cwd)."
+             directory for the project (default: cwd). With target args: \
+             $(b,Dockerfile.oi-<slug>.<distro>) (or directory)."
           [ "o"; "output" ])
+  in
+  let targets =
+    Arg.(
+      value & pos_all string []
+      & info ~docv:"TARGET"
+          ~doc:
+            "Build target(s): a $(b,PKG) name, $(b,@HANDLE) overlay, or \
+             $(b,@HANDLE/PKG). Generates a Dockerfile that fetches every \
+             d10ir archive in one cacheable layer and replays the plan. \
+             Mutually exclusive with $(b,--all) and $(b,--test)."
+          [])
+  in
+  let oi_version =
+    Arg.(
+      value & opt string "latest"
+      & info ~docv:"TAG"
+          ~doc:
+            "Release tag to bake into the generated Dockerfile as the default \
+             $(b,OI_VERSION) ARG (resolves at $(b,docker build) time)."
+          [ "oi-version" ])
+  in
+  let no_recipe =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Emit a source-independent Dockerfile that solves and builds \
+             $(b,TARGET) at $(b,docker build) time instead of baking a \
+             pre-emitted recipe. No $(b,recipe.json) sidecar; the resulting \
+             file is fully self-contained. Trade-off: build is reproducible \
+             only as long as $(b,OI_VERSION), the registry, and the reporepo \
+             URL are stable."
+          [ "no-recipe" ])
   in
   let info =
     Cmd.info "docker" ~doc:"Generate Dockerfiles for project builds and CI."
@@ -198,5 +257,5 @@ let cmd =
   in
   Cmd.v info
     Term.(
-      const run $ Terms.common $ Terms.refresh $ test_mode $ all $ distro
-      $ src_context $ output)
+      const run $ Terms.common $ Terms.refresh $ Terms.registry $ oi_version
+      $ no_recipe $ test_mode $ all $ distro $ src_context $ output $ targets)

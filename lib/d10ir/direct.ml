@@ -265,11 +265,48 @@ let strip_overridden ~overrides acc =
     (fun acc k -> List.filter (fun e -> not (starts_with_key ~k e)) acc)
     acc keys
 
+(* Append the host's PATH to the recipe's PATH (which is restricted to
+   oi-owned prefixes plus a hard-coded FHS list by [Recipe_emitter.scrub_path]
+   — see that module for why the recipe doesn't bake the host PATH in).
+   Without this, the script can't reach platform-specific tool prefixes that
+   live outside FHS: most notably [/opt/homebrew/bin] on macOS, where
+   [pkg-config], [m4], [autoconf], and other depext-installed tools live.
+   Appending (rather than prepending) keeps oi-owned bins ahead of any
+   user-installed shadow like [~/.opam/<switch>/bin]. Dedupes so a host
+   PATH that happens to contain the same FHS entries doesn't blow up
+   resolution time. Other env vars are NOT inherited — they come from
+   [n.env] as the recipe declared them. *)
+let dedup_path_entries entries =
+  let seen = Hashtbl.create 16 in
+  List.filter
+    (fun e ->
+      if e = "" || Hashtbl.mem seen e then false
+      else begin
+        Hashtbl.replace seen e ();
+        true
+      end)
+    entries
+
+let augment_path_with_host entry =
+  let prefix = "PATH=" in
+  if not (String.length entry >= 5 && String.sub entry 0 5 = prefix) then entry
+  else
+    let recipe = String.sub entry 5 (String.length entry - 5) in
+    let host = try Sys.getenv "PATH" with Not_found -> "" in
+    if host = "" then entry
+    else
+      let parts =
+        dedup_path_entries
+          (String.split_on_char ':' recipe @ String.split_on_char ':' host)
+      in
+      "PATH=" ^ String.concat ":" parts
+
 let merge_env ~(config : Config.t) ~rebase ~(mount_env : string list)
     (n : Plan.node) =
   let rebased = List.map rebase n.env in
+  let with_host_path = List.map augment_path_with_host rebased in
   let after_mounts =
-    strip_overridden ~overrides:mount_env rebased @ mount_env
+    strip_overridden ~overrides:mount_env with_host_path @ mount_env
   in
   let stripped =
     List.fold_left

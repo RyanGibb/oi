@@ -126,8 +126,23 @@ let toolchain_items t =
 let cleanable_items t ~data_dir =
   cache_items t @ data_items t ~data_dir @ toolchain_items t
 
+(* Clear the *contents* of each item rather than the item dir itself.
+   Removing the dir would fail with [EBUSY] for any path that's a mount
+   point (Docker BuildKit cache mounts, tmpfs, bind mounts), even when the
+   tree underneath is wipeable. Walk children individually so we both
+   tolerate mounts and still surface unexpected per-entry errors. *)
 let purge_items items =
-  List.iter (fun { path; _ } -> Eio.Path.rmtree ~missing_ok:true path) items
+  List.iter
+    (fun { path; _ } ->
+      match Eio.Path.read_dir path with
+      | exception Eio.Exn.Io _ -> ()
+      | entries ->
+          List.iter
+            (fun child ->
+              try Eio.Path.rmtree ~missing_ok:true Eio.Path.(path / child)
+              with _ -> ())
+            entries)
+    items
 
 let size ~sys path =
   let path_s = Eio.Path.native_exn path in

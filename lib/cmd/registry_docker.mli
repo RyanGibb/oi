@@ -77,3 +77,21 @@ val write_dockerfile : string -> Dockerfile.t -> unit
 
 val write_file : string -> string -> unit
 (** Write arbitrary string contents to [path]. *)
+
+(** {1 Distro depext primitives}
+
+    Exposed for {!Docker_target} (target-mode Dockerfiles), which renders its
+    own template rather than going through {!dockerfile_one_distro} but still
+    needs the same base build depexts and install command. *)
+
+val build_depexts : [ `Apk | `Apt | `Yum ] -> string
+(** Space-separated base depext list for [pkg-config] / [m4] / [-dev] libs that
+    nearly every opam package wants. Tailored per package manager. *)
+
+val extra_depexts : [ `Apk | `Apt | `Yum ] -> string
+(** Hardcoded depexts for common opam [conf-*] probe packages. May be the empty
+    string when the base set already covers the distro. *)
+
+val install_cmd : [ `Apk | `Apt | `Yum ] -> string -> string
+(** [install_cmd mgr pkgs] is the full shell command to install [pkgs] under
+    package manager [mgr], including any cache cleanup. *)
