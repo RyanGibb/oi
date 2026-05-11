@@ -1,7 +1,5 @@
 open Cmdliner
 
-let ( / ) = Filename.concat
-
 (* -- search -------------------------------------------------------------- *)
 
 (* Glob match with [*] wildcard. Used for package-name filtering in
@@ -38,65 +36,15 @@ let glob_matches ~pattern name =
        || List.hd segs = ""
        || String.starts_with ~prefix:(List.hd segs) name)
 
-(* Scan every [repos/overlay-<h>-<v>/packages/] tree under [data_dir]
-   for package names matching [pattern]. Returns a list of
-   [(handle, version_tag, pkg_name, pkg_version)] rows, one per
-   [<name>/<name.version>/opam] found. [version_tag] is the overlay
-   version that the clone was pinned at.
-
-   Keeping every version here lets the caller pick latest-per-
-   (overlay, name) or expose all with [--all-versions]. *)
-let scan_declared_packages ~data_dir ~pattern ~overlay_filter =
-  let repos = data_dir / "repos" in
-  if not (Sys.file_exists repos) then []
-  else
-    let entries = Sys.readdir repos |> Array.to_list in
-    let rows = ref [] in
-    List.iter
-      (fun entry ->
-        if String.starts_with ~prefix:"overlay-" entry then
-          (* Parse overlay-<handle>-<version>. The version always
-             matches [YYYYMMDD.N] so it contains no dashes; the
-             handle is everything between "overlay-" and the last
-             dash. *)
-          let rest =
-            String.sub entry (String.length "overlay-")
-              (String.length entry - String.length "overlay-")
-          in
-          match String.rindex_opt rest '-' with
-          | None -> ()
-          | Some i ->
-              let handle = String.sub rest 0 i in
-              let version =
-                String.sub rest (i + 1) (String.length rest - i - 1)
-              in
-              let keep =
-                match overlay_filter with
-                | [] -> true
-                | xs -> List.mem handle xs
-              in
-              if keep then
-                let pkgs_dir = repos / entry / "packages" in
-                if Sys.file_exists pkgs_dir then
-                  Array.iter
-                    (fun name ->
-                      if glob_matches ~pattern name then
-                        let name_dir = pkgs_dir / name in
-                        if Sys.is_directory name_dir then
-                          Array.iter
-                            (fun pkg_s ->
-                              match OpamPackage.of_string_opt pkg_s with
-                              | None -> ()
-                              | Some p ->
-                                  let v =
-                                    OpamPackage.Version.to_string
-                                      (OpamPackage.version p)
-                                  in
-                                  rows := (handle, version, name, v) :: !rows)
-                            (Sys.readdir name_dir))
-                    (Sys.readdir pkgs_dir))
-      entries;
-    List.rev !rows
+(* Walk every overlay's [packages/] tree in the reporepo for package
+   names matching [pattern]. Returns [(handle, pkg_name, pkg_version)]
+   rows, one per [<handle>/packages/<name>/<name.version>/opam] hit. *)
+let scan_declared_packages ~reporepo_path ~pattern ~overlay_filter =
+  let rows = ref [] in
+  Oi.Source.Reporepo.iter_opam_files ~path:reporepo_path
+    ~include_handles:overlay_filter (fun ~handle ~pkg ~version ~opam_path:_ ->
+      if glob_matches ~pattern pkg then rows := (handle, pkg, version) :: !rows);
+  List.rev !rows
 
 (* Rank of a search-result state. Used to collapse redundant rows
    for the same (kind, overlay, name, version): if a package is
@@ -162,7 +110,7 @@ let cmd =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
         c.cache_dir
     in
-    let data_dir = c.data_dir in
+    let reporepo_path = Oi.Source.Reporepo.env_path () in
     (* Accept [@handle/PATTERN] as shorthand for [--overlay=handle PATTERN],
        and bare [@handle] as "everything in this overlay" (pattern = [*]).
        Combines with any [--overlay] flags the user already passed. *)
@@ -248,8 +196,8 @@ let cmd =
     in
     (* Declared-package matches scanned from overlay clones. *)
     let pkg_declared_rows =
-      scan_declared_packages ~data_dir ~pattern ~overlay_filter
-      |> List.map (fun (handle, _ov_version, name, version) ->
+      scan_declared_packages ~reporepo_path ~pattern ~overlay_filter
+      |> List.map (fun (handle, name, version) ->
           {
             kind = `Pkg;
             overlay = "@" ^ handle;

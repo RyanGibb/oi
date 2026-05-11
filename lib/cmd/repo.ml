@@ -1084,6 +1084,59 @@ module Bake = struct
         $ to_dir)
 end
 
+module Index = struct
+  let cmd =
+    let run (c : Terms.common) registry to_dir =
+      Harness.run @@ fun ~sw env ->
+      let { Harness.fs; clock; sys; os_key; cache; _ } =
+        Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+          c.cache_dir
+      in
+      Registry_export.run ~fs
+        ~clock:(clock :> D10.Config.clk)
+        ~sys ~os_key ~cache ~registry ~output:to_dir
+    in
+    let to_dir =
+      Arg.(
+        required
+        & opt (some string) None
+        & info ~docv:"DIR"
+            ~doc:
+              "Output directory. Layer tarballs are written as \
+               $(b,DIR/<os_key>/<hash>.tar.zst); the rebuilt sqlite index as \
+               $(b,DIR/<os_key>/index.db)."
+            [ "to" ])
+    in
+    let info =
+      Cmd.info "index"
+        ~doc:"(Re)build a registry's sqlite index from the local layer cache"
+        ~man:
+          [
+            `S Manpage.s_description;
+            `P
+              "Re-publishes the local cache as a registry tree at $(b,DIR): \
+               exports every succeeded layer as $(b,<os_key>/<hash>.tar.zst), \
+               rebuilds $(b,<os_key>/index.db) from the layer dirs, and \
+               records each tarball's sha256+size. Idempotent — re-running \
+               only adds newly-built layers and re-encodes the index.";
+            `P
+              "Reads overlay attribution from each layer's \
+               $(b,provenance.json) sidecar (written by $(b,oi build) at \
+               commit time). Layers whose sidecar is missing land in the index \
+               with $(b,overlay_handle = NULL).";
+            `P
+              "Useful after fixing a stale or corrupt index without re-running \
+               the build phase. $(b,oi build --export=DIR) rolls this together \
+               with the build itself.";
+            `S Manpage.s_examples;
+            `Pre
+              "  oi repo index --to=./registry\n\
+              \  oi build --export=./registry   # build + bake + index";
+          ]
+    in
+    Cmd.v info Term.(const run $ Terms.common $ Terms.registry $ to_dir)
+end
+
 module Set_roots = struct
   let cmd =
     (* Parse a PKG token: a comma-separated list becomes a multi-package
@@ -1626,6 +1679,7 @@ let cmd =
       Add.cmd;
       Bump.cmd;
       Bake.cmd;
+      Index.cmd;
       Set_roots.cmd;
       Remove.cmd;
       Push.cmd;

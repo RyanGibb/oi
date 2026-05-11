@@ -22,6 +22,13 @@ let exec db sql =
   | rc ->
       Fmt.failwith "layer_index sqlite: %s: %s" (Sqlite3.Rc.to_string rc) sql
 
+(* Bump whenever [rebuild]'s extracted-rows logic changes shape — i.e. when
+   an already-correct on-disk [index.db] would produce a *different* row set
+   if regenerated from the same layer dirs. Mismatched stamps force a full
+   per-os_key rebuild on next open, so existing caches converge to the new
+   shape without a manual [rm index.db]. *)
+let indexer_version = "2"
+
 let schema =
   {|
   CREATE TABLE IF NOT EXISTS layers (
@@ -94,6 +101,16 @@ let schema =
   CREATE INDEX IF NOT EXISTS idx_files_hash ON layer_files(layer_hash);
   CREATE INDEX IF NOT EXISTS idx_meta_findlib ON layer_meta(findlib_pkg);
   CREATE INDEX IF NOT EXISTS idx_meta_hash ON layer_meta(layer_hash);
+
+  -- Per-os_key stamp of which indexer code shape last wrote the rows
+  -- for that platform. [Layer_index.ensure_local] consults this and
+  -- forces a full rebuild when the on-disk version doesn't match the
+  -- current code's [indexer_version] constant. One row per os_key so
+  -- platforms can be re-indexed independently as machines see them.
+  CREATE TABLE IF NOT EXISTS index_meta (
+    os_key          TEXT PRIMARY KEY,
+    indexer_version TEXT NOT NULL
+  );
 |}
 
 let rec mkdir_p dir =
@@ -403,10 +420,29 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
                 metas
             end)
       entries;
+    exec db
+      (Fmt.str
+         "INSERT OR REPLACE INTO index_meta (os_key, indexer_version) VALUES \
+          (%s, %s)"
+         (quote os_key) (quote indexer_version));
     exec db "COMMIT";
     Log.info (fun m ->
         m "Indexed %d layers for %s" (List.length entries) os_key)
   end
+
+let indexer_stamp db ~os_key : string option =
+  let stmt =
+    Sqlite3.prepare db
+      "SELECT indexer_version FROM index_meta WHERE os_key = ? LIMIT 1"
+  in
+  ignore (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT os_key));
+  let result =
+    match Sqlite3.step stmt with
+    | Sqlite3.Rc.ROW -> Some (Sqlite3.column_text stmt 0)
+    | _ -> None
+  in
+  ignore (Sqlite3.finalize stmt);
+  result
 
 (* -- Queries -------------------------------------------------------------- *)
 

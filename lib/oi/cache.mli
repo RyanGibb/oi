@@ -35,8 +35,8 @@ val fs : t -> Eio.Fs.dir_ty Eio.Path.t
 val run_dir : t -> hash:string -> Eio.Fs.dir_ty Eio.Path.t
 (** [run_dir cache ~hash] is the per-script working directory
     [<cache>/runs/<hash>/]. {!Cmd.Script_runner} uses this for the synthetic
-    dune project it builds the script under, keyed by the script's content
-    hash so repeated runs reuse the compiled artefact. *)
+    dune project it builds the script under, keyed by the script's content hash
+    so repeated runs reuse the compiled artefact. *)
 
 (** {1 Pin-depends cache} *)
 
@@ -123,9 +123,9 @@ val purge_items : item list -> unit
 (** [rmtree ~missing_ok:true] each item; no logging. *)
 
 val size : sys:D10.Sysops.t -> Eio.Fs.dir_ty Eio.Path.t -> int64
-(** Recursive on-disk size of a directory in bytes, computed via [du -sk]
-    (with the result multiplied by 1024). Returns [0L] when the path doesn't
-    exist or the subprocess errors out. *)
+(** Recursive on-disk size of a directory in bytes, computed via [du -sk] (with
+    the result multiplied by 1024). Returns [0L] when the path doesn't exist or
+    the subprocess errors out. *)
 
 val pp_size : int64 Fmt.t
 (** Pretty-print a byte count as a human-readable string (e.g. ["1.2 GB"]). *)

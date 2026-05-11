@@ -5,9 +5,8 @@
 
 (** {1 Raw styles}
 
-    The {!Tty.Style.t} palette. Pair with {!pp} to apply to arbitrary
-    formatters or with {!Tty.Style.styled} when you need fine-grained control.
-*)
+    The {!Tty.Style.t} palette. Pair with {!pp} to apply to arbitrary formatters
+    or with {!Tty.Style.styled} when you need fine-grained control. *)
 
 val error : Tty.Style.t
 val warn : Tty.Style.t

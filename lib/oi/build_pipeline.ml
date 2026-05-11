@@ -694,6 +694,85 @@ type build_inputs = {
   jobs : int option;
 }
 
+(* Provenance is written here rather than inside [D10ir.Direct] because the
+   richer [Plan.package_plan] (opam_path, pkgs_dir, source, depexts, dep_layers
+   with Identity.dep shape) only exists at the oi level — the d10ir runtime
+   sees a stripped [Plan.node]. Idempotent: skips when the file already exists,
+   so re-runs (and previously cached layers seen across [oi build] passes)
+   converge to a written sidecar without re-encoding on every invocation. *)
+let source_kind_of_url url =
+  if url = "" then ""
+  else if String.starts_with ~prefix:"git+" url then "git"
+  else if String.starts_with ~prefix:"git://" url then "git"
+  else if String.starts_with ~prefix:"hg+" url then "hg"
+  else if String.starts_with ~prefix:"darcs+" url then "darcs"
+  else if String.starts_with ~prefix:"file:" url then "local"
+  else if String.starts_with ~prefix:"/" url then "local"
+  else "tar"
+
+let provenance_of_package_plan ~os_key ~ocaml_version ~built_at
+    (pp : Plan.package_plan) : Provenance.t =
+  let pkg = Identity.of_string pp.pkg in
+  let origin =
+    match (pp.opam_path, pp.pkgs_dir) with
+    | Some _opam_path, Some pkgs_dir ->
+        Origin.of_packages_dir ~pkgs_dir ~name:pkg.name ~full:pp.pkg
+    | _ -> { Origin.kind = Local; overlay = pp.overlay; path_in_repo = "" }
+  in
+  let opam_sha256 =
+    match pp.opam_path with
+    | Some p -> Provenance.hash_opam_file ~path:p
+    | None -> ""
+  in
+  let source =
+    Option.map
+      (fun (s : Plan.source_info) : Provenance.source_info ->
+        {
+          url = s.url;
+          kind = source_kind_of_url s.url;
+          checksums = s.checksums;
+        })
+      pp.source
+  in
+  {
+    schema = 1;
+    layer_hash = pp.layer_hash;
+    os_key;
+    pkg;
+    method_ = pp.method_;
+    built_at;
+    duration_s = 0.;
+    phases = { fetch = None; build = None; install = None; restore = None };
+    opam = { sha256 = opam_sha256; origin };
+    source;
+    deps = pp.dep_layers;
+    depexts_declared = pp.depexts;
+    build_env = { ocaml_version };
+  }
+
+let write_provenance_for_solved ~fs ~cache_root ~os_key ~(d10 : D10.Config.t)
+    (s : solved) =
+  let now = Unix.gettimeofday () in
+  List.iter
+    (fun (gr : group_result) ->
+      match gr.exec_plan with
+      | None -> ()
+      | Some (ep : Plan.t) ->
+          List.iter
+            (fun (pp : Plan.package_plan) ->
+              if D10.Layer.succeeded d10 ~hash:pp.layer_hash then
+                let dst =
+                  Provenance.path ~cache_root ~os_key ~hash:pp.layer_hash
+                in
+                if not (Sys.file_exists dst) then
+                  let r =
+                    provenance_of_package_plan ~os_key
+                      ~ocaml_version:ep.ocaml_version ~built_at:now pp
+                  in
+                  Provenance.write ~fs ~cache_root r)
+            ep.packages)
+    s.groups
+
 let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
     D10ir.Direct.result option =
   match inp.solved.merged with
@@ -850,6 +929,8 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
           ~clock:(env.clock :> D10.Config.clk)
           ~reporter:direct_reporter ~plan_dir merged
       in
+      write_provenance_for_solved ~fs:env.fs ~cache_root ~os_key:env.os_key
+        ~d10:d10_cfg inp.solved;
       reporter.event (Build_summary result);
       Some result
 

@@ -118,8 +118,8 @@ module Ctx : sig
     unit
   (** Mutate the synthetic switch state to record [pkg] as installed, so the
       solver pre-treats it as satisfied. Used to pre-populate the toolchain
-      packages on a non-relocatable {!toolchain} so consumer solves don't
-      try to rebuild the compiler. *)
+      packages on a non-relocatable {!toolchain} so consumer solves don't try to
+      rebuild the compiler. *)
 
   val synthetic_config :
     t -> OpamPackage.t -> OpamFile.OPAM.t -> OpamFile.Dot_config.t option
@@ -150,10 +150,10 @@ module Env : sig
     (string * string) list
   (** [env_vars ~prefix ~dune_cache_root ()] returns the [(KEY, VALUE)] list
       that activates the assembled [prefix] for OCaml tooling: [PATH],
-      [OCAMLPATH], [CAML_LD_LIBRARY_PATH], [OCAMLFIND_*], plus
-      [DUNE_CACHE_ROOT] pointing at the shared cache. Adding [toolchain] also
-      layers the fixed-prefix compiler's [bin] / [lib] paths in front of the
-      consumer prefix's. *)
+      [OCAMLPATH], [CAML_LD_LIBRARY_PATH], [OCAMLFIND_*], plus [DUNE_CACHE_ROOT]
+      pointing at the shared cache. Adding [toolchain] also layers the
+      fixed-prefix compiler's [bin] / [lib] paths in front of the consumer
+      prefix's. *)
 
   val envrc_content :
     ?toolchain:Ctx.toolchain ->
@@ -220,8 +220,8 @@ module Memo : sig
     key:string ->
     OpamPackage.t list ->
     unit
-  (** Persist [pkgs] under [key]; the next matching {!lookup} returns it
-      without re-running 0install. *)
+  (** Persist [pkgs] under [key]; the next matching {!lookup} returns it without
+      re-running 0install. *)
 end
 
 (** {1 Solving} *)
@@ -286,5 +286,5 @@ val topo_sort :
   conf:Ctx.conf ->
   OpamPackage.t list ->
   OpamPackage.t list
-(** Re-order [pkgs] in dependency-first topological order under [conf]'s
-    filter env. Stable on already-sorted inputs. *)
+(** Re-order [pkgs] in dependency-first topological order under [conf]'s filter
+    env. Stable on already-sorted inputs. *)

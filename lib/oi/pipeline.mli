@@ -23,9 +23,9 @@ val make_d10 :
   cache:Cache.t ->
   os_key:string ->
   D10.Config.t
-(** Construct a {!D10.Config.t} from the standard capabilities — the value
-    every layer-store call expects. Combines [cache]'s root with [os_key] so
-    layers from different platforms land in their own subdirectories. *)
+(** Construct a {!D10.Config.t} from the standard capabilities — the value every
+    layer-store call expects. Combines [cache]'s root with [os_key] so layers
+    from different platforms land in their own subdirectories. *)
 
 val init_opam_root : fs:Eio.Fs.dir_ty Eio.Path.t -> data_dir:string -> unit
 (** Create [<data_dir>/opam-root/] (if absent) and call {!Solver.Ctx.init_opam}

@@ -3,8 +3,8 @@
 
     A reporepo entry is one opam file under [v2/<handle>/packages/<handle>/]
     that records the handle's git URL, pinned commit, declared toolchain, and
-    transitive [depends:] on other handles. The reporepo itself is a regular
-    git repository the user clones (or oi auto-clones) once; subsequent
+    transitive [depends:] on other handles. The reporepo itself is a regular git
+    repository the user clones (or oi auto-clones) once; subsequent
     [oi repo bump] commits update entries in place.
 
     This module exposes the entry parser, the resolution walk that produces
@@ -210,8 +210,8 @@ val ensure_clone :
     runs. *)
 
 val set_push_url : sys:D10.Sysops.t -> path:string -> string -> unit
-(** [set_push_url ~sys ~path url] sets [git remote set-url --push origin url]
-    on the reporepo clone at [path]. Used when a user clones from a read-only
+(** [set_push_url ~sys ~path url] sets [git remote set-url --push origin url] on
+    the reporepo clone at [path]. Used when a user clones from a read-only
     mirror but wants [oi repo push] to go to a writable upstream. *)
 
 type push_step =
@@ -256,8 +256,8 @@ val add :
     optional [ref_]. Writes the freshly resolved opam metadata under
     [v2/<handle>/packages/<handle>/<handle>.<ver>/] and returns the parsed
     {!entry}. Errors when an entry for [handle] already exists unless
-    [?force:true]; the caller is expected to follow up with {!bump} for
-    schema changes rather than re-adding. *)
+    [?force:true]; the caller is expected to follow up with {!bump} for schema
+    changes rather than re-adding. *)
 
 val bump :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -287,9 +287,9 @@ val remove :
   ?version:string ->
   unit ->
   unit
-(** Delete a reporepo entry. With [?version] only the named version is
-    removed; without it every version of [handle] (and the materialised
-    [v2/<handle>/]) is purged. *)
+(** Delete a reporepo entry. With [?version] only the named version is removed;
+    without it every version of [handle] (and the materialised [v2/<handle>/])
+    is purged. *)
 
 val ls_remote_sha : sys:D10.Sysops.t -> ?ref_:string -> string -> string
 (** [ls_remote_sha ~sys ?ref_ url] runs [git ls-remote] against [url] and
