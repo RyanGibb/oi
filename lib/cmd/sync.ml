@@ -338,7 +338,16 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
                 handles = [];
               };
           ];
-        with_repos = [];
+        (* The project's overlay handles (from [x-repos: ["@HANDLE"]] in
+           every *.opam, plus any [--with-repo @HANDLE] CLI flag) must
+           flow through to [Build_pipeline] so the solver's
+           [packages_dirs_for_group] resolves them into overlay paths.
+           Passing [[]] here was the root cause of "No known
+           implementations at all" for overlay-only packages
+           ([nox-tty], [requests], …): [all_extras] still pinned the
+           handles' [local_packages_dir]s, but [solve_uncached] only
+           reads [req.with_repos] when computing [global_handles]. *)
+        with_repos;
         pins = project.pins @ url_project.pins;
         extra_repos = all_extras;
         constraints = extra_constraints;
@@ -356,10 +365,50 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
       ~enabled:((not quiet) && Tty.is_tty ())
     @@ fun reporter ->
     let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
-    let _ : D10ir.Direct.result option =
+    let build_result =
       Oi.Build_pipeline.build pipeline_env ~reporter
         { solved; layer_remote; source_remote; jobs }
     in
+    (* Surface solve/build failures: a discarded build result lets a
+       failed solve fall through to [Prefix.assemble ~layer_hashes:[]],
+       which silently produces an empty [_oi/prefix] and then dies
+       further downstream with the misleading "Executable dune not
+       found". *)
+    (match build_result with
+    | None ->
+        let group_msgs =
+          List.filter_map
+            (fun (gr : Oi.Build_pipeline.group_result) ->
+              match gr.error with
+              | Ok () -> None
+              | Error e ->
+                  let kind =
+                    match e with
+                    | Solve_failed { msg; log_path } ->
+                        Fmt.str "solve: %s (see %s)" msg log_path
+                    | Cycle _ -> "cycle"
+                    | Empty_after_strip -> "empty"
+                    | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
+                    | Emit_failed { msg } -> Fmt.str "emit: %s" msg
+                  in
+                  Some (Fmt.str "%s — %s" gr.group.label kind))
+            solved.groups
+        in
+        Oi.Error.config_error
+          "project sync produced no executable plan:@\n\
+          \  %s@\n\
+           Re-run with --verbosity=debug for the full per-group trace."
+          (String.concat "\n  " group_msgs)
+    | Some r when r.failed > 0 ->
+        let pp_fail (f : D10ir.Direct.failure) =
+          Fmt.str "%s.%s @ %s — see %s" f.package.name f.package.version
+            (D10ir.Direct.phase_to_string f.phase)
+            f.log_path
+        in
+        Oi.Error.config_error "project sync had %d build failure(s):@\n  %s"
+          r.failed
+          (String.concat "\n  " (List.map pp_fail r.failures))
+    | Some _ -> ());
     Oi.Build_pipeline.layer_hashes solved
   in
   let oi_dir = cwd / "_oi" in
