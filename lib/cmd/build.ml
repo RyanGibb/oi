@@ -962,7 +962,34 @@ let cmd =
        the overlay was force-bumped to a new version since the last
        [ensure_extra] call (e.g. the user just ran [oi repo add
        --force] pointing at a new URL), clone it on the fly rather
-       than fail out. *)
+       than fail out.
+
+       Packages that any reporepo toolchain definition claims as its
+       own (via [x-oi-toolchain-compiler] or [x-oi-toolchain-roots])
+       are excluded: building them as standalone targets is pointless
+       under a non-relocatable toolchain (they get filtered out of the
+       exec plan, leaving nothing to build) and merely duplicates a
+       compiler bake under a relocatable one. *)
+        let spec_name spec =
+          match String.index_opt spec '.' with
+          | None -> spec
+          | Some i -> String.sub spec 0 i
+        in
+        let toolchain_pkg_names entries =
+          let names = ref [] in
+          List.iter
+            (fun (e : Oi.Source.Reporepo.entry) ->
+              if e.toolchain_name <> None then begin
+                Option.iter (fun s -> names := spec_name s :: !names)
+                  e.toolchain_compiler;
+                List.iter
+                  (fun group ->
+                    List.iter (fun s -> names := spec_name s :: !names) group)
+                  e.toolchain_roots
+              end)
+            entries;
+          List.sort_uniq String.compare !names
+        in
         let overlay_packages handle =
           let path = Terms.reporepo_path () in
           let entries = Oi.Source.Reporepo.load ~path in
@@ -977,9 +1004,25 @@ let cmd =
                   "overlay %s.%s is not materialised at %s; run 'oi repo bump \
                    %s' to populate it (upstream %s)"
                   handle e.version pkgs_dir handle e.url;
-              Sys.readdir pkgs_dir |> Array.to_list
-              |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
-              |> List.sort String.compare
+              let tc_names = toolchain_pkg_names entries in
+              let all_names =
+                Sys.readdir pkgs_dir |> Array.to_list
+                |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
+                |> List.sort String.compare
+              in
+              let kept, dropped =
+                List.partition
+                  (fun n -> not (List.mem n tc_names))
+                  all_names
+              in
+              if dropped <> [] then
+                Log.info (fun m ->
+                    m
+                      "Overlay %s: excluding %d toolchain package(s) from \
+                       --all expansion: %s"
+                      handle (List.length dropped)
+                      (String.concat ", " dropped));
+              kept
         in
         (* Expand each raw group into package-name groups. A group
        containing just an [@handle] fallback (no [x-root-packages])

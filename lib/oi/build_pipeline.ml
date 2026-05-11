@@ -313,48 +313,91 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
               let toolchain_name =
                 match toolchain with Some i -> i.handle | None -> "system"
               in
+              (* [base_layer] in the recipe is informational (see
+                 [d10ir/plan.ml] merge comment): it identifies the toolchain
+                 root for diagnostics. Prefer one of the toolchain's own
+                 layer hashes when present (non-relocatable toolchain — the
+                 toolchain packages are filtered out of [packages] and
+                 surfaced via [external_layer_hashes]); otherwise fall back
+                 to the first consumer package's layer hash. *)
               let toolchain_layer =
-                match exec_plan.packages with
-                | p :: _ -> p.layer_hash
-                | [] -> ""
+                match exec_plan.external_layer_hashes, exec_plan.packages with
+                | h :: _, _ -> h
+                | [], p :: _ -> p.layer_hash
+                | [], [] -> ""
               in
-              try
-                let recipe =
-                  Recipe_emitter.emit ~d10
-                    ~cli_invocation:(Array.to_list Sys.argv) ~toolchain_name
-                    ~toolchain_layer exec_plan
-                in
+              if toolchain_layer = "" then
+                (* Every selected package was filtered out by [elaborate]
+                   (target reduced entirely to toolchain-provided packages,
+                   e.g. [oi build ocaml-variants] under a non-relocatable
+                   toolchain). Nothing for the d10ir executor to do — record
+                   a clean failure instead of crashing on an empty layer
+                   hash. *)
                 {
                   group;
                   toolchain;
                   pkgs_dir;
                   pkgs;
                   exec_plan = Some exec_plan;
-                  recipe = Some recipe;
-                  error = Ok ();
+                  recipe = None;
+                  error =
+                    Error
+                      (Emit_failed
+                         {
+                           msg =
+                             "all selected packages are toolchain-provided; \
+                              nothing to build";
+                         });
                 }
-              with
-              | Error.E e ->
+              else begin
+                try
+                  let recipe =
+                    Recipe_emitter.emit ~d10
+                      ~cli_invocation:(Array.to_list Sys.argv) ~toolchain_name
+                      ~toolchain_layer exec_plan
+                  in
                   {
                     group;
                     toolchain;
                     pkgs_dir;
                     pkgs;
                     exec_plan = Some exec_plan;
-                    recipe = None;
-                    error =
-                      Error (Emit_failed { msg = Fmt.str "%a" Error.pp e });
+                    recipe = Some recipe;
+                    error = Ok ();
                   }
-              | Failure msg ->
-                  {
-                    group;
-                    toolchain;
-                    pkgs_dir;
-                    pkgs;
-                    exec_plan = Some exec_plan;
-                    recipe = None;
-                    error = Error (Emit_failed { msg });
-                  }
+                with
+                | Error.E e ->
+                    {
+                      group;
+                      toolchain;
+                      pkgs_dir;
+                      pkgs;
+                      exec_plan = Some exec_plan;
+                      recipe = None;
+                      error =
+                        Error (Emit_failed { msg = Fmt.str "%a" Error.pp e });
+                    }
+                | Failure msg ->
+                    {
+                      group;
+                      toolchain;
+                      pkgs_dir;
+                      pkgs;
+                      exec_plan = Some exec_plan;
+                      recipe = None;
+                      error = Error (Emit_failed { msg });
+                    }
+                | Invalid_argument msg ->
+                    {
+                      group;
+                      toolchain;
+                      pkgs_dir;
+                      pkgs;
+                      exec_plan = Some exec_plan;
+                      recipe = None;
+                      error = Error (Emit_failed { msg });
+                    }
+              end
             with
             | Error.E e ->
                 {
