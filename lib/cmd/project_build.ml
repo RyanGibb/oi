@@ -1,5 +1,57 @@
 let ( / ) = Filename.concat
 
+(* Copy [src] to [dst], dereferencing if [src] is a symlink. [_build]
+   installs binaries as symlinks pointing at [_build/default/.../foo.exe],
+   so a naive [Sys.rename] / cp would carry that link out into [dist/],
+   which makes the file useless as a CI artifact. [Unix.openfile] follows
+   symlinks by default. *)
+let copy_resolved ~src ~dst =
+  let buf_size = 65536 in
+  let buf = Bytes.create buf_size in
+  let perm = (Unix.stat src).st_perm in
+  let ic = Unix.openfile src [ O_RDONLY ] 0 in
+  let oc = Unix.openfile dst [ O_WRONLY; O_CREAT; O_TRUNC ] perm in
+  let rec loop () =
+    let n = Unix.read ic buf 0 buf_size in
+    if n > 0 then begin
+      let _ : int = Unix.write oc buf 0 n in
+      loop ()
+    end
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      (try Unix.close ic with _ -> ());
+      try Unix.close oc with _ -> ())
+    loop;
+  Unix.chmod dst perm
+
+(* Scan [_build/install/default/{bin,sbin}] under [cwd] and copy each
+   entry into [cwd/dist/<basename>-<os_key>]. Returns the list of
+   (source basename, destination path) pairs actually written, in the
+   order they were discovered (bin first, then sbin). Missing
+   sub-directories are skipped silently — a project without installed
+   binaries simply yields []. *)
+let collect_dist ~cwd ~os_key =
+  let dist_root = cwd / "dist" in
+  (try Unix.mkdir dist_root 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
+  let install_root = cwd / "_build" / "install" / "default" in
+  let scan sub =
+    let dir = install_root / sub in
+    if not (Sys.file_exists dir) then []
+    else
+      Sys.readdir dir
+      |> Array.to_list
+      |> List.sort String.compare
+      |> List.filter_map (fun name ->
+             let src = dir / name in
+             if (Unix.stat src).st_kind <> S_REG then None
+             else
+               let dst = dist_root / Fmt.str "%s-%s" name os_key in
+               copy_resolved ~src ~dst;
+               Some (name, dst))
+  in
+  scan "bin" @ scan "sbin"
+
 (* Read every *.opam file in [cwd] as [(name, opam)] pairs, sorted
    alphabetically. Files we cannot parse are silently dropped — the
    solve-side load (Project.load) already warns about them. *)
@@ -237,5 +289,19 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
         end
         else begin
           Fmt.pr "%a@." Oi.Style.ok_string (label ^ " successful");
+          (* Only the [`Build] action produces installable binaries —
+             [`Test] runs [dune runtest] which leaves [_build/install/]
+             untouched, and [`Deps_only] returned earlier. *)
+          (match action with
+          | `Build -> (
+              match collect_dist ~cwd ~os_key with
+              | [] -> ()
+              | mapping ->
+                  Fmt.pr "@.%a@." Oi.Style.header_string "Dist artifacts:";
+                  List.iter
+                    (fun (name, dst) ->
+                      Fmt.pr "  %s %a %s@." name Oi.Style.dim_string "→" dst)
+                    mapping)
+          | `Test | `Deps_only -> ());
           0
         end
