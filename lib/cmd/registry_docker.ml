@@ -331,19 +331,23 @@ let service_name d =
    [x-root-packages] and publishes the cache to the bind-mounted
    registry tree.
 
-   [--registry=] disables the remote layer fetch so every package is
-   built from source inside this container — otherwise the prior
+   [--use-registry=archives] disables the layer fetch so every package
+   is built from source inside this container — otherwise the prior
    registry's cached binaries would short-circuit most of the work and
    the produced manifest would be all "cached" outcomes. The point of
-   this flow is to re-validate every layer end-to-end.
+   this flow is to re-validate every layer end-to-end. The d10ir source
+   archives still flow from the configured [--registry] URL (default
+   [https://oi.thicket.dev]) since the container starts with an empty
+   cache; without that the very first build would have nothing to
+   unpack and would [Error.config_error] on missing-archive.
 
    [OI_BUILD_PARALLELISM=$(nproc)] overrides the [min cpu_count 8] cap
    that {!D10ir.Config.default} applies for macOS fd-limit safety. Inside
    a Linux container with a high [nofile] ulimit (set on the service
    below) we want to use every core on the host. *)
 let build_export_cmd () =
-  "OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all --registry=archives \
-   --export /out"
+  "OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all \
+   --use-registry=archives --export /out"
 
 let docker_compose_yaml ~distros ~registry_host_path () =
   let buf = Buffer.create 1024 in
