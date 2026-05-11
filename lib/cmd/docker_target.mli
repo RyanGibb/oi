@@ -31,10 +31,10 @@ val emit_local :
 (** Project-mode counterpart to {!emit}: solves the cwd's [*.opam] closure to
     derive the archive sha list, then writes a multi-stage Dockerfile that
     [COPY]s the local sources, re-solves inside the container (so reporepo
-    changes between bake and [docker build] are picked up), runs [oi build
-    --dist=/dist] (which drives the project's [dune build] and gathers
-    install-tree binaries / share data), and finally [COPY]s the gathered
-    tree into a clean depext-equipped runtime image. Output filename is
+    changes between bake and [docker build] are picked up), runs
+    [oi build --dist=/dist] (which drives the project's [dune build] and gathers
+    install-tree binaries / share data), and finally [COPY]s the gathered tree
+    into a clean depext-equipped runtime image. Output filename is
     [Dockerfile.oi-project.<distro>]. *)
 
 val emit_no_recipe :

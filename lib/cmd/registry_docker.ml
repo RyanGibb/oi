@@ -10,97 +10,27 @@ let ( @@ ) = Dockerfile.( @@ )
 
 (* -- Per-package-manager install command helpers ------------------------- *)
 
-(* Build-time depexts to run [oi build] inside each distro. Broad by
-   design: covers the common -dev packages most opam packages depend on. Users
-   will add more for specific packages. *)
+(* Bootstrap toolchain needed before any opam-driven build can run.
+   Library [-dev] depexts and package-specific bits (libssl-dev,
+   libsqlite3-dev, libblosc-dev, Apache Arrow, …) are intentionally NOT
+   listed here — they belong in the [depexts:] field of the opam package
+   that needs them, and flow into the Dockerfile via
+   [compute_overlay_depexts]. This list is just "what does the host need
+   to invoke a C compiler and fetch sources before opam takes over". *)
 let build_depexts = function
   | `Apk ->
       (* coreutils: oxcaml-compiler's Makefile uses [cp -l -R] to set up
          [_build/runtime_stdlib_install]; busybox cp drops the file
          contents on directory hardlinks, leaving Makefile.config missing. *)
       "build-base m4 perl pkgconf autoconf git curl bash patch tar xz zstd \
-       rsync sudo coreutils ca-certificates linux-headers openssl-dev zlib-dev \
-       sqlite-dev gmp-dev libffi-dev libev-dev capnproto capnproto-dev \
-       ncurses-dev"
+       rsync sudo coreutils ca-certificates linux-headers"
   | `Apt ->
       "build-essential m4 perl pkg-config autoconf git curl bash patch tar \
-       xz-utils zstd rsync sudo ca-certificates libssl-dev zlib1g-dev \
-       libsqlite3-dev libgmp-dev libffi-dev libev-dev capnproto libcapnp-dev \
-       libncurses-dev"
+       xz-utils zstd rsync sudo ca-certificates"
   | `Yum ->
       "gcc gcc-c++ make m4 perl pkgconf-pkg-config autoconf git curl bash \
-       patch tar xz zstd rsync sudo ca-certificates findutils which diffutils \
-       openssl-devel zlib-devel sqlite-devel gmp-devel libffi-devel \
-       libev-devel capnproto capnproto-devel ncurses-devel"
+       patch tar xz zstd rsync sudo ca-certificates findutils which diffutils"
   | _ -> failwith "unsupported package manager"
-
-(* -- Hardcoded depexts for common opam [conf-*] probe packages ---------- *)
-
-(* Apache Arrow lives in third-party repos rather than each distro's
-   default set. We try its install per https://arrow.apache.org/install/
-   on a best-effort basis: distros where Apache hasn't yet published a
-   matching repo / package (Ubuntu 25.10 questing as of late 2025, for
-   example) skip [libarrow-dev] gracefully and let [conf-arrow]'s
-   build log surface the real error if any package actually needs it.
-
-   Apt: Apache ships an apt-source deb that configures their repo +
-   signing key; we wget it (probing both the [debian] and [ubuntu]
-   path components), install it, refresh, then [apt-get install
-   libarrow-dev]. Wrapping the whole sequence in [if … then … else]
-   means a missing apt-source deb (404) doesn't fail the [docker
-   build].
-
-   Yum/Apk: just attempt the install; on success it sticks, on
-   failure we log and move on. *)
-let arrow_install_cmd = function
-  | `Apt ->
-      "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-       --no-install-recommends ca-certificates lsb-release wget gpg && \
-       codename=$(lsb_release --codename --short) && distro=$(lsb_release --id \
-       --short | tr 'A-Z' 'a-z') && \
-       url=\"https://apache.jfrog.io/artifactory/arrow/$distro/apache-arrow-apt-source-latest-$codename.deb\" \
-       && if wget -q -O /tmp/arrow.deb \"$url\"; then apt-get install -y \
-       --no-install-recommends /tmp/arrow.deb && rm /tmp/arrow.deb && apt-get \
-       update -qq && apt-get install -y --no-install-recommends libarrow-dev \
-       || echo \"apt-get install libarrow-dev failed; conf-arrow probe will \
-       fail if needed\"; else echo \"Apache Arrow apt-source not yet published \
-       for $distro/$codename ($url 404); libarrow-dev will be unavailable\"; \
-       fi && rm -rf /var/lib/apt/lists/*"
-  | `Yum ->
-      "dnf install -y libarrow-devel || echo \"libarrow-devel not available on \
-       this distro; conf-arrow probe will fail if needed\""
-  | `Apk ->
-      "apk add --no-cache apache-arrow-dev || echo \"apache-arrow-dev not in \
-       this Alpine release's community repo; conf-arrow probe will fail if \
-       needed\""
-  | _ -> ""
-
-(* Hardcoded -dev packages that the upstream [compute_overlay_depexts]
-   pre-pass tends to miss — either because the conf-* probe package
-   isn't part of any overlay's solved root closure, or because the
-   solve fails silently and the union ends up empty. Listing them
-   inline keeps the corresponding [conf-*] probe packages
-   (conf-blosc, conf-gdal, conf-libcurl, conf-libpcre, conf-pam,
-   conf-binaryen, conf-zstd, conf-oniguruma, conf-netsnmp) compiling
-   without the user having to chase them down one at a time. Arrow
-   is handled separately because it lives in a third-party repo. *)
-let extra_depexts = function
-  | `Apk ->
-      "binaryen blosc-dev curl-dev gdal-dev linux-pam-dev net-snmp-dev \
-       oniguruma-dev pcre2-dev zstd-dev"
-  | `Apt ->
-      "binaryen libblosc-dev libcurl4-openssl-dev libgdal-dev libonig-dev \
-       libpam0g-dev libpcre2-dev libsnmp-dev libzstd-dev"
-  | `Yum ->
-      "binaryen blosc-devel gdal-devel libcurl-devel libzstd-devel \
-       net-snmp-devel oniguruma-devel pam-devel pcre2-devel"
-  | _ -> ""
-
-(* Best-effort post-install commands run AFTER the main package install
-   line. Currently just the Arrow attempt. *)
-let post_install_cmds mgr =
-  let cmd = arrow_install_cmd mgr in
-  if cmd = "" then [] else [ cmd ]
 
 (* -- Distro → opam platform variables ----------------------------------- *)
 
@@ -230,15 +160,10 @@ let distro_stage ?(overlay_depexts = []) d =
       release_repo release_repo
   in
   let base = build_depexts mgr in
-  let extra = extra_depexts mgr in
-  let combined_base = if extra = "" then base else base ^ " " ^ extra in
-  (* Dedup against the base + hardcoded-extras list: overlay depexts
-     often repeat libs already covered (gmp-devel, libev-devel, …)
-     and a duplicated install command is both ugly and wastes
-     [apt-get update] / [dnf metadata] time on some package
-     managers. *)
+  (* Dedup overlay depexts against the bootstrap toolchain so the
+     install command doesn't list e.g. [git] twice. *)
   let base_words =
-    String.split_on_char ' ' combined_base |> List.filter (fun s -> s <> "")
+    String.split_on_char ' ' base |> List.filter (fun s -> s <> "")
   in
   let overlay_extras =
     overlay_depexts
@@ -247,25 +172,13 @@ let distro_stage ?(overlay_depexts = []) d =
   in
   let combined =
     match overlay_extras with
-    | [] -> combined_base
-    | xs -> combined_base ^ " " ^ String.concat " " xs
+    | [] -> base
+    | xs -> base ^ " " ^ String.concat " " xs
   in
-  let stage_init =
-    DF.comment "=== Stage: %s ===" human
-    @@ DF.from ~alias ~tag img
-    @@ DF.run "%s" (install_cmd mgr combined)
-  in
-  (* Best-effort post-install RUNs — currently just Apache Arrow,
-     which lives in a third-party repo and may not be published for
-     every distro release yet. Each command MUST handle its own
-     failures so a 404 on a not-yet-published apt-source deb doesn't
-     fail the whole [docker build]. *)
-  let stage_with_post =
-    List.fold_left
-      (fun acc cmd -> acc @@ DF.run "%s" cmd)
-      stage_init (post_install_cmds mgr)
-  in
-  stage_with_post @@ DF.run "%s" fetch_oi @@ DF.workdir "/work"
+  DF.comment "=== Stage: %s ===" human
+  @@ DF.from ~alias ~tag img
+  @@ DF.run "%s" (install_cmd mgr combined)
+  @@ DF.run "%s" fetch_oi @@ DF.workdir "/work"
 
 (* -- Top-level Dockerfiles ---------------------------------------------- *)
 

@@ -160,9 +160,10 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
      [Overlay_all] expansion; we mirror that here by treating every
      package in [v2/<handle>/packages/] as its own depext source — no
      solve. Without this, an overlay like [@oxcaml] (no [x-root-packages]
-     set) contributes zero depexts to the docker pre-install, and the
-     only thing covering the gap is [registry_docker.ml]'s hardcoded
-     [extra_depexts]. *)
+     set) contributes zero depexts to the docker pre-install, and there
+     is nothing left in [registry_docker.ml] to cover the gap (the
+     hardcoded [extra_depexts] list has moved into the opam packages'
+     own [depexts:] fields). *)
 type overlay_input =
   | Solve_groups of { handle : string; groups : string list list }
   | Walk_clone of { handle : string }

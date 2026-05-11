@@ -77,10 +77,8 @@ let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
           (Distro.tag_of_distro (resolved :> Distro.t))
   in
   let base = Registry_docker.build_depexts mgr in
-  let extras = Registry_docker.extra_depexts mgr in
   let combined =
-    let s = if extras = "" then base else base ^ " " ^ extras in
-    let words = String.split_on_char ' ' s |> List.filter (( <> ) "") in
+    let words = String.split_on_char ' ' base |> List.filter (( <> ) "") in
     let extra_words =
       List.filter (fun p -> not (List.mem p words)) depexts
       |> List.sort_uniq String.compare
@@ -367,9 +365,7 @@ let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
           distro_label
   in
   let base = Registry_docker.build_depexts mgr in
-  let extras = Registry_docker.extra_depexts mgr in
-  let combined = if extras = "" then base else base ^ " " ^ extras in
-  let install = Registry_docker.install_cmd mgr combined in
+  let install = Registry_docker.install_cmd mgr base in
   let build_prefix =
     if no_cache_mount then "RUN "
     else
@@ -505,10 +501,8 @@ let render_local_dockerfile ~distro ~oi_version_default ~registry_default
           (Distro.tag_of_distro (resolved :> Distro.t))
   in
   let base = Registry_docker.build_depexts mgr in
-  let extras = Registry_docker.extra_depexts mgr in
   let combined =
-    let s = if extras = "" then base else base ^ " " ^ extras in
-    let words = String.split_on_char ' ' s |> List.filter (( <> ) "") in
+    let words = String.split_on_char ' ' base |> List.filter (( <> ) "") in
     let extra_words =
       List.filter (fun p -> not (List.mem p words)) depexts
       |> List.sort_uniq String.compare
@@ -618,9 +612,9 @@ COPY . /work
 FROM base AS runtime
 COPY --from=build /dist/ /usr/local/
 |}
-    distro_label project_label distro_label recipe_node_count
-    (List.length shas) oi_version_default registry_default img image_tag
-    install Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix sha_block
+    distro_label project_label distro_label recipe_node_count (List.length shas)
+    oi_version_default registry_default img image_tag install
+    Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix sha_block
     build_prefix
 
 let emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session

@@ -278,9 +278,7 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
               match dist with
               | None -> ()
               | Some dir ->
-                  let install_root =
-                    cwd / "_build" / "install" / "default"
-                  in
+                  let install_root = cwd / "_build" / "install" / "default" in
                   let extra =
                     Dist.collect_install ~root:install_root ~dst:dir
                   in
@@ -291,13 +289,10 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
                   in
                   let share_count =
                     List.length
-                      (List.filter
-                         (fun (sub, _, _) -> sub = "share")
-                         extra)
+                      (List.filter (fun (sub, _, _) -> sub = "share") extra)
                   in
                   if bin_sbin <> [] || share_count > 0 then begin
-                    Fmt.pr "@.%a (--dist):@." Oi.Style.header_string
-                      "Dist tree";
+                    Fmt.pr "@.%a (--dist):@." Oi.Style.header_string "Dist tree";
                     List.iter
                       (fun (_, n, d) ->
                         Fmt.pr "  %s %a %s@." n Oi.Style.dim_string "→" d)

@@ -85,12 +85,10 @@ val write_file : string -> string -> unit
     needs the same base build depexts and install command. *)
 
 val build_depexts : [ `Apk | `Apt | `Yum ] -> string
-(** Space-separated base depext list for [pkg-config] / [m4] / [-dev] libs that
-    nearly every opam package wants. Tailored per package manager. *)
-
-val extra_depexts : [ `Apk | `Apt | `Yum ] -> string
-(** Hardcoded depexts for common opam [conf-*] probe packages. May be the empty
-    string when the base set already covers the distro. *)
+(** Space-separated bootstrap toolchain (compiler, [pkg-config], [m4], [git],
+    [curl], …) needed before any opam-driven build can run. Library [-dev]
+    depexts live in the opam packages' own [depexts:] and flow in via
+    [compute_overlay_depexts] — they are NOT listed here. *)
 
 val install_cmd : [ `Apk | `Apt | `Yum ] -> string -> string
 (** [install_cmd mgr pkgs] is the full shell command to install [pkgs] under
