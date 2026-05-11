@@ -406,9 +406,9 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
       | Some r when r.failed = 0 && r.skipped = 0 -> ()
       | Some r ->
           let pp_fail (f : D10ir.Direct.failure) =
-            Fmt.str "%s.%s @ %s — see %s" f.package.name f.package.version
+            Fmt.str "%s.%s @ %s: %s — see %s" f.package.name f.package.version
               (D10ir.Direct.phase_to_string f.phase)
-              f.log_path
+              f.error f.log_path
           in
           if r.failures <> [] then begin
             let summary = List.map pp_fail r.failures |> String.concat "\n  " in

@@ -69,6 +69,7 @@ val emit :
   distro:Distro.t ->
   oi_version:string ->
   no_cache_mount:bool ->
+  obuilder:bool ->
   output:string option ->
   targets:string list ->
   unit

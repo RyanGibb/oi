@@ -129,8 +129,7 @@ let node_jsont : node Jsont.t =
       n.substs)
   |> Object.mem "subst_vars" (list string) ~dec_absent:[]
        ~enc:(fun (n : node_t) -> n.subst_vars)
-  |> Object.mem "overlay" (some overlay_jsont) ~dec_absent:None
-       ~enc:(fun (n : node_t) -> n.overlay)
+  |> Object.opt_mem "overlay" overlay_jsont ~enc:(fun (n : node_t) -> n.overlay)
   |> Object.mem "opam_file_sha256" string ~dec_absent:""
        ~enc:(fun (n : node_t) -> n.opam_file_sha256)
   |> Object.finish

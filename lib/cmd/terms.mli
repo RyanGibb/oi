@@ -7,7 +7,16 @@
     they don't appear elsewhere. *)
 
 val log : unit Cmdliner.Term.t
-(** Wires [Fmt_cli], [Logs_cli], and the progress-aware logs reporter. *)
+(** Wires [Fmt_cli], [Logs_cli], and the progress-aware logs reporter. Under
+    [CI=true] (or any other truthy [CI=…] value), forces ANSI off and bumps the
+    default log level from [Warning] to [Info] unless the user passed [--color]
+    / [--verbosity] explicitly. *)
+
+val in_ci : unit -> bool
+(** [true] when the process appears to be running under a CI runner — checks
+    [$CI] for a truthy value (anything other than empty, ["false"], or ["0"]).
+    Used by other commands to surface more output (e.g. tailing failed-build
+    logs at the end of [oi build]). *)
 
 val data_dir : string Cmdliner.Term.t
 (** [--data-dir DIR]. Honours [$OI_DATA_DIR] then [$XDG_DATA_HOME] then

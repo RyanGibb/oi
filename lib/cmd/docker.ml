@@ -101,7 +101,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
 
 let cmd =
   let run (c : Terms.common) refresh registry oi_version no_recipe
-      no_cache_mount test_mode all distro src_context output targets =
+      no_cache_mount obuilder test_mode all distro src_context output targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.fs;
@@ -126,6 +126,11 @@ let cmd =
     if targets <> [] && test_mode then
       Oi.Error.config_error
         "oi docker: --test and positional TARGET(s) are mutually exclusive";
+    if obuilder && (all || test_mode || no_recipe || targets = []) then
+      Oi.Error.config_error
+        "oi docker --obuilder: only supported with positional TARGET(s) and \
+         without --no-recipe/--all/--test (project-mode obuilder isn't wired \
+         up yet).";
     let cwd_s, _ = Workspace.resolved_cwd fs in
     if all then
       let dir = Stdlib.Option.value output ~default:cwd_s in
@@ -138,7 +143,7 @@ let cmd =
       else
         Docker_target.emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
           ~session:http_session ~platform ~refresh ~registry ~distro ~oi_version
-          ~no_cache_mount ~output ~targets
+          ~no_cache_mount ~obuilder ~output ~targets
     else if test_mode then
       emit_project ~cmd:"oi test" ~suffix:"test" ~tag_label:"my-project-test"
         ~generator:"oi docker --test" ~cwd_s ~distro ~output
@@ -245,6 +250,18 @@ let cmd =
              with $(b,EXDEV)."
           [ "no-cache-mount" ])
   in
+  let obuilder =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Emit an obuilder spec (s-expression) instead of a Dockerfile, \
+             same multi-stage strategy. Output filename becomes \
+             $(b,oi-<slug>.<distro>.spec). For now only the target-mode flow \
+             ($(i,TARGET) positional) is supported; combining with \
+             $(b,--all)/$(b,--test)/$(b,--no-recipe)/project-mode errors out."
+          [ "obuilder" ])
+  in
   let info =
     Cmd.info "docker" ~doc:"Generate Dockerfiles for project builds and CI."
       ~man:
@@ -273,5 +290,5 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.common $ Terms.refresh $ Terms.registry $ oi_version
-      $ no_recipe $ no_cache_mount $ test_mode $ all $ distro $ src_context
-      $ output $ targets)
+      $ no_recipe $ no_cache_mount $ obuilder $ test_mode $ all $ distro
+      $ src_context $ output $ targets)

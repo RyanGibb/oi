@@ -139,7 +139,38 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       | R.Skipped { msg; _ } when String.contains msg '\n' ->
           Log.info (fun m -> m "%s: %s" target msg)
       | _ -> ())
-    rows
+    rows;
+  (* CI tail dump: any decent CI UI swallows the log files that
+     [print_build_summary] just pointed at, so under [CI=…] we inline
+     the last 100 lines of each failed package's log right into the
+     transcript. Same content [Oi.Audit] would surface in [oi audit
+     show], but with zero clicks. *)
+  if Terms.in_ci () then begin
+    let seen : (string, unit) Hashtbl.t = Hashtbl.create 16 in
+    List.iter
+      (fun (_target, _handle, r) ->
+        match r with
+        | R.Failed { per_pkg_logs; _ } ->
+            List.iter
+              (fun (pkg, log_path) ->
+                if
+                  log_path <> ""
+                  && (not (Hashtbl.mem seen log_path))
+                  && Sys.file_exists log_path
+                then begin
+                  Hashtbl.replace seen log_path ();
+                  match Oi.Audit.tail_of_file ~lines:100 ~path:log_path () with
+                  | None -> ()
+                  | Some tail ->
+                      Oi.Say.newline ();
+                      Fmt.pr "%a %s %a@." Oi.Style.error_string "── tail" pkg
+                        Oi.Style.dim_string (Fmt.str "(%s)" log_path);
+                      Fmt.pr "%s@." tail
+                end)
+              per_pkg_logs
+        | _ -> ())
+      rows
+  end
 
 (* -- Overlay-wide depext helpers ---------------------------------------- *)
 
@@ -1258,7 +1289,7 @@ let cmd =
                       in
                       Digest.to_hex (Digest.string key)
                     in
-                    let tail = Oi.Audit.tail_of_file ~path:log_path in
+                    let tail = Oi.Audit.tail_of_file ~path:log_path () in
                     let now = Unix.gettimeofday () in
                     let context : Oi.Audit.context =
                       {

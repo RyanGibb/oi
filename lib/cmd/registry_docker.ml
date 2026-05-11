@@ -108,6 +108,7 @@ let oi_builder_stage ~src_context =
          ("OPAMYES", "true");
          ("OPAMCONFIRMLEVEL", "unsafe-yes");
          ("OI_STATIC", "1");
+         ("CI", "true");
        ]
   (* The ocaml/opam image's [default] repo points at a baked-in local
      clone (git+file:///home/opam/opam-repository), so `opam update
@@ -177,6 +178,7 @@ let distro_stage ?(overlay_depexts = []) d =
   in
   DF.comment "=== Stage: %s ===" human
   @@ DF.from ~alias ~tag img
+  @@ DF.env [ ("CI", "true") ]
   @@ DF.run "%s" (install_cmd mgr combined)
   @@ DF.run "%s" fetch_oi @@ DF.workdir "/work"
 

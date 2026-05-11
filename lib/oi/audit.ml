@@ -80,7 +80,7 @@ let default_context () =
 
 (* -- Tail extraction ------------------------------------------------------ *)
 
-let tail_of_file ~path =
+let tail_of_file ?(lines = n_tail_lines) ~path () =
   if not (Sys.file_exists path) then None
   else
     try
@@ -92,16 +92,16 @@ let tail_of_file ~path =
           let buf_size = min len 64_000 in
           seek_in ic (len - buf_size);
           let s = really_input_string ic buf_size in
-          let lines = String.split_on_char '\n' s in
+          let split = String.split_on_char '\n' s in
           let tail =
-            match lines with
-            | [] | [ _ ] -> lines
+            match split with
+            | [] | [ _ ] -> split
             | _ :: rest when String.length s = buf_size && len > buf_size ->
                 rest
-            | _ -> lines
+            | _ -> split
           in
           let n = List.length tail in
-          let drop = max 0 (n - n_tail_lines) in
+          let drop = max 0 (n - lines) in
           let kept = tail |> List.to_seq |> Seq.drop drop |> List.of_seq in
           Some (String.concat "\n" kept))
     with _ -> None

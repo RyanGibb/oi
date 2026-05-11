@@ -157,9 +157,55 @@ let ensure_dune_project_version ~build_dir ~opam_version ~url_opt =
    not all available in BSD tar, and silently falling back changes
    the archive bytes — which would break the cross-machine
    portability invariant the IR relies on. *)
+(* Parse [.gitmodules] for submodule paths so they can be excluded
+   from the archive. opam's git fetch recurses submodules, which is
+   fine for the build (the vendored copy ends up on disk) but breaks
+   anything that also installs the submodule's library as a regular
+   opam dep — dune sees two libraries with the same name and aborts
+   (ocluster vendoring obuilder is the motivating case). Release
+   tarballs ship with empty submodule dirs, so this exclusion makes
+   git-pin bakes byte-equivalent to the release-tarball path.
+
+   Format: GNU-style [.gitmodules] with [path = X] keys. We only need
+   the [path] values; anything else (url, branch, …) is ignored. *)
+let submodule_paths ~src_dir =
+  let gm = Filename.concat src_dir ".gitmodules" in
+  if not (Sys.file_exists gm) then []
+  else
+    try
+      let ic = open_in gm in
+      Fun.protect
+        ~finally:(fun () -> close_in_noerr ic)
+        (fun () ->
+          let rec loop acc =
+            match input_line ic with
+            | exception End_of_file -> List.rev acc
+            | line ->
+                let line = String.trim line in
+                let acc =
+                  match String.index_opt line '=' with
+                  | None -> acc
+                  | Some i ->
+                      let k = String.trim (String.sub line 0 i) in
+                      let v =
+                        String.trim
+                          (String.sub line (i + 1) (String.length line - i - 1))
+                      in
+                      if k = "path" && v <> "" then v :: acc else acc
+                in
+                loop acc
+          in
+          loop [])
+    with Sys_error _ -> []
+
 let make_tar_zst ~proc_mgr ~src_dir ~dst_path =
+  let submodule_excludes =
+    List.map (fun p -> "./" ^ p) (submodule_paths ~src_dir)
+  in
   let exclude_args =
-    List.concat_map (fun p -> [ "--exclude"; p ]) exclude_patterns
+    List.concat_map
+      (fun p -> [ "--exclude"; p ])
+      (exclude_patterns @ submodule_excludes)
   in
   let tar = match Sys.getenv_opt "TAR" with Some s -> s | None -> "tar" in
   let argv =

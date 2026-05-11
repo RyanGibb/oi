@@ -101,6 +101,8 @@ val default_context : unit -> context
     [project] all left [None]. Producers fill in those three fields locally
     before calling {!append}. *)
 
-val tail_of_file : path:string -> string option
-(** Last ~150 lines of [path], or [None] when the file is missing. Used to embed
-    the failure tail directly in the audit event. *)
+val tail_of_file : ?lines:int -> path:string -> unit -> string option
+(** [tail_of_file ?lines ~path ()] returns the last [lines] lines of [path]
+    (default: 150), or [None] when the file is missing. Used to embed the
+    failure tail directly in the audit event or to inline the tail of a
+    failed-build log into a CI transcript. *)

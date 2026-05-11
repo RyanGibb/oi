@@ -246,9 +246,22 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
       Solver.Ctx.create ~prefix:build_prefix ~packages_dirs:pkgs_dir
         ~conf:group_conf ?toolchain:tc_ctx ()
     in
+    (* Pull [with-test] deps for the group's named roots into the solve
+       closure. The build closure may contain in-tree test stanzas
+       (package-attributed dune libraries inside opam archives) whose
+       compilation needs the test deps in scope. [Plan.resolve_node]
+       still resolves build commands with [~test:false], so [@runtest]
+       never lands in the dune invocation — only [oi test] runs it
+       explicitly afterwards.
+
+       Scope is the roots only (not every package in [packages_dirs]):
+       expanding to the universe pulls in transitive [with-test] deps
+       like [ppx_deriving_yojson]'s [yojson<3] constraint that
+       conflict with toolchain versions. *)
+    let test_for_roots = OpamPackage.Name.Set.of_list names in
     match
-      Solver.solve ~fs:env.fs ~cache_root gctx ~packages_dirs:pkgs_dir
-        ~constraints:group_constraints names
+      Solver.solve ~test:test_for_roots ~fs:env.fs ~cache_root gctx
+        ~packages_dirs:pkgs_dir ~constraints:group_constraints names
     with
     | Error msg ->
         let log_path =
@@ -351,6 +364,30 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
                 }
               else
                 begin try
+                  (* Pins and local trees don't carry [x-d10-archive] in
+                     their opam files — that field is only written by
+                     [oi repo bump]. Recipe emit requires an archive sha
+                     for every package, so we inline-bake those here:
+                     fetch + patch + tar, hash the result, and patch the
+                     sha back into the [package_plan] before emit. Bumped
+                     reporepo entries ([overlay = Some]) keep the strict
+                     "must come from a bump pass" behaviour. *)
+                  let exec_plan =
+                    let bake_one (p : Plan.package_plan) =
+                      match (p.d10_archive, p.overlay) with
+                      | None, None ->
+                          let built =
+                            Archive_builder.build ~proc_mgr:env.proc_mgr
+                              ~fs:env.fs ~d10 ~cache_root p
+                          in
+                          { p with d10_archive = Some built.sha256 }
+                      | _ -> p
+                    in
+                    {
+                      exec_plan with
+                      packages = List.map bake_one exec_plan.packages;
+                    }
+                  in
                   let recipe =
                     Recipe_emitter.emit ~d10
                       ~cli_invocation:(Array.to_list Sys.argv) ~toolchain_name
@@ -428,7 +465,7 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
    shape changes in a way that breaks Marshal compatibility. Folded into
    the cache key so a stale entry produces a key miss rather than a
    crash on [Marshal.from_channel]. *)
-let cache_schema = "v1"
+let cache_schema = "v2"
 let log_src = Logs.Src.create "oi.build_pipeline.cache"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)

@@ -2,7 +2,35 @@ open Cmdliner
 
 let ( / ) = Filename.concat
 
+(* True when running under a CI runner. Every major service
+   ([Github Actions], [GitLab CI], [CircleCI], [Travis], etc.) sets
+   [CI=true]; [oi docker]-generated images also set it explicitly so
+   the in-container [oi build] picks up the same defaults. We treat any
+   non-empty value other than literal ["false"] / ["0"] as opt-in to
+   keep the check terse and forgiving. *)
+let in_ci () =
+  match Sys.getenv_opt "CI" with
+  | None -> false
+  | Some s ->
+      let s = String.lowercase_ascii (String.trim s) in
+      s <> "" && s <> "false" && s <> "0"
+
 let setup_log style_renderer level verbose_http =
+  (* CI defaults: no ANSI by default (logs end up in [actions]/[gitlab]
+     UI buffers that mangle escape sequences), and bump the default log
+     level from [Warning] to [Info] so the per-phase narration shows up
+     in the CI transcript. Explicit user flags still win — passing
+     [--color=always] or [--verbosity=error] under CI is honoured. *)
+  let style_renderer =
+    match style_renderer with
+    | None when in_ci () -> Some `None
+    | other -> other
+  in
+  let level =
+    match (level, in_ci ()) with
+    | (None | Some Logs.Warning), true -> Some Logs.Info
+    | _ -> level
+  in
   Fmt_tty.setup_std_outputs ?style_renderer ();
   Logs.set_level level;
   (* Wrap [Logs] emission with both [Tty.Progress.logs_reporter]
