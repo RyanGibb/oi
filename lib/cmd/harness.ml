@@ -92,7 +92,8 @@ let with_error_handling f =
     ->
       eprintf "Interrupted.";
       exit 130
-  | (Oi.Error.E _ | Failure _) as exn -> exit_for_exn exn
+  | (Oi.Error.E _ | Failure _ | Eio.Io (D10.Sysops.Cmd_failed _, _)) as exn ->
+      exit_for_exn exn
   | Eio.Exn.Multiple exns -> (
       match !error_format with
       | Json ->

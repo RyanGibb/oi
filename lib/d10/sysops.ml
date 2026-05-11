@@ -11,6 +11,47 @@ type pm = [ `Generic ] Eio.Process.mgr_ty Eio.Resource.t
 type net = [ `Generic ] Eio.Net.ty Eio.Resource.t
 type clk = float Eio.Time.clock_ty Eio.Resource.t
 
+(* Structured error for non-zero subprocess exits.
+
+   Extends [Eio.Exn.err] (rather than defining a fresh [exception])
+   because every subprocess this module spawns goes through [Eio.Process]
+   anyway, so the failure mode is morally an Eio I/O error — and the
+   Eio convention gives us [Eio.Exn.add_context] for layering "while
+   running cp -Rfl from X to Y" annotations, and [Eio.Exn.register_pp]
+   wires into the same [Printexc] printer that already handles
+   [Eio.Io _]. Callers pattern-match on
+   [Eio.Io (Cmd_failed _, _)].
+
+   The previous [Fmt.failwith "command exited N: ..."] tunnel through
+   bare [Failure] was indistinguishable from any other [Failure] in
+   the system, and silently disarmed catch sites that meant to retry
+   only on subprocess failure (e.g. the [cp -Rfl] hardlink-pass
+   fallback in [link_tree], which narrowed to [Eio.Exn.Io] and so
+   never fired). *)
+type Eio.Exn.err +=
+  | Cmd_failed of {
+      argv : string list;
+      status : [ `Exited of int | `Signaled of int ];
+      output : string;
+    }
+
+let () =
+  Eio.Exn.register_pp (fun ppf -> function
+    | Cmd_failed { argv; status; output } ->
+        let how =
+          match status with
+          | `Exited n -> Fmt.str "command exited %d" n
+          | `Signaled n -> Fmt.str "command killed by signal %d" n
+        in
+        Fmt.pf ppf "%s: %s" how (String.concat " " argv);
+        if output <> "" then
+          Fmt.pf ppf "@,--- output ---@,%s" (String.trim output);
+        true
+    | _ -> false)
+
+let cmd_failed ~argv ~status ~output =
+  Eio.Exn.create (Cmd_failed { argv; status; output })
+
 type t = {
   proc_mgr : pm;
   fs : Eio.Fs.dir_ty Eio.Path.t;
@@ -87,9 +128,10 @@ let run_quiet t cmd =
   | `Exited n ->
       let output = String.trim (Buffer.contents buf) in
       if output <> "" then Log.debug (fun m -> m "%s" output);
-      Fmt.failwith "command exited %d: %s" n (String.concat " " cmd)
+      raise (cmd_failed ~argv:cmd ~status:(`Exited n) ~output)
   | `Signaled n ->
-      Fmt.failwith "command killed by signal %d: %s" n (String.concat " " cmd)
+      let output = String.trim (Buffer.contents buf) in
+      raise (cmd_failed ~argv:cmd ~status:(`Signaled n) ~output)
 
 let run_capture t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
@@ -195,7 +237,7 @@ let file_exists path =
 let copy_tree t ~src ~dst =
   let src_s = native src and dst_s = native dst in
   try run_quiet t [ "cp"; "-ac"; src_s; dst_s ]
-  with Eio.Exn.Io _ ->
+  with Eio.Io (Cmd_failed _, _) ->
     Eio.Path.rmtree ~missing_ok:true dst;
     run_quiet t [ "cp"; "-a"; src_s; dst_s ]
 
@@ -214,8 +256,14 @@ let link_tree t ~src ~dst =
      Fall back to a real archive-mode copy ([cp -Rfa]) so the build
      prefix still gets a complete tree. Slower for a one-time fill but
      unblocks every cross-mount setup we've seen. *)
+  (* [Cmd_failed] is what [run_quiet] raises on a non-zero exit (now
+     wrapped in [Eio.Io]); the earlier wildcard [Eio.Exn.Io] catch in
+     fact ran against [Failure], not an Eio error, so it never fired
+     and the build died on the first cross-filesystem layer restore
+     (BuildKit cache mount -> image overlay -> [EXDEV] from
+     [cp -Rfl]). *)
   try run_quiet t [ "cp"; "-Rfl"; src_s ^ "/."; dst_s ^ "/" ]
-  with Eio.Exn.Io _ ->
+  with Eio.Io (Cmd_failed _, _) ->
     Log.debug (fun m ->
         m "link_tree %s -> %s: hardlink pass failed; falling back to copy" src_s
           dst_s);
@@ -239,8 +287,9 @@ let run_inherit t cmd =
       let child = Eio.Process.spawn ~sw t.proc_mgr ~stdout ~stderr cmd in
       match Eio.Process.await child with
       | `Exited 0 -> ()
-      | `Exited n -> Fmt.failwith "%s exited %d" (List.hd cmd) n
-      | `Signaled n -> Fmt.failwith "%s killed by signal %d" (List.hd cmd) n)
+      | `Exited n -> raise (cmd_failed ~argv:cmd ~status:(`Exited n) ~output:"")
+      | `Signaled n ->
+          raise (cmd_failed ~argv:cmd ~status:(`Signaled n) ~output:""))
 
 module Cmd = struct
   let run t cmd = run_quiet t cmd

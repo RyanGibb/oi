@@ -13,6 +13,21 @@
 type t
 (** System operations context with pre-resolved tool paths. *)
 
+type Eio.Exn.err +=
+  | Cmd_failed of {
+      argv : string list;
+      status : [ `Exited of int | `Signaled of int ];
+      output : string;
+    }
+        (** Raised (wrapped in [Eio.Io (_, ctx)]) by every subprocess wrapper in
+            this module when the child exits non-zero or is killed by a signal.
+            [argv] is the full command vector and [output] is whatever was
+            captured on stdout/stderr (empty for the inherit variant). Callers
+            that want to retry only on a subprocess failure — e.g. [link_tree]'s
+            [EXDEV] fallback — should pattern-match [Eio.Io (Cmd_failed _, _)].
+            Use [Eio.Exn.add_context] to layer higher-level context onto the
+            raised exception. *)
+
 val create :
   ?stdout:_ Eio.Flow.sink ->
   ?stderr:_ Eio.Flow.sink ->
@@ -104,8 +119,9 @@ end
 
 module Cmd : sig
   val run : t -> string list -> unit
-  (** [run t args] executes [args] as a subprocess, raising [Failure] on
-      non-zero exit. Stdout and stderr are captured silently. *)
+  (** [run t args] executes [args] as a subprocess, raising
+      [Eio.Io (Cmd_failed _, _)] on non-zero exit or signal. Stdout and stderr
+      are captured silently. *)
 
   val run_out : t -> string list -> string
   (** [run_out t args] executes [args] and returns its trimmed stdout.

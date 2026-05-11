@@ -2,16 +2,24 @@
 
 (rule
  (target link_flags.sexp)
- (deps (env_var OI_STATIC))
- (enabled_if (= %{env:OI_STATIC=} 1))
- (action (write-file %{target} "(-cclib -static)")))
+ (deps
+  (env_var OI_STATIC))
+ (enabled_if
+  (= %{env:OI_STATIC=} 1))
+ (action
+  (write-file %{target} "(-cclib -static)")))
 
 (rule
  (target link_flags.sexp)
- (deps (env_var OI_STATIC))
- (enabled_if (<> %{env:OI_STATIC=} 1))
- (action (write-file %{target} "()")))
+ (deps
+  (env_var OI_STATIC))
+ (enabled_if
+  (<> %{env:OI_STATIC=} 1))
+ (action
+  (write-file %{target} "()")))
 
 (env
  (release
-  (flags (:standard (:include link_flags.sexp)))))
+  (flags
+   (:standard
+    (:include link_flags.sexp)))))

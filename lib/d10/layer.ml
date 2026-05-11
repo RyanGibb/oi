@@ -268,8 +268,9 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
           try
             Sysops.Tar.extract c.sys ~archive:tmp_file ~dst:staging_dir ();
             true
-          with Failure msg ->
-            Logs.warn (fun m -> m "Failed to extract %s: %s" hash msg);
+          with Eio.Io (Sysops.Cmd_failed _, _) as exn ->
+            Logs.warn (fun m ->
+                m "Failed to extract %s: %s" hash (Printexc.to_string exn));
             false
         in
         cleanup_tmp ();
