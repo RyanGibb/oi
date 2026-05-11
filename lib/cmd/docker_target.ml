@@ -264,6 +264,89 @@ let solve_targets ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
   in
   Oi.Build_pipeline.solve pipeline_env req
 
+(* Solve the cwd project (no positional target): mirrors the surface area
+   {!Sync.run} uses, trimmed to what's needed for SHA extraction. The
+   merged d10ir plan it produces feeds the prefetch step in the
+   generated Dockerfile, exactly like {!solve_targets} does for the
+   non-local path. *)
+let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
+    ~session ~platform ~refresh ~cwd =
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+  let project = Oi.Project.load ~fs cwd in
+  let extra_cli, url_project =
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh []
+  in
+  if project.deps = [] && extra_cli = [] && url_project.roots = [] then
+    Oi.Error.config_error "oi docker: no *.opam files in %s" cwd;
+  let conf =
+    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
+  let candidate_overlays = project.overlays @ url_project.overlays in
+  let toolchain =
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:false
+      ~override:None ~handles:candidate_overlays ()
+  in
+  let conf, _ = Oi.Pipeline.solver_inputs toolchain conf in
+  let project_overlays =
+    Oi.Pipeline.filter_compatible_overlays
+      ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
+  in
+  let all_extras =
+    Target.merge_extras
+      ~cli:(Target.cli_extra_repos ~fs ~sys ?toolchain project_overlays)
+      ~project:(project.extra_repos @ url_project.extra_repos)
+  in
+  let extra_constraints = Oi.Project.Script.constraints extra_cli in
+  let extra_names =
+    List.filter_map
+      (fun (d : Oi.Project.Script.dep) ->
+        if OpamPackage.Name.to_string d.name = "ocaml" then None
+        else Some (OpamPackage.Name.to_string d.name))
+      extra_cli
+  in
+  let names =
+    project.deps @ extra_names @ url_project.roots
+    |> List.sort_uniq String.compare
+  in
+  let local_packages_dir =
+    match project.packages_dir with
+    | Some _ -> project.packages_dir
+    | None -> url_project.packages_dir
+  in
+  let pipeline_env : Oi.Build_pipeline.env =
+    {
+      proc_mgr;
+      fs;
+      clock;
+      sys;
+      os_key;
+      cache;
+      data_dir;
+      http_session = session;
+    }
+  in
+  let req : Oi.Build_pipeline.request =
+    {
+      targets = [ Group { tokens = names; handles = [] } ];
+      with_repos = project_overlays;
+      pins = project.pins @ url_project.pins;
+      extra_repos = all_extras;
+      constraints = extra_constraints;
+      toolchain_override = None;
+      toolchain;
+      conf;
+      local_packages_dir;
+      project_root = Some cwd;
+      (* Same rationale as {!solve_targets}: the container starts empty,
+         so [force_source] forces every dep into the d10ir plan even when
+         the host has a cached layer. *)
+      force_source = true;
+      refresh;
+    }
+  in
+  Oi.Build_pipeline.solve pipeline_env req
+
 (* Render a slim, source-independent Dockerfile that doesn't bake a recipe.
    At [docker build] time, [oi] itself solves the target against the registry
    and reporepo, fetches archives, and builds. The image is reproducible
@@ -401,6 +484,205 @@ let emit_no_recipe ~distro ~oi_version ~registry ~no_cache_mount ~output
   Oi.Say.step "Build with";
   Oi.Say.info "docker build -t oi-%s -f %s %s" slug dockerfile_path
     (Filename.dirname dockerfile_path)
+
+(* Render the project-mode Dockerfile. Same multi-stage shape as
+   {!render_dockerfile}, but the "target" is the cwd project itself:
+   we [COPY . /work], prefetch the dep closure's archives, then
+   [oi build --dist=/dist] (project mode is auto-detected from the
+   *.opam files we just copied in). The runtime stage is identical. *)
+let render_local_dockerfile ~distro ~oi_version_default ~registry_default
+    ~depexts ~shas ~project_label ~recipe_node_count ~no_cache_mount =
+  let resolved = Distro.resolve_alias distro in
+  let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
+  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
+  let mgr = Distro.package_manager (resolved :> Distro.t) in
+  let mgr =
+    match mgr with
+    | (`Apk | `Apt | `Yum) as m -> m
+    | _ ->
+        Oi.Error.config_error
+          "oi docker: distro %s uses an unsupported package manager"
+          (Distro.tag_of_distro (resolved :> Distro.t))
+  in
+  let base = Registry_docker.build_depexts mgr in
+  let extras = Registry_docker.extra_depexts mgr in
+  let combined =
+    let s = if extras = "" then base else base ^ " " ^ extras in
+    let words = String.split_on_char ' ' s |> List.filter (( <> ) "") in
+    let extra_words =
+      List.filter (fun p -> not (List.mem p words)) depexts
+      |> List.sort_uniq String.compare
+    in
+    String.concat " " (words @ extra_words)
+  in
+  let install = Registry_docker.install_cmd mgr combined in
+  let sha_block = String.concat "\n" shas in
+  let fetch_prefix =
+    if no_cache_mount then "RUN mkdir -p /cache/d10ir/archives\nRUN "
+    else
+      "RUN \
+       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives,sharing=locked \
+       \\\n"
+  in
+  let build_prefix =
+    if no_cache_mount then
+      "RUN mkdir -p /cache/d10ir/archives /cache/layers && \\\n    "
+    else
+      "RUN \
+       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives \\\n\
+      \    --mount=type=cache,target=/cache/layers,id=oi-layers \\\n\
+      \    "
+  in
+  Fmt.str
+    {|# syntax=docker/dockerfile:1.7
+#
+# Generated by `oi docker --distro=%s` (project mode).
+# Project:   %s
+# Distro:    %s
+# Nodes:     %d (dep-closure plan at generation time; container re-solves)
+# Archives:  %d unique
+#
+# A multi-stage build that mirrors `oi docker TARGET` but starts from
+# the *.opam files in the cwd. The dep closure is solved locally so the
+# Dockerfile can bake the archive sha list; the container then
+# [COPY]s the sources in, re-solves, and runs the project's dune build.
+# Drop the [Dockerfile.oi-project.<distro>] into the project root and:
+#   docker build -t <project>:<distro> -f <this-file> .
+
+ARG OI_VERSION=%s
+ARG OI_REGISTRY=%s
+ARG OI_REPOREPO_URL=
+
+# ---- 1. base distro + build depexts -----------------------------------------
+FROM %s:%s AS base
+ARG OI_VERSION
+RUN %s
+
+# ---- 2. install oi from the GitHub releases page ----------------------------
+RUN set -eux; \
+    arch=$(uname -m); \
+    tag="${OI_VERSION}"; \
+    if [ "$tag" = "latest" ]; then \
+        tag=$(curl -fsSL https://api.github.com/repos/avsm/oi/releases/latest \
+              | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1); \
+    fi; \
+    curl -fsSL -o /usr/local/bin/oi \
+        "https://github.com/avsm/oi/releases/download/${tag}/oi-linux-${arch}"; \
+    chmod 0755 /usr/local/bin/oi; \
+    /usr/local/bin/oi --version
+ENV OI_CACHE_DIR=/cache OI_DATA_DIR=/state
+
+# Pre-stamp the cache + data roots; same rationale as `oi docker TARGET`.
+RUN mkdir -p /cache /state && \
+    printf 'schema %%d\nwritten_at 0\n' %d > /cache/.oi-stamp && \
+    printf 'schema %%d\nwritten_at 0\n' %d > /state/.oi-stamp
+
+# ---- 3. bulk archive fetch (one layer) --------------------------------------
+# Source archives for the project's dep closure as it was solved at
+# generation time. The container re-solves (so reporepo changes between
+# bake and [docker build] are picked up), but every archive it'll touch
+# is already content-addressed in [/cache/d10ir/archives/].
+FROM base AS build
+ARG OI_REGISTRY
+ARG OI_REPOREPO_URL
+ENV OI_REGISTRY=${OI_REGISTRY} OI_REPOREPO_URL=${OI_REPOREPO_URL}
+
+%s<<'BASH'
+set -eu
+cd /cache/d10ir/archives
+cat > /tmp/shas.txt <<'SHAS'
+%s
+SHAS
+xargs -a /tmp/shas.txt -P8 -I{} sh -c '
+    sha="$1"; f="${sha}.tar.zst"
+    if [ -f "$f" ] && [ "$(sha256sum "$f" | cut -d" " -f1)" = "$sha" ]; then
+        exit 0
+    fi
+    curl -fsSL --retry 3 -o "$f.tmp" "${OI_REGISTRY}/d10ir-archives/$f"
+    echo "$sha  $f.tmp" | sha256sum -c -
+    mv "$f.tmp" "$f"
+' _ {}
+BASH
+
+# ---- 4. copy local sources + project build ----------------------------------
+# A [.dockerignore] entry for [_build/], [dist/], [.git/] etc. keeps the
+# build-context lean. Project mode is auto-detected from the *.opam files
+# inside [/work]; [--dist=/dist] surfaces the produced binaries / share/
+# tree for the runtime stage's [COPY --from=build].
+WORKDIR /work
+COPY . /work
+%soi build --registry=${OI_REGISTRY} --use-registry=archives --dist=/dist
+
+# ---- 5. runtime image ------------------------------------------------------
+# Same depexts as build; copy the gathered install tree into [/usr/local/].
+FROM base AS runtime
+COPY --from=build /dist/ /usr/local/
+|}
+    distro_label project_label distro_label recipe_node_count
+    (List.length shas) oi_version_default registry_default img image_tag
+    install Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix sha_block
+    build_prefix
+
+let emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
+    ~platform ~refresh ~registry ~distro ~oi_version ~no_cache_mount ~output
+    ~cwd =
+  let solved =
+    solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
+      ~session ~platform ~refresh ~cwd
+  in
+  let merged =
+    match solved.merged with
+    | Some m -> m
+    | None ->
+        let msgs =
+          List.filter_map
+            (fun (gr : Oi.Build_pipeline.group_result) ->
+              match gr.error with
+              | Ok () -> None
+              | Error e ->
+                  let kind =
+                    match e with
+                    | Solve_failed { msg; _ } -> Fmt.str "solve: %s" msg
+                    | Cycle _ -> "cycle"
+                    | Empty_after_strip -> "empty"
+                    | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
+                    | Emit_failed { msg } -> Fmt.str "emit: %s" msg
+                  in
+                  Some (Fmt.str "%s — %s" gr.group.label kind))
+            solved.groups
+        in
+        Oi.Error.config_error
+          "oi docker: project produced no executable plan:@\n  %s"
+          (String.concat "\n  " msgs)
+  in
+  let shas = unique_archive_shas merged in
+  let project_label = Filename.basename cwd in
+  let dockerfile_body =
+    render_local_dockerfile ~distro ~oi_version_default:oi_version
+      ~registry_default:registry ~depexts:[] ~shas ~project_label
+      ~recipe_node_count:(List.length merged.nodes) ~no_cache_mount
+  in
+  let distro_tag =
+    Distro.tag_of_distro (Distro.resolve_alias distro :> Distro.t)
+  in
+  let dockerfile_name = Fmt.str "Dockerfile.oi-project.%s" distro_tag in
+  let dst_dir, dockerfile_path =
+    match output with
+    | None -> (cwd, cwd / dockerfile_name)
+    | Some p ->
+        if Sys.file_exists p && Sys.is_directory p then (p, p / dockerfile_name)
+        else (Filename.dirname p, p)
+  in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dst_dir);
+  Registry_docker.write_file dockerfile_path dockerfile_body;
+  Oi.Say.step "Wrote";
+  Oi.Say.info "%s  %a" dockerfile_path Oi.Style.dim_string
+    (Fmt.str "(plan: %d nodes, %d unique archives)" (List.length merged.nodes)
+       (List.length shas));
+  Oi.Say.newline ();
+  Oi.Say.step "Build with";
+  Oi.Say.info "docker build -t %s -f %s %s" project_label dockerfile_path
+    dst_dir
 
 let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
     ~refresh ~registry ~distro ~oi_version ~no_cache_mount ~output ~targets =

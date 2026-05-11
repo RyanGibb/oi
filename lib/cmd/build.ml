@@ -759,7 +759,7 @@ let cmd =
           Project_build.run ~action:`Build ~fs ~proc_mgr ~clock ~sys ~platform
             ~os_key ~cache ~data_dir ~registry ~use_registry
             ~session:http_session ~refresh ~with_repos ~with_deps ?jobs
-            ?toolchain:toolchain_override ~envrc_mode ~cwd:cwd_s ()
+            ?toolchain:toolchain_override ~envrc_mode ?dist ~cwd:cwd_s ()
       in
       do_export_if_set ~ok:(ec = 0) ();
       exit ec

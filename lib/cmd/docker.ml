@@ -143,8 +143,9 @@ let cmd =
       emit_project ~cmd:"oi test" ~suffix:"test" ~tag_label:"my-project-test"
         ~generator:"oi docker --test" ~cwd_s ~distro ~output
     else
-      emit_project ~cmd:"oi build" ~suffix:"build" ~tag_label:"my-project"
-        ~generator:"oi docker" ~cwd_s ~distro ~output
+      Docker_target.emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache
+        ~data_dir ~session:http_session ~platform ~refresh ~registry ~distro
+        ~oi_version ~no_cache_mount ~output ~cwd:cwd_s
   in
   let test_mode =
     Arg.(

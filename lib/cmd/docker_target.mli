@@ -10,6 +10,33 @@
 
 module Distro = Dockerfile_opam.Distro
 
+val emit_local :
+  fs:Eio.Fs.dir_ty Eio.Path.t ->
+  proc_mgr:Eio_unix.Process.mgr_ty Eio.Resource.t ->
+  clock:float Eio.Time.clock_ty Eio.Resource.t ->
+  sys:D10.Sysops.t ->
+  os_key:string ->
+  cache:Oi.Cache.t ->
+  data_dir:string ->
+  session:D10.Sysops.Http.session ->
+  platform:Osrel.t ->
+  refresh:bool ->
+  registry:string ->
+  distro:Distro.t ->
+  oi_version:string ->
+  no_cache_mount:bool ->
+  output:string option ->
+  cwd:string ->
+  unit
+(** Project-mode counterpart to {!emit}: solves the cwd's [*.opam] closure to
+    derive the archive sha list, then writes a multi-stage Dockerfile that
+    [COPY]s the local sources, re-solves inside the container (so reporepo
+    changes between bake and [docker build] are picked up), runs [oi build
+    --dist=/dist] (which drives the project's [dune build] and gathers
+    install-tree binaries / share data), and finally [COPY]s the gathered
+    tree into a clean depext-equipped runtime image. Output filename is
+    [Dockerfile.oi-project.<distro>]. *)
+
 val emit_no_recipe :
   distro:Distro.t ->
   oi_version:string ->

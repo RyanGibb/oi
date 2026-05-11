@@ -193,7 +193,8 @@ let action_label = function
 
 let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
     ~registry ~use_registry ~session ?(refresh = false) ?(with_repos = [])
-    ?(with_deps = []) ?jobs ?toolchain ?envrc_mode ?(dry_run = false) ~cwd () =
+    ?(with_deps = []) ?jobs ?toolchain ?envrc_mode ?(dry_run = false) ?dist ~cwd
+    () =
   let label = action_label action in
   let label_lc = String.lowercase_ascii label in
   let opams = read_opams ~cwd in
@@ -261,14 +262,51 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
              untouched, and [`Deps_only] returned earlier. *)
           (match action with
           | `Build -> (
-              match collect_dist ~cwd ~os_key with
+              (match collect_dist ~cwd ~os_key with
               | [] -> ()
               | mapping ->
                   Fmt.pr "@.%a@." Oi.Style.header_string "Dist artifacts:";
                   List.iter
                     (fun (name, dst) ->
                       Fmt.pr "  %s %a %s@." name Oi.Style.dim_string "→" dst)
-                    mapping)
+                    mapping);
+              (* [--dist=DIR] (passed through from the CLI): also mirror
+                 the dune install tree into [DIR/{bin,sbin,share}/].
+                 Different layout from the cwd/dist flat one above so
+                 the docker multi-stage flow can [COPY /dist/ /usr/local/]
+                 in one shot. *)
+              match dist with
+              | None -> ()
+              | Some dir ->
+                  let install_root =
+                    cwd / "_build" / "install" / "default"
+                  in
+                  let extra =
+                    Dist.collect_install ~root:install_root ~dst:dir
+                  in
+                  let bin_sbin =
+                    List.filter
+                      (fun (sub, _, _) -> sub = "bin" || sub = "sbin")
+                      extra
+                  in
+                  let share_count =
+                    List.length
+                      (List.filter
+                         (fun (sub, _, _) -> sub = "share")
+                         extra)
+                  in
+                  if bin_sbin <> [] || share_count > 0 then begin
+                    Fmt.pr "@.%a (--dist):@." Oi.Style.header_string
+                      "Dist tree";
+                    List.iter
+                      (fun (_, n, d) ->
+                        Fmt.pr "  %s %a %s@." n Oi.Style.dim_string "→" d)
+                      bin_sbin;
+                    if share_count > 0 then
+                      Fmt.pr "  share/ %a %a@." Oi.Style.dim_string
+                        (Fmt.str "(%d files)" share_count)
+                        Oi.Style.dim_string "—"
+                  end)
           | `Test | `Deps_only -> ());
           0
         end

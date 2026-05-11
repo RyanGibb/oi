@@ -30,6 +30,7 @@ val run :
   ?toolchain:string ->
   ?envrc_mode:Sync.envrc_mode ->
   ?dry_run:bool ->
+  ?dist:string ->
   cwd:string ->
   unit ->
   int
