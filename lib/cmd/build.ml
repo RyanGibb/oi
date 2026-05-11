@@ -157,12 +157,12 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
 
    - [Walk_clone]: a non-toolchain overlay with neither declaration but
      a non-empty clone (i.e. [url <> ""]). [oi build --all] handles this
-     case by fanning out to "every package in the overlay's clone"
-     ([build.ml:691-703]); we mirror that here by treating every package
-     in [v2/<handle>/packages/] as its own depext source — no solve.
-     Without this, an overlay like [@oxcaml] (no [x-root-packages] set)
-     contributes zero depexts to the docker pre-install, and the only
-     thing covering the gap is [registry_docker.ml]'s hardcoded
+     case by fanning out to "every package in the overlay's clone" via
+     [Overlay_all] expansion; we mirror that here by treating every
+     package in [v2/<handle>/packages/] as its own depext source — no
+     solve. Without this, an overlay like [@oxcaml] (no [x-root-packages]
+     set) contributes zero depexts to the docker pre-install, and the
+     only thing covering the gap is [registry_docker.ml]'s hardcoded
      [extra_depexts]. *)
 type overlay_input =
   | Solve_groups of { handle : string; groups : string list list }
@@ -1072,20 +1072,20 @@ let cmd =
     let extra_token_names =
       List.map OpamPackage.Name.to_string extra_names
     in
-    let bp_targets : Oi.Build_pipeline.target list =
-      List.map
-        (fun (toks, handles) : Oi.Build_pipeline.target ->
-          Group { tokens = toks @ extra_token_names; handles })
-        target_groups
-    in
-    let req : Oi.Build_pipeline.request =
+    let make_req ~override tgs : Oi.Build_pipeline.request =
+      let bp_targets : Oi.Build_pipeline.target list =
+        List.map
+          (fun (toks, handles) : Oi.Build_pipeline.target ->
+            Group { tokens = toks @ extra_token_names; handles })
+          tgs
+      in
       {
         targets = bp_targets;
         with_repos = global_handles;
         pins = [];
         extra_repos = [];
         constraints = base_constraints;
-        toolchain_override;
+        toolchain_override = override;
         toolchain = None;
         conf;
         local_packages_dir = pin_dir;
@@ -1094,13 +1094,90 @@ let cmd =
         refresh;
       }
     in
-    let solved =
-      Oi.Build_pipeline.solve pipeline_env ~reporter:ui_reporter req
+    (* [--all] fans every reporepo overlay into a target group, and
+       each overlay's [x-oi-toolchain] field can point at a different
+       toolchain. [Build_pipeline.solve] requires one toolchain per
+       request, so partition [target_groups] by toolchain and run
+       solve/build/post-process once per partition. Indices are
+       offset across partitions so [target_group] / [group_results]
+       stay collision-free. Only kicks in for the plain build path;
+       [--depext] / [--archives-only] take the single-solve path. *)
+    let reporepo_entries =
+      lazy
+        (try Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ())
+         with _ -> [])
     in
+    let toolchain_of_handles handles =
+      match handles with
+      | [] -> None
+      | h :: _ -> (
+          match
+            Oi.Pipeline.toolchain_names_of_handle
+              (Lazy.force reporepo_entries) h
+          with
+          | [ n ] -> Some n
+          | _ -> None)
+    in
+    let buckets : (string option * (string list * string list) list) list =
+      if
+        all
+        && toolchain_override = None
+        && (not depext_only)
+        && not archives_only
+      then begin
+        let by_tc : (string, (string list * string list) list) Hashtbl.t =
+          Hashtbl.create 4
+        in
+        let no_tc = ref [] in
+        List.iter
+          (fun (toks, handles) ->
+            match toolchain_of_handles handles with
+            | Some tc ->
+                let cur =
+                  Stdlib.Option.value (Hashtbl.find_opt by_tc tc) ~default:[]
+                in
+                Hashtbl.replace by_tc tc ((toks, handles) :: cur)
+            | None -> no_tc := (toks, handles) :: !no_tc)
+          target_groups;
+        let tc_buckets =
+          Hashtbl.fold
+            (fun tc gs acc -> (Some tc, List.rev gs) :: acc)
+            by_tc []
+          |> List.sort (fun (a, _) (b, _) -> compare a b)
+        in
+        let buckets =
+          if !no_tc = [] then tc_buckets
+          else (None, List.rev !no_tc) :: tc_buckets
+        in
+        if List.length buckets <= 1 then [ (toolchain_override, target_groups) ]
+        else begin
+          let names =
+            List.filter_map (fun (tc, _) -> tc) buckets
+            |> List.sort String.compare
+          in
+          Log.info (fun m ->
+              m
+                "--all: splitting solve into %d toolchain bucket(s) (%s); \
+                 pass --toolchain=NAME to force a single bucket"
+                (List.length buckets) (String.concat ", " names));
+          buckets
+        end
+      end
+      else [ (toolchain_override, target_groups) ]
+    in
+    let gi_offset_ref = ref 0 in
+    List.iter (fun (override, bucket_groups) ->
+      let gi_offset = !gi_offset_ref in
+      let req = make_req ~override bucket_groups in
+      let solved =
+        Oi.Build_pipeline.solve pipeline_env ~reporter:ui_reporter req
+      in
       (* Populate per-target tracking from [solved.groups]: each
-         token's group index, each solve-failure's message + log path. *)
+         token's group index, each solve-failure's message + log path.
+         [gi_offset] keeps indices unique across per-toolchain buckets. *)
       List.iteri
         (fun gi (gr : Oi.Build_pipeline.group_result) ->
+          let gi = gi + gi_offset in
           List.iter
             (fun t -> Hashtbl.replace target_group t gi)
             gr.group.tokens;
@@ -1205,6 +1282,7 @@ let cmd =
          them. They never reach [Direct.run] (no recipe to run). *)
       List.iteri
         (fun gi (gr : Oi.Build_pipeline.group_result) ->
+          let gi = gi + gi_offset in
           match gr.error with
           | Error (Cycle cycles) ->
               let cycle_label =
@@ -1261,10 +1339,9 @@ let cmd =
                   Logs.info (fun m ->
                       m "Saved d10ir recipe to %s" dst))
             solved.groups);
-      (* Audit emission for cached layers (was the fast-path's
-         responsibility before). [Direct.run] doesn't append audit
-         events for [Cached] outcomes; record them ourselves so the
-         manifest's [callers[]] list still attributes this run. *)
+      (* Audit emission for cached layers. [Direct.run] doesn't append
+         audit events for [Cached] outcomes; record them ourselves so
+         the manifest's [callers[]] list still attributes this run. *)
       let audit_now = Unix.gettimeofday () in
       let toolchain_handle =
         Option.map
@@ -1330,6 +1407,7 @@ let cmd =
       | Some (result : D10ir.Direct.result) ->
           List.iteri
             (fun gi (gr : Oi.Build_pipeline.group_result) ->
+              let gi = gi + gi_offset in
               match gr.error with
               | Error (Cycle _) -> ()
               | Error _ -> ()
@@ -1422,7 +1500,9 @@ let cmd =
                             }
                       in
                       Hashtbl.replace group_results gi outcome))
-            solved.groups));
+            solved.groups);
+      gi_offset_ref := !gi_offset_ref + List.length solved.groups
+    ) buckets);
     (* Progress_ui closed; the summary block prints on a clean
        terminal. *)
     print_build_summary ~targets:!targets_ref ~target_handle ~solve_failures

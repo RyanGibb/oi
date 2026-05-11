@@ -14,8 +14,7 @@
 
     {!solve} is purely the "decide what to build" half of the
     pipeline. Running the merged plan ([Direct.run] + fetch +
-    archive prewarm) is a separate concern; today it lives inline in
-    [lib/cmd/build.ml] and will move to {!build} in a follow-up. *)
+    archive prewarm) lives in {!build}. *)
 
 (** {1 Environment}
 
@@ -87,8 +86,7 @@ type request = {
           dirs. *)
   project_root : string option;
       (** When set, pin URL resolution consults / refreshes
-          [<project_root>/_oi/oi.lock] before materialisation, same
-          as {!Build_pipeline.build}'s [?project_root]. *)
+          [<project_root>/_oi/oi.lock] before materialisation. *)
   force_source : bool;
       (** Skip d10 cache classification during planning so every
           package becomes [Source] regardless of whether its layer
@@ -197,7 +195,9 @@ type build_inputs = {
           forces every layer to be built from source. *)
   source_remote : D10.Layer.remote option;
       (** Registry to pull pre-baked source archives from. [None]
-          falls back to per-package opam fetch + inline bake. *)
+          requires every needed archive to already exist locally
+          (produced by [oi repo bump]); a missing archive is a hard
+          error. *)
   jobs : int option;
       (** Build parallelism. [None] uses the d10ir default. *)
 }

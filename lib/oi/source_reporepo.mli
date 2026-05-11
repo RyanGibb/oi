@@ -58,8 +58,6 @@ val load : path:string -> entry list
 val latest : entry list -> handle:string -> entry option
 (** Highest-versioned entry for a given handle. *)
 
-val find : entry list -> handle:string -> version:string -> entry option
-
 val default_toolchain : entry list -> entry option
 (** Latest version of the toolchain definition flagged
     [x-oi-default-toolchain: true], or [None] if no entry carries the flag.

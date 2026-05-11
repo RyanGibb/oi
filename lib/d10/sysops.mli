@@ -6,7 +6,7 @@
 
     All local filesystem paths are {!Eio.Path.t} values. Source fetching,
     checksum verification, and downloads are handled by opam's repository
-    libraries (see {!Oi.Fetch}). *)
+    libraries via {!Oi.Source.Mirror}. *)
 
 (** {1 Initialisation} *)
 

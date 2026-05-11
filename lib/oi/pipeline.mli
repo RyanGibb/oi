@@ -5,10 +5,10 @@
 (** End-to-end pipeline: solve → plan → build → assemble.
 
     The CLI commands compose these operations: most do {!pick_toolchain} →
-    {!build} → {!assemble_prefix}, then exec into the result. The smaller
-    helpers ({!cache_urls}, {!fetch_remote_layers}) are exported so callers can
-    intercept the pipeline at intermediate points (e.g. registry-build wraps
-    {!build} with its own progress reporter). *)
+    {!Build_pipeline.solve} + {!Build_pipeline.build} → {!assemble_prefix}, then
+    exec into the result. The smaller helpers ({!cache_urls},
+    {!fetch_layer_hashes}) are exported so callers can intercept the pipeline at
+    intermediate points. *)
 
 (** {1 Platform configuration and d10 wiring} *)
 
@@ -38,6 +38,15 @@ val solver_inputs :
     consumes: a [conf] with [ocaml_version] aligned to the toolchain's compiler,
     and the {!Solver.Ctx.toolchain} subset {!Solver.Ctx.create} /
     {!Solver.Env.make_env} take. *)
+
+val toolchain_names_of_handle :
+  Source.Reporepo.entry list -> string -> string list
+(** [toolchain_names_of_handle entries h] is the (possibly empty) list of
+    toolchain names that the handle [h] points at: the value of its
+    [x-oi-toolchain] field plus [h] itself if [h] is registered as a toolchain
+    definition. Used by callers that need to partition a target set by
+    toolchain (e.g. [oi build --all] across overlays with conflicting
+    toolchains). *)
 
 val pick_toolchain :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -126,9 +135,8 @@ val fetch_layer_hashes :
   pkg_of:(string, string) Hashtbl.t ->
   unit ->
   unit
-(** Lower-level companion to {!fetch_remote_layers}: fetch a deduplicated list
-    of layer hashes directly, without taking a {!Plan.graph}. Used by [oi
-    build]'s merged-plan flow, which collects layer hashes from the unified
+(** Fetch a deduplicated list of layer hashes directly. Used by [oi build]'s
+    merged-plan flow, which collects layer hashes from the unified
     {!D10ir.Plan.t} (post-{!D10ir.Plan.merge}) and fires one fetch round
     against the registry instead of N per-group rounds. [pkg_of] maps a hash
     to its display label. *)

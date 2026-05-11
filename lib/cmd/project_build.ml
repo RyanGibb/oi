@@ -200,7 +200,7 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
   end
   else
     (* One spinner across the whole flow. The multi-bar [Progress]
-       displays inside [Pipeline.fetch_remote_layers] / [Execute.run]
+       displays inside [Pipeline.fetch_layer_hashes] / [Execute.run]
        / [install_tools] attach to the same [shared_display] via
        [add_line] / [remove_line], so the overall bar stays visible
        across phase transitions. The dune subprocess at the end runs

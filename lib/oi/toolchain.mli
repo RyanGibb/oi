@@ -148,10 +148,10 @@ val ensure_installed :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   info ->
   unit
-(** Build the toolchain into its fixed prefix when {!is_ready} is false. No-op
-    for relocatable toolchains and for already-prepared non-relocatable ones. On
-    failure for a non-relocatable toolchain the install_prefix is left partial
-    and {!is_ready} continues to return false.
+(** Build the toolchain into its fixed prefix if absent. No-op for relocatable
+    toolchains and for already-prepared non-relocatable ones. On failure for a
+    non-relocatable toolchain the install prefix is left partial and the next
+    call retries from scratch.
 
     [?reporter] receives a [Status "Installing toolchain <handle>"] event
     when the install actually runs. *)

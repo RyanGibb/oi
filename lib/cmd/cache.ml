@@ -732,7 +732,7 @@ let pp_size n =
   else Fmt.str "%.2fG" (f /. (1024. *. 1024. *. 1024.))
 
 let archives_cmd =
-  let run (c : Terms.common) =
+  let run (c : Terms.common) to_dir =
     Harness.run @@ fun ~sw env ->
     let h =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
@@ -743,59 +743,93 @@ let archives_cmd =
       Oi.D10ir_archives.list ~cache:h.cache
       |> List.map (fun (sha, size) -> { sha; size })
     in
-    match c.format with
-    | Json -> (
-        match
-          Jsont_bytesrw.encode_string ~format:Jsont.Indent
-            archives_envelope_codec (dir, entries)
-        with
-        | Ok s ->
-            print_string s;
-            print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
-    | Text ->
-        Fmt.pr "%a %s@.@." Oi.Style.header_string "d10ir archives" dir;
-        if entries = [] then Fmt.pr "  (empty)@."
-        else begin
-          let total =
-            List.fold_left (fun acc e -> acc + e.size) 0 entries
-          in
-          let rows =
-            List.map
-              (fun e ->
-                [
-                  Tty.Span.styled Oi.Style.dim (short_hash e.sha);
-                  Tty.Span.text (pp_size e.size);
-                ])
-              entries
-          in
-          let table =
-            Tty.Table.of_rows ~header_style:Oi.Style.header
-              [
-                Tty.Table.column "SHA";
-                Tty.Table.column ~align:`Right "SIZE";
-              ]
-              rows
-          in
-          Oi.Style.pp_table Fmt.stdout table;
-          Fmt.pr "@.%a %d archive(s), %s total@." Oi.Style.header_string
-            "Total:" (List.length entries) (pp_size total)
-        end
+    match to_dir with
+    | Some output ->
+        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
+          Eio.Path.(h.fs / output);
+        let n = Oi.D10ir_archives.publish_all ~cache:h.cache ~output in
+        let dst = Oi.D10ir_archives.dst_dir ~output in
+        Fmt.pr "%a %d archive(s) published to %s (%d total in cache)@."
+          Oi.Style.ok_string "✓" n dst (List.length entries)
+    | None ->
+        (match c.format with
+        | Json -> (
+            match
+              Jsont_bytesrw.encode_string ~format:Jsont.Indent
+                archives_envelope_codec (dir, entries)
+            with
+            | Ok s ->
+                print_string s;
+                print_newline ()
+            | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+        | Text ->
+            Fmt.pr "%a %s@.@." Oi.Style.header_string "d10ir archives" dir;
+            if entries = [] then Fmt.pr "  (empty)@."
+            else begin
+              let total =
+                List.fold_left (fun acc e -> acc + e.size) 0 entries
+              in
+              let rows =
+                List.map
+                  (fun e ->
+                    [
+                      Tty.Span.styled Oi.Style.dim (short_hash e.sha);
+                      Tty.Span.text (pp_size e.size);
+                    ])
+                  entries
+              in
+              let table =
+                Tty.Table.of_rows ~header_style:Oi.Style.header
+                  [
+                    Tty.Table.column "SHA";
+                    Tty.Table.column ~align:`Right "SIZE";
+                  ]
+                  rows
+              in
+              Oi.Style.pp_table Fmt.stdout table;
+              Fmt.pr "@.%a %d archive(s), %s total@." Oi.Style.header_string
+                "Total:" (List.length entries) (pp_size total)
+            end)
+  in
+  let to_dir =
+    Arg.(
+      value
+      & opt (some string) None
+      & info ~docv:"DIR"
+          ~doc:
+            "Hardlink every cached archive into $(b,DIR/d10ir-archives/) — \
+             the layout $(b,oi build) expects from a remote registry. \
+             Idempotent on repeat invocations."
+          [ "to"; "export" ])
   in
   let info =
     Cmd.info "archives"
-      ~doc:"List baked d10ir source archives"
+      ~doc:"List or export baked d10ir source archives"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Enumerate every $(b,<sha>.tar.zst) under \
+            "Without $(b,--to), enumerate every $(b,<sha>.tar.zst) under \
              $(b,\\$OI_CACHE_DIR/d10ir/archives/), the consolidated source \
              archives produced by $(b,oi repo bake) and consumed by \
              $(b,oi build) when an opam carries an $(b,x-d10-archive) marker.";
+          `P
+            "With $(b,--to=DIR), hardlink every archive into \
+             $(b,DIR/d10ir-archives/) — the publishable layout a remote \
+             registry serves. Use this when you want just the source-archive \
+             tier without the layer cache that $(b,oi build --export) would \
+             also publish. Reaches every archive in the cache, including \
+             ones not currently referenced by any reporepo overlay (use \
+             $(b,oi repo bake --to=DIR) to publish just the reporepo-referenced \
+             subset).";
+          `S Manpage.s_examples;
+          `Pre
+            "  oi cache archives\n\
+            \  oi cache archives --to=./registry\n\
+            \  oi cache archives --export=/var/www/oi.example.com";
         ]
   in
-  Cmd.v info Term.(const run $ Terms.common)
+  Cmd.v info Term.(const run $ Terms.common $ to_dir)
 
 (* -- explain ------------------------------------------------------------- *)
 

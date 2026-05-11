@@ -17,7 +17,8 @@ type t =
       (** Source build completed and the layer was committed. Pairs with a
           [Provenance.t] under the same layer hash. *)
   | Cached
-      (** The fast path emitted a Cached event without invoking Execute. *)
+      (** The package's layer was already in the d10 cache, so [D10ir.Direct]
+          skipped its script. *)
   | Restored
       (** A Binary package was restored from a layer that was already in the
           local cache. *)

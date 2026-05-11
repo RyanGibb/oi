@@ -36,4 +36,4 @@ type target =
 val resolve_target : ?bin_dir:string -> unit -> target
 (** [resolve_target ()] returns [In_place path] when {!current} is writable and
     [Fallback { current; install_dir }] otherwise. [bin_dir] overrides the
-    default {!local_bin} fallback directory. *)
+    default [~/.local/bin] fallback directory. *)

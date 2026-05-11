@@ -309,64 +309,39 @@ let merge = function
           Error (mismatch "archive_root")
       | Some _ -> Error (mismatch "toolchain.name")
       | None ->
-          let seen_nodes : (string, unit) Hashtbl.t = Hashtbl.create 256 in
+          (* Dedupe a list-of-lists by a string key, preserving first-seen
+             order. Each merge field (nodes, roots, mounts, external
+             layers) uses the same shape with a different key function. *)
+          let dedupe_by ~size ~key plans field =
+            let seen : (string, unit) Hashtbl.t = Hashtbl.create size in
+            List.concat_map
+              (fun p ->
+                List.filter
+                  (fun x ->
+                    let k = key x in
+                    if Hashtbl.mem seen k then false
+                    else begin
+                      Hashtbl.add seen k ();
+                      true
+                    end)
+                  (field p))
+              plans
+          in
+          let plans = first :: rest in
+          let lh x = Layer_hash.to_string x in
           let nodes =
-            List.concat_map
-              (fun p ->
-                List.filter
-                  (fun n ->
-                    let key = Layer_hash.to_string n.layer_hash in
-                    if Hashtbl.mem seen_nodes key then false
-                    else begin
-                      Hashtbl.add seen_nodes key ();
-                      true
-                    end)
-                  p.nodes)
-              (first :: rest)
+            dedupe_by ~size:256 ~key:(fun n -> lh n.layer_hash) plans
+              (fun p -> p.nodes)
           in
-          let seen_roots : (string, unit) Hashtbl.t = Hashtbl.create 32 in
           let roots =
-            List.concat_map
-              (fun p ->
-                List.filter
-                  (fun h ->
-                    let key = Layer_hash.to_string h in
-                    if Hashtbl.mem seen_roots key then false
-                    else begin
-                      Hashtbl.add seen_roots key ();
-                      true
-                    end)
-                  p.roots)
-              (first :: rest)
+            dedupe_by ~size:32 ~key:lh plans (fun p -> p.roots)
           in
-          let seen_mounts : (string, unit) Hashtbl.t = Hashtbl.create 8 in
           let mounts =
-            List.concat_map
-              (fun p ->
-                List.filter
-                  (fun (m : mount) ->
-                    if Hashtbl.mem seen_mounts m.name then false
-                    else begin
-                      Hashtbl.add seen_mounts m.name ();
-                      true
-                    end)
-                  p.mounts)
-              (first :: rest)
+            dedupe_by ~size:8 ~key:(fun (m : mount) -> m.name) plans
+              (fun p -> p.mounts)
           in
-          let seen_external : (string, unit) Hashtbl.t = Hashtbl.create 8 in
           let external_layers =
-            List.concat_map
-              (fun p ->
-                List.filter
-                  (fun h ->
-                    let key = Layer_hash.to_string h in
-                    if Hashtbl.mem seen_external key then false
-                    else begin
-                      Hashtbl.add seen_external key ();
-                      true
-                    end)
-                  p.external_layers)
-              (first :: rest)
+            dedupe_by ~size:8 ~key:lh plans (fun p -> p.external_layers)
           in
           let metadata =
             {
