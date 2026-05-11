@@ -6,11 +6,24 @@
     clones, and cleanup utilities. *)
 
 type t
+(** Handle for the on-disk cache rooted at a single directory (typically
+    [~/.cache/oi/]). Constructed once at startup and threaded into every
+    subsystem that may write into the cache. *)
 
 val create : root:string -> Eio.Fs.dir_ty Eio.Path.t -> t
+(** [create ~root fs] builds a {!t} pinned to [root]. Does not create the
+    directory; callers create subdirs lazily as they're needed. *)
+
 val root : t -> Eio.Fs.dir_ty Eio.Path.t
+(** Eio path to the cache root. *)
+
 val root_s : t -> string
+(** String form of {!root}, for env vars and APIs that take native paths. *)
+
 val dune_root : t -> string
+(** Directory used as the dune cache root ([<cache>/dune]). Threaded into the
+    [DUNE_CACHE_ROOT] env var for child dune invocations so layer builds share
+    one cache across [oi] runs. *)
 
 val fs : t -> Eio.Fs.dir_ty Eio.Path.t
 (** The underlying filesystem capability used to construct the cache; exposed so
@@ -20,6 +33,10 @@ val fs : t -> Eio.Fs.dir_ty Eio.Path.t
 (** {1 Script run cache} *)
 
 val run_dir : t -> hash:string -> Eio.Fs.dir_ty Eio.Path.t
+(** [run_dir cache ~hash] is the per-script working directory
+    [<cache>/runs/<hash>/]. {!Cmd.Script_runner} uses this for the synthetic
+    dune project it builds the script under, keyed by the script's content
+    hash so repeated runs reuse the compiled artefact. *)
 
 (** {1 Pin-depends cache} *)
 
@@ -106,4 +123,9 @@ val purge_items : item list -> unit
 (** [rmtree ~missing_ok:true] each item; no logging. *)
 
 val size : sys:D10.Sysops.t -> Eio.Fs.dir_ty Eio.Path.t -> int64
+(** Recursive on-disk size of a directory in bytes, computed via [du -sk]
+    (with the result multiplied by 1024). Returns [0L] when the path doesn't
+    exist or the subprocess errors out. *)
+
 val pp_size : int64 Fmt.t
+(** Pretty-print a byte count as a human-readable string (e.g. ["1.2 GB"]). *)

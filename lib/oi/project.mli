@@ -42,6 +42,9 @@ type t = {
 }
 
 val load : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> t
+(** [load ~fs dir] reads every [*.opam] in [dir], aggregates their direct
+    deps, pin-depends, and [x-repos:] declarations, and returns the merged
+    project view. Returns {!empty} when [dir] has no opam files. *)
 
 val empty : t
 (** Empty project metadata: no deps, no pins, no overlays. Used by callers that
@@ -62,19 +65,31 @@ module Script : sig
   }
 
   val parse_deps_from_file : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> dep list
+  (** Parse the [[\@\@\@opam …]] annotation on the first line of [path].
+      Returns [[]] when the annotation is absent. *)
 
   val parse_cli_dep : string -> dep
   (** CLI-style dep spec: [.] after the package name is opam's [pkg.version]
       shorthand. *)
 
   val name_s : dep -> string
+  (** [dep.name] as a plain string. *)
+
   val dedup : dep list -> dep list
+  (** Drop later occurrences of the same dep name, preserving input order. *)
+
   val script_hash : string -> dep list -> string
+  (** Content-addressed key for the (script path, dep list) pair. Identifies
+      the cached compiled binary the script runner produces. *)
 
   val constraints :
     dep list -> OpamFormula.version_constraint OpamTypes.name_map
+  (** Project a [dep list] down to the constraint map the solver consumes. *)
 
   val generate_project : script:string -> deps:dep list -> dir:string -> unit
+  (** Write a synthetic [dune-project] + [main.ml] into [dir] that links the
+      script's deps and compiles its body. Used by [oi run] for [.ml]
+      targets. *)
 end
 
 (** {1 URL-supplied projects}
@@ -122,16 +137,29 @@ module Url : sig
       is fetched. *)
 
   val classify_all : string list -> string list * Script.dep list
+  (** [classify_all tokens] partitions each token via {!classify}, returning
+      [(urls, deps)] in input order so callers can fan URL fetches out in
+      parallel and feed [deps] straight to the solver. *)
 end
 
 (** {1 dune-project reader/writer} *)
 
 module Dune : sig
   type t
+  (** Parsed [dune-project] stanza set. *)
 
   val load : fs:Eio.Fs.dir_ty Eio.Path.t -> cwd:string -> t
+  (** Read [<cwd>/dune-project]; errors when the file is missing or
+      unparseable. *)
+
   val generate_opam_files : t -> bool
+  (** [true] when [dune-project] declares [(generate_opam_files true)] — i.e.
+      package metadata is sourced from dune's [(package …)] stanzas rather
+      than hand-edited [*.opam] files. [oi add]'s edit path only works on
+      generate-opam-files projects. *)
+
   val package_names : t -> string list
+  (** Names of every [(package …)] stanza declared in [dune-project]. *)
 
   val add_dependency :
     t ->
@@ -140,8 +168,13 @@ module Dune : sig
     constraint_:(string * string) option ->
     unit ->
     t
+  (** Insert a [(depends …)] entry into [package] (or the single declared
+      package when omitted) with optional version [constraint_]. Returns the
+      updated value; nothing is written until {!save}. *)
 
   val save : fs:Eio.Fs.dir_ty Eio.Path.t -> t -> unit
+  (** Render [t] back over [dune-project] in place, preserving comments and
+      indentation as far as possible. *)
 end
 
 (** {1 Dev-tool probes}
@@ -169,5 +202,11 @@ module Tool : sig
   }
 
   val probe : fs:Eio.Fs.dir_ty Eio.Path.t -> string -> result list
+  (** [probe ~fs cwd] runs every entry in {!specs} against [cwd] and returns
+      one {!result} per spec. Includes negatives so callers can show "checked
+      X, not found" in diagnostics. *)
+
   val hits : result list -> result list
+  (** Filter to results whose [hit] is true — convenience over
+      [List.filter (fun r -> r.hit)]. *)
 end

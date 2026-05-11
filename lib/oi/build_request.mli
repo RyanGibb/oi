@@ -9,9 +9,6 @@
     target-classification surface. The cmdliner layer ([lib/cmd]) wraps these
     helpers but adds no logic. *)
 
-val log_overlay : ('a, Format.formatter, unit, unit) format4 -> 'a
-(** Format-style debug logger for overlay / reporepo plumbing. *)
-
 (** {1 Build target classification} *)
 
 (** Kinds of "[@handle]-prefixed target" the solving commands accept. [oi run]
@@ -23,6 +20,9 @@ type build_target =
   | Overlay_all of string  (** [handle] alone, expands to every overlay pkg *)
 
 val parse_build_target : string -> build_target
+(** Classify a raw user-typed target token into a {!build_target}: bare
+    [@handle] becomes [Overlay_all], [@handle/pkg…] becomes [Overlay_pkg], and
+    anything else falls through as [Plain_target]. *)
 
 val bare_handle : string -> string option
 (** [Some h] when [s] is a bare [@h] handle (no [/pkg] suffix and a well-formed
@@ -80,10 +80,6 @@ val handles_of_tokens : string list -> string list
 (** Keep only the handle-shaped tokens (those for which {!is_url_like} returns
     [false]). *)
 
-val cli_extra_repo_of_url : string -> Project.extra_repo
-(** Convert a CLI [--with-repo URL] entry into a {!Project.extra_repo} with a
-    deterministic hashed name. *)
-
 val cli_extra_repos :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   sys:D10.Sysops.t ->
@@ -116,6 +112,3 @@ val parse_pkg_target :
     like ["name>=1.0"] / ["name=1.0"]. Returns the bare name and an optional
     version constraint for the solver. *)
 
-val latest_version_in_dirs : pkg:string -> string list -> string option
-(** Highest version of [pkg] found across [dirs] (each expected to be a
-    [packages/] tree). [None] when the package is absent from all of them. *)

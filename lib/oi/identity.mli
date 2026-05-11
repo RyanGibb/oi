@@ -16,6 +16,7 @@ val to_string : t -> string
 (** [name ^ "." ^ version], or just [name] when [version] is empty. *)
 
 val of_opam : OpamPackage.t -> t
+(** Project an opam package to its [name + version] pair. *)
 
 type dep = { id : t; hash : string }
 (** A layer dependency: an [Identity.t] paired with the d10 layer hash that
@@ -23,6 +24,8 @@ type dep = { id : t; hash : string }
     ([Plan.package_plan.dep_layers]) and the provenance / audit records. *)
 
 val dep_of_opam : OpamPackage.t -> hash:string -> dep
+(** Build a {!dep} from an opam package and the layer hash that supplies its
+    compiled output. *)
 
 (** How a package made it into the prefix.
 
@@ -32,6 +35,7 @@ val dep_of_opam : OpamPackage.t -> hash:string -> dep
 type method_ = Source | Binary
 
 val method_to_string : method_ -> string
+(** Lowercase tag (["source"] / ["binary"]) used in CLI output and JSON. *)
 
 (** {1 Codecs} *)
 

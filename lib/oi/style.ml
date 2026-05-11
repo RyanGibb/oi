@@ -20,7 +20,6 @@ let header = Style.bold
 let dim = Style.faint
 let accent = Style.(bold + fg Color.cyan)
 let strong_ok = Style.(bold + fg Color.green)
-let source = Style.(fg Color.blue)
 
 (* True when [ppf] is configured for ANSI output. Reads the per-formatter
    renderer set by [Fmt_tty.setup_std_outputs]; an unconfigured formatter
@@ -39,7 +38,6 @@ let header_string ppf s = styled header Fmt.string ppf s
 let dim_string ppf s = styled dim Fmt.string ppf s
 let accent_string ppf s = styled accent Fmt.string ppf s
 let strong_ok_string ppf s = styled strong_ok Fmt.string ppf s
-let source_string ppf s = styled source Fmt.string ppf s
 let pp s pp = styled s pp
 
 (* Strip SGR ANSI escape sequences ([\027[...m]) from [s]. Used as a

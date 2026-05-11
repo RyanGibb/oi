@@ -285,7 +285,6 @@ module Ctx = struct
     _global_state := Some (OpamGlobalState.unlock gt)
 
   let conf t = t.conf
-  let prefix t = t.prefix
   let toolchain t = t.toolchain
 
   let switch_env ?toolchain ~prefix () =

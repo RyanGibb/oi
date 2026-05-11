@@ -1,5 +1,16 @@
-(** Source archive mirror cache used by registry builds. Was [Source.Mirror] in
-    [source.mli]. *)
+(** Content-addressed cache of opam source archives keyed by checksum.
+
+    The mirror lives at [<cache_root>/mirror/<algo>/<XX>/<hash>] and is the
+    file:// [cache_url] every opam fetch consults first, before falling back to
+    the registry or the upstream URL. It exists for two reasons:
+
+    - [oi build --archives-only] populates it ahead of build time so a later
+      offline build never hits the network.
+    - Successful registry pulls store the fetched blob here so the next solver
+      run that asks for the same source skips opam's download cache entirely.
+
+    Re-exported as [Source.Mirror] for callers that still spell the old
+    [Oi.Source.Mirror.X] form. *)
 
 val dir : cache:Cache.t -> string
 (** Absolute path to the mirror root: [{cache_root}/mirror]. *)

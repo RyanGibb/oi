@@ -1,4 +1,15 @@
-(** Pin-depends materialisation. Was [Source.Pin] in [source.mli]. *)
+(** Materialise [pin-depends] declarations into a synthesised [packages/] tree
+    the solver can consume.
+
+    A [pin] gives the solver a verbatim path to a package's opam file at a
+    user-chosen version/URL, side-stepping whatever the configured opam
+    repositories ship. Materialisation clones each pin's source if needed and
+    produces a [packages/<name>/<name.version>/opam] layout under the cache root
+    that takes priority over every other repo in the solver's search path.
+
+    {!resolve_pins} runs first, normalising URLs to a sha-pinned form (recorded
+    in [_oi/oi.lock]) so the cache key is deterministic; {!materialize} then
+    fetches and stages each pin. Re-exported as [Source.Pin]. *)
 
 val materialize :
   ?reporter:Build_progress.reporter ->

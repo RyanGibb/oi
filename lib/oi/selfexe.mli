@@ -20,10 +20,6 @@ val is_writable : string -> bool
     [path] exists and the user has write permission, or [path] is missing and
     its containing directory is writable. *)
 
-val home : unit -> string
-(** [$HOME], or the user's [pw_dir] from [/etc/passwd] if [$HOME] is unset. [/]
-    as a last resort. *)
-
 (** {1 Install target} *)
 
 type target =

@@ -12,4 +12,7 @@ val of_string : string -> (t, string) result
 (** [of_string "all"] / ["archives"] / ["never"]. Case-insensitive. *)
 
 val to_string : t -> string
+(** Lowercase tag: ["all"], ["archives"], or ["never"]. *)
+
 val pp : Format.formatter -> t -> unit
+(** Print the same tag as {!to_string}. *)
