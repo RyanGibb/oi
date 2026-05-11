@@ -47,9 +47,16 @@ let unique_archive_shas (plan : D10ir.Plan.t) =
 (* Render the full Dockerfile. The structure mirrors the sample we agreed on:
    one stage for the distro base + oi binary, one stage that COPYs recipe.json
    and fetches every archive in one heredoc'd RUN under a BuildKit cache mount,
-   then [oi ir run] which replays the d10ir plan. *)
+   then [oi ir run] which replays the d10ir plan.
+
+   [no_cache_mount=true] strips the [--mount=type=cache] directives and falls
+   back to plain [mkdir -p] for the same target paths. Useful when the
+   BuildKit cache mount lives on a different filesystem from the image
+   overlay and downstream [cp -Rfl] hardlink passes (e.g. [Sysops.link_tree])
+   fail with [EXDEV]. The trade-off is no cross-build cache reuse: every
+   docker build re-downloads archives and re-replays layers. *)
 let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
-    ~shas ~target_label ~recipe_node_count =
+    ~shas ~target_label ~recipe_node_count ~no_cache_mount =
   let resolved = Distro.resolve_alias distro in
   let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
   let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
@@ -75,6 +82,43 @@ let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
   in
   let install = Registry_docker.install_cmd mgr combined in
   let sha_block = String.concat "\n" shas in
+  (* Pick the [RUN] prefix for the fetch and replay stages. With cache
+     mounts we let BuildKit create the target dirs implicitly; without,
+     we prepend a [mkdir -p] so the [cd]/oi steps don't crash on a
+     missing path. The image-overlay write goes through anyway, so
+     fetched archives + built layers persist across the two RUNs within
+     the same build (just not across builds). *)
+  let fetch_prefix =
+    if no_cache_mount then "RUN mkdir -p /cache/d10ir/archives\nRUN "
+    else
+      "RUN \
+       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives,sharing=locked \
+       \\\n"
+  in
+  let replay_prefix =
+    if no_cache_mount then
+      "RUN mkdir -p /cache/d10ir/archives /cache/layers && \\\n    "
+    else
+      "RUN \
+       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives \\\n\
+      \    --mount=type=cache,target=/cache/layers,id=oi-layers \\\n\
+      \    "
+  in
+  let cache_doc =
+    if no_cache_mount then
+      "#   RUN fetch-archives      -> downloaded into the image layer (no\n\
+       #                              cache mount); rebuilds re-download.\n\
+       #   RUN oi ir run           -> replays the plan into the image layer."
+    else
+      "#   RUN fetch-archives      -> ONE layer; busts only when the sha list \
+       inside\n\
+       #                              the heredoc changes. Archive bytes live \
+       in a\n\
+       #                              BuildKit cache mount, so unchanged shas \
+       aren't\n\
+       #                              re-downloaded.\n\
+       #   RUN oi ir run           -> reuses the cache mount + d10 layer cache"
+  in
   Fmt.str
     {|# syntax=docker/dockerfile:1.7
 #
@@ -88,11 +132,7 @@ let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
 #   base + depexts          -> invalidates on distro/depext change
 #   oi binary               -> invalidates on OI_VERSION change
 #   COPY recipe.json        -> invalidates on plan change
-#   RUN fetch-archives      -> ONE layer; busts only when the sha list inside
-#                              the heredoc changes. Archive bytes live in a
-#                              BuildKit cache mount, so unchanged shas aren't
-#                              re-downloaded.
-#   RUN oi ir run           -> reuses the cache mount + d10 layer cache
+%s
 
 ARG OI_VERSION=%s
 ARG OI_REGISTRY=%s
@@ -133,8 +173,7 @@ ENV OI_REGISTRY=${OI_REGISTRY}
 WORKDIR /work
 COPY recipe.json /work/recipe.json
 
-RUN --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives,sharing=locked \
-<<'BASH'
+%s<<'BASH'
 set -eu
 cd /cache/d10ir/archives
 cat > /tmp/shas.txt <<'SHAS'
@@ -152,13 +191,12 @@ xargs -a /tmp/shas.txt -P8 -I{} sh -c '
 BASH
 
 # ---- 4. replay the d10ir plan -----------------------------------------------
-RUN --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives \
-    --mount=type=cache,target=/cache/layers,id=oi-layers \
-    oi ir run /work
+%soi ir run /work
 |}
     target_label distro_label target_label distro_label recipe_node_count
-    (List.length shas) oi_version_default registry_default img image_tag install
-    Oi.Stamp.cache_schema Oi.Stamp.data_schema sha_block
+    (List.length shas) cache_doc oi_version_default registry_default img
+    image_tag install Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix
+    sha_block replay_prefix
 
 let solve_targets ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
     ~platform ~refresh targets =
@@ -208,7 +246,7 @@ let solve_targets ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
    only insofar as [OI_VERSION], the reporepo URL, and the registry index
    are stable — every other input is resolved at build time. *)
 let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
-    ~target_label =
+    ~target_label ~no_cache_mount =
   let resolved = Distro.resolve_alias distro in
   let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
   let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
@@ -225,6 +263,26 @@ let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
   let extras = Registry_docker.extra_depexts mgr in
   let combined = if extras = "" then base else base ^ " " ^ extras in
   let install = Registry_docker.install_cmd mgr combined in
+  let build_prefix =
+    if no_cache_mount then "RUN "
+    else
+      "RUN --mount=type=cache,target=/cache,id=oi-cache-build,sharing=locked \\\n\
+      \    "
+  in
+  let cache_doc =
+    if no_cache_mount then
+      "#   oi build TARGET         -> writes /cache into the image layer (no \
+       cache\n\
+       #                              mount); rebuilds re-fetch and re-solve."
+    else
+      "#   oi build TARGET         -> one cached layer per target. The \
+       BuildKit cache\n\
+       #                              mount keeps /cache across rebuilds, so a \
+       second\n\
+       #                              build with the same OI_VERSION and \
+       TARGET hits\n\
+       #                              local d10 layers and is mostly free."
+  in
   Fmt.str
     {|# syntax=docker/dockerfile:1.7
 #
@@ -237,10 +295,7 @@ let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
 # Caching:
 #   base + depexts          -> apt/dnf/apk layer; invalidates on distro change.
 #   oi/oix install          -> invalidates on OI_VERSION change.
-#   oi build TARGET         -> one cached layer per target. The BuildKit cache
-#                              mount keeps /cache across rebuilds, so a second
-#                              build with the same OI_VERSION and TARGET hits
-#                              local d10 layers and is mostly free.
+%s
 
 ARG OI_VERSION=%s
 ARG OI_REGISTRY=%s
@@ -277,16 +332,15 @@ ARG OI_REPOREPO_URL
 # oi's [Source.Reporepo.env_url] treats an empty [OI_REPOREPO_URL] as "use
 # the built-in default", so leaving the ARG empty doesn't break the build.
 ENV OI_REGISTRY=${OI_REGISTRY} OI_REPOREPO_URL=${OI_REPOREPO_URL}
-RUN --mount=type=cache,target=/cache,id=oi-cache-build,sharing=locked \
-    oi build --registry=${OI_REGISTRY} %s
+%soi build --registry=${OI_REGISTRY} %s
 
 # Usage:
 #   docker build -t %s -f %s .
 #   docker run --rm %s oix %s --help
 |}
-    target_label distro_label target_label distro_label oi_version_default
-    registry_default img image_tag install Oi.Stamp.cache_schema
-    Oi.Stamp.data_schema target_label
+    target_label distro_label target_label distro_label cache_doc
+    oi_version_default registry_default img image_tag install
+    Oi.Stamp.cache_schema Oi.Stamp.data_schema build_prefix target_label
     (Fmt.str "oi-%s"
        (String.concat "-" (List.map slug_of_target [ target_label ])))
     (Fmt.str "Dockerfile.oi-%s.%s"
@@ -296,11 +350,12 @@ RUN --mount=type=cache,target=/cache,id=oi-cache-build,sharing=locked \
        (String.concat "-" (List.map slug_of_target [ target_label ])))
     target_label
 
-let emit_no_recipe ~distro ~oi_version ~registry ~output ~targets =
+let emit_no_recipe ~distro ~oi_version ~registry ~no_cache_mount ~output
+    ~targets =
   let target_label = String.concat " " targets in
   let body =
     render_no_recipe_dockerfile ~distro ~oi_version_default:oi_version
-      ~registry_default:registry ~target_label
+      ~registry_default:registry ~target_label ~no_cache_mount
   in
   let slug = targets |> List.map slug_of_target |> String.concat "-" in
   let distro_tag =
@@ -324,7 +379,7 @@ let emit_no_recipe ~distro ~oi_version ~registry ~output ~targets =
     (Filename.dirname dockerfile_path)
 
 let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
-    ~refresh ~registry ~distro ~oi_version ~output ~targets =
+    ~refresh ~registry ~distro ~oi_version ~no_cache_mount ~output ~targets =
   if targets = [] then
     Oi.Error.config_error
       "oi docker: no target. Pass one or more PKG / @HANDLE / @HANDLE/PKG \
@@ -365,6 +420,7 @@ let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
       ~registry_default:registry
       ~depexts:[] (* TODO target-scoped depexts; for now base set only *)
       ~shas ~target_label ~recipe_node_count:(List.length merged.nodes)
+      ~no_cache_mount
   in
   let slug = targets |> List.map slug_of_target |> String.concat "-" in
   let distro_tag =

@@ -13,6 +13,7 @@ val emit_no_recipe :
   distro:Distro.t ->
   oi_version:string ->
   registry:string ->
+  no_cache_mount:bool ->
   output:string option ->
   targets:string list ->
   unit
@@ -39,6 +40,7 @@ val emit :
   registry:string ->
   distro:Distro.t ->
   oi_version:string ->
+  no_cache_mount:bool ->
   output:string option ->
   targets:string list ->
   unit

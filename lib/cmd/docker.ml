@@ -100,8 +100,8 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
     "# writes ./registry/<os_key>/"
 
 let cmd =
-  let run (c : Terms.common) refresh registry oi_version no_recipe test_mode all
-      distro src_context output targets =
+  let run (c : Terms.common) refresh registry oi_version no_recipe
+      no_cache_mount test_mode all distro src_context output targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.fs;
@@ -133,12 +133,12 @@ let cmd =
         ~output:dir ()
     else if targets <> [] then
       if no_recipe then
-        Docker_target.emit_no_recipe ~distro ~oi_version ~registry ~output
-          ~targets
+        Docker_target.emit_no_recipe ~distro ~oi_version ~registry
+          ~no_cache_mount ~output ~targets
       else
         Docker_target.emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
           ~session:http_session ~platform ~refresh ~registry ~distro ~oi_version
-          ~output ~targets
+          ~no_cache_mount ~output ~targets
     else if test_mode then
       emit_project ~cmd:"oi test" ~suffix:"test" ~tag_label:"my-project-test"
         ~generator:"oi docker --test" ~cwd_s ~distro ~output
@@ -230,6 +230,20 @@ let cmd =
              URL are stable."
           [ "no-recipe" ])
   in
+  let no_cache_mount =
+    Arg.(
+      value & flag
+      & info
+          ~doc:
+            "Omit BuildKit $(b,--mount=type=cache) directives and use plain \
+             $(b,mkdir -p) for the same target paths. The build is fully \
+             self-contained (no cache reuse across builds) but works in \
+             environments where the cache mount lives on a different \
+             filesystem from the image overlay — in which case the hardlink \
+             pass [cp -Rfl] used during layer staging would otherwise fail \
+             with $(b,EXDEV)."
+          [ "no-cache-mount" ])
+  in
   let info =
     Cmd.info "docker" ~doc:"Generate Dockerfiles for project builds and CI."
       ~man:
@@ -258,4 +272,5 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.common $ Terms.refresh $ Terms.registry $ oi_version
-      $ no_recipe $ test_mode $ all $ distro $ src_context $ output $ targets)
+      $ no_recipe $ no_cache_mount $ test_mode $ all $ distro $ src_context
+      $ output $ targets)
