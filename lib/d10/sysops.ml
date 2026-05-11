@@ -217,8 +217,8 @@ let link_tree t ~src ~dst =
   try run_quiet t [ "cp"; "-Rfl"; src_s ^ "/."; dst_s ^ "/" ]
   with Eio.Exn.Io _ ->
     Log.debug (fun m ->
-        m "link_tree %s -> %s: hardlink pass failed; falling back to copy"
-          src_s dst_s);
+        m "link_tree %s -> %s: hardlink pass failed; falling back to copy" src_s
+          dst_s);
     run_quiet t [ "cp"; "-Rfa"; src_s ^ "/."; dst_s ^ "/" ]
 
 (* -- Low-level command execution ----------------------------------------- *)

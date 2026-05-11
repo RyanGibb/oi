@@ -56,7 +56,7 @@ let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
   let mgr = Distro.package_manager (resolved :> Distro.t) in
   let mgr =
     match mgr with
-    | `Apk | `Apt | `Yum as m -> m
+    | (`Apk | `Apt | `Yum) as m -> m
     | _ ->
         Oi.Error.config_error
           "oi docker: distro %s uses an unsupported package manager"
@@ -215,7 +215,7 @@ let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
   let mgr = Distro.package_manager (resolved :> Distro.t) in
   let mgr =
     match mgr with
-    | `Apk | `Apt | `Yum as m -> m
+    | (`Apk | `Apt | `Yum) as m -> m
     | _ ->
         Oi.Error.config_error
           "oi docker: distro %s uses an unsupported package manager"
@@ -287,10 +287,13 @@ RUN --mount=type=cache,target=/cache,id=oi-cache-build,sharing=locked \
     target_label distro_label target_label distro_label oi_version_default
     registry_default img image_tag install Oi.Stamp.cache_schema
     Oi.Stamp.data_schema target_label
-    (Fmt.str "oi-%s" (String.concat "-" (List.map slug_of_target [ target_label ])))
+    (Fmt.str "oi-%s"
+       (String.concat "-" (List.map slug_of_target [ target_label ])))
     (Fmt.str "Dockerfile.oi-%s.%s"
-       (String.concat "-" (List.map slug_of_target [ target_label ])) distro_label)
-    (Fmt.str "oi-%s" (String.concat "-" (List.map slug_of_target [ target_label ])))
+       (String.concat "-" (List.map slug_of_target [ target_label ]))
+       distro_label)
+    (Fmt.str "oi-%s"
+       (String.concat "-" (List.map slug_of_target [ target_label ])))
     target_label
 
 let emit_no_recipe ~distro ~oi_version ~registry ~output ~targets =
@@ -361,12 +364,9 @@ let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
     render_dockerfile ~distro ~oi_version_default:oi_version
       ~registry_default:registry
       ~depexts:[] (* TODO target-scoped depexts; for now base set only *)
-      ~shas ~target_label
-      ~recipe_node_count:(List.length merged.nodes)
+      ~shas ~target_label ~recipe_node_count:(List.length merged.nodes)
   in
-  let slug =
-    targets |> List.map slug_of_target |> String.concat "-"
-  in
+  let slug = targets |> List.map slug_of_target |> String.concat "-" in
   let distro_tag =
     Distro.tag_of_distro (Distro.resolve_alias distro :> Distro.t)
   in
@@ -386,9 +386,7 @@ let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
      the archives live under [$OI_CACHE_DIR/d10ir/archives = /cache/...].
      Rewrite so [oi ir run]'s [resolve_archive_path] finds them at the
      container path baked into the Dockerfile. *)
-  let merged =
-    { merged with archive_root = "/cache/d10ir/archives" }
-  in
+  let merged = { merged with archive_root = "/cache/d10ir/archives" } in
   D10ir.Plan.save Eio.Path.(fs / recipe_path) merged;
   Registry_docker.write_file dockerfile_path dockerfile_body;
   Oi.Say.step "Wrote";

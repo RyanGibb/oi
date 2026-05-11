@@ -369,7 +369,10 @@ let update_cmd =
                 handles = [];
               };
           ];
-        with_repos = [];
+        (* The [@avsm] overlay (or [url_overlays] in dev mode) carries
+           the [oi] pin, so the handle must reach
+           [packages_dirs_for_group] via [with_repos]. *)
+        with_repos;
         pins = url_project.pins;
         extra_repos = all_extras;
         constraints = extra_constraints;

@@ -526,7 +526,10 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
                 handles = [];
               };
           ];
-        with_repos = [];
+        (* Overlay handles must flow through so [solve_uncached] can
+           resolve them into [packages/] dirs — [extra_repos] alone
+           isn't read by the per-group solve. *)
+        with_repos;
         pins = url_project.pins;
         extra_repos = all_extras;
         constraints = extra_constraints;
@@ -980,7 +983,8 @@ let cmd =
           List.iter
             (fun (e : Oi.Source.Reporepo.entry) ->
               if e.toolchain_name <> None then begin
-                Stdlib.Option.iter (fun s -> names := spec_name s :: !names)
+                Stdlib.Option.iter
+                  (fun s -> names := spec_name s :: !names)
                   e.toolchain_compiler;
                 List.iter
                   (fun group ->
@@ -1011,9 +1015,7 @@ let cmd =
                 |> List.sort String.compare
               in
               let kept, dropped =
-                List.partition
-                  (fun n -> not (List.mem n tc_names))
-                  all_names
+                List.partition (fun n -> not (List.mem n tc_names)) all_names
               in
               if dropped <> [] then
                 Log.info (fun m ->

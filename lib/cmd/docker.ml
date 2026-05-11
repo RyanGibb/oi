@@ -137,8 +137,8 @@ let cmd =
           ~targets
       else
         Docker_target.emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
-          ~session:http_session ~platform ~refresh ~registry ~distro
-          ~oi_version ~output ~targets
+          ~session:http_session ~platform ~refresh ~registry ~distro ~oi_version
+          ~output ~targets
     else if test_mode then
       emit_project ~cmd:"oi test" ~suffix:"test" ~tag_label:"my-project-test"
         ~generator:"oi docker --test" ~cwd_s ~distro ~output
@@ -203,9 +203,9 @@ let cmd =
       & info ~docv:"TARGET"
           ~doc:
             "Build target(s): a $(b,PKG) name, $(b,@HANDLE) overlay, or \
-             $(b,@HANDLE/PKG). Generates a Dockerfile that fetches every \
-             d10ir archive in one cacheable layer and replays the plan. \
-             Mutually exclusive with $(b,--all) and $(b,--test)."
+             $(b,@HANDLE/PKG). Generates a Dockerfile that fetches every d10ir \
+             archive in one cacheable layer and replays the plan. Mutually \
+             exclusive with $(b,--all) and $(b,--test)."
           [])
   in
   let oi_version =

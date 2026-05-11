@@ -262,6 +262,13 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
        populating [unfound_bins] for the error path. Calls [exit] on
        successful exec, so a [true] return is unreachable in practice. *)
   let solve_and_exec pkg_names =
+    (* [@avsm/owntracks] target gets routed into both [target] and
+       [with_deps] so it stays a solver root after either dispatch
+       path strips it; that means step 0a's [solve_with_extras
+       [target]] inherits the same name from [extra_names]. The
+       solver dedups internally but the log line ("Solving for
+       packages: owntracks, owntracks") is misleading. *)
+    let pkg_names = List.sort_uniq String.compare pkg_names in
     Logs.info (fun m ->
         m "Solving for packages: %s" (String.concat ", " pkg_names));
     let names =
@@ -282,7 +289,14 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                 handles = [];
               };
           ];
-        with_repos = [];
+        (* Overlay handles from [--with=@H/PKG] / [--with-repo=@H] / project
+           [x-repos] must flow into the request so the solver's
+           [packages_dirs_for_group] picks up their [packages/] trees.
+           Passing [[]] here caused the same "No known implementations"
+           failure mode that bit [sync.ml]: [extra_repos] alone isn't
+           enough — [solve_uncached] reads [req.with_repos] when
+           computing [global_handles]. *)
+        with_repos;
         pins = project_pins;
         extra_repos = all_extras;
         constraints = extra_constraints;
@@ -523,7 +537,9 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                     handles = [];
                   };
               ];
-            with_repos = [];
+            (* See the matching note in [solve_and_exec]: the solver only
+               sees overlay handles via [req.with_repos]. *)
+            with_repos;
             pins = project_pins;
             extra_repos = all_extras;
             constraints;

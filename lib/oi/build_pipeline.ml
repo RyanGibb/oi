@@ -321,7 +321,7 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
                  surfaced via [external_layer_hashes]); otherwise fall back
                  to the first consumer package's layer hash. *)
               let toolchain_layer =
-                match exec_plan.external_layer_hashes, exec_plan.packages with
+                match (exec_plan.external_layer_hashes, exec_plan.packages) with
                 | h :: _, _ -> h
                 | [], p :: _ -> p.layer_hash
                 | [], [] -> ""
@@ -349,8 +349,8 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
                               nothing to build";
                          });
                 }
-              else begin
-                try
+              else
+                begin try
                   let recipe =
                     Recipe_emitter.emit ~d10
                       ~cli_invocation:(Array.to_list Sys.argv) ~toolchain_name
@@ -397,7 +397,7 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
                       recipe = None;
                       error = Error (Emit_failed { msg });
                     }
-              end
+                end
             with
             | Error.E e ->
                 {

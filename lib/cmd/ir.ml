@@ -155,7 +155,10 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
           Group
             { tokens = List.map OpamPackage.Name.to_string names; handles = [] };
         ];
-      with_repos = [];
+      (* Handles extracted from [@H/PKG] tokens must flow to the
+         per-group solve via [with_repos]; [extra_repos] alone doesn't
+         add their [packages/] trees. *)
+      with_repos;
       pins = [];
       extra_repos = all_extras;
       constraints = extra_constraints;

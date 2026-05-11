@@ -115,7 +115,8 @@ let copy_file_preserve_mode ~src ~dst =
           st.Unix.st_perm
       in
       Fun.protect
-        ~finally:(fun () -> try Unix.close out_fd with Unix.Unix_error _ -> ())
+        ~finally:(fun () ->
+          try Unix.close out_fd with Unix.Unix_error _ -> ())
         (fun () ->
           let buf = Bytes.create 65536 in
           let rec loop () =
@@ -124,8 +125,7 @@ let copy_file_preserve_mode ~src ~dst =
               let written = ref 0 in
               while !written < n do
                 written :=
-                  !written
-                  + Unix.write out_fd buf !written (n - !written)
+                  !written + Unix.write out_fd buf !written (n - !written)
               done;
               loop ()
             end
@@ -141,8 +141,7 @@ let copy_file_preserve_mode ~src ~dst =
    doesn't disable hardlinks for the rest of the run. *)
 let link_or_copy ~src ~dst =
   try Unix.link src dst
-  with Unix.Unix_error (Unix.EXDEV, _, _) ->
-    copy_file_preserve_mode ~src ~dst
+  with Unix.Unix_error (Unix.EXDEV, _, _) -> copy_file_preserve_mode ~src ~dst
 
 let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
     ~exit_status ?recipe_json () =
