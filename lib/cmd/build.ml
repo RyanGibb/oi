@@ -980,7 +980,7 @@ let cmd =
           List.iter
             (fun (e : Oi.Source.Reporepo.entry) ->
               if e.toolchain_name <> None then begin
-                Option.iter (fun s -> names := spec_name s :: !names)
+                Stdlib.Option.iter (fun s -> names := spec_name s :: !names)
                   e.toolchain_compiler;
                 List.iter
                   (fun group ->
