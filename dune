@@ -1,6 +1,17 @@
 (data_only_dirs test)
 
+(rule
+ (target link_flags.sexp)
+ (deps (env_var OI_STATIC))
+ (enabled_if (= %{env:OI_STATIC=} 1))
+ (action (write-file %{target} "(-cclib -static)")))
+
+(rule
+ (target link_flags.sexp)
+ (deps (env_var OI_STATIC))
+ (enabled_if (<> %{env:OI_STATIC=} 1))
+ (action (write-file %{target} "()")))
+
 (env
- (static
-  (flags
-   (:standard -cclib -static))))
+ (release
+  (flags (:standard (:include link_flags.sexp)))))

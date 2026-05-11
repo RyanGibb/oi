@@ -34,13 +34,13 @@ jobs:
           USER opam
           WORKDIR /home/opam/src
           COPY --chown=opam:opam . /home/opam/src
-          ENV OPAMYES=true OPAMCONFIRMLEVEL=unsafe-yes
+          ENV OPAMYES=true OPAMCONFIRMLEVEL=unsafe-yes OI_STATIC=1
           RUN cd ~/opam-repository && git pull --quiet origin master \
               && opam-2.5 update default
           RUN opam-2.5 repo add avsm git+https://git.recoil.org/anil.recoil.org/opam-overlay --all && opam-2.5 update
           RUN opam-2.5 switch create . --repos avsm,default \
               --packages "ocaml-option-static,ocaml-option-no-compression,ocaml.5.4.1"
-          RUN opam-2.5 exec -- dune build --profile=static bin/main.exe bin/oix.exe
+          RUN opam-2.5 exec -- dune build --profile=release bin/main.exe bin/oix.exe
           USER root
           RUN install -m 0755 _build/default/bin/main.exe /oi \
               && install -m 0755 _build/default/bin/oix.exe /oix

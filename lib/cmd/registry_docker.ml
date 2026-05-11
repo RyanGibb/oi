@@ -157,9 +157,10 @@ let install_cmd mgr pkgs =
 
 (* -- Stage 0: static-linked oi binary built on alpine/musl --------------- *)
 
-(* The [static] dune profile (defined in the repo's root [dune] file) adds
-   [-ccopt -static] to ocaml flags. Building inside Alpine/musl produces a
-   fully static binary that runs on any Linux distro. *)
+(* [OI_STATIC=1] is picked up by the root [dune]'s discover rule and
+   appended to the release-profile link flags as [-cclib -static].
+   Building inside Alpine/musl with that flag yields a fully static
+   binary that runs on any Linux distro. *)
 let oi_builder_stage ~src_context =
   let apk_build_pkgs =
     "build-base m4 perl pkgconf git curl bash patch gmp-dev sqlite-dev \
@@ -172,7 +173,12 @@ let oi_builder_stage ~src_context =
   @@ DF.user "opam"
   @@ DF.workdir "/home/opam/src"
   @@ DF.copy ~chown:"opam:opam" ~src:[ src_context ] ~dst:"/home/opam/src" ()
-  @@ DF.env [ ("OPAMYES", "true"); ("OPAMCONFIRMLEVEL", "unsafe-yes") ]
+  @@ DF.env
+       [
+         ("OPAMYES", "true");
+         ("OPAMCONFIRMLEVEL", "unsafe-yes");
+         ("OI_STATIC", "1");
+       ]
   (* The ocaml/opam image's [default] repo points at a baked-in local
      clone (git+file:///home/opam/opam-repository), so `opam update
      default` alone just re-reads that frozen snapshot. Pull the clone
@@ -182,7 +188,7 @@ let oi_builder_stage ~src_context =
        "cd ~/opam-repository && git pull --quiet origin master && opam-2.5 \
         update default"
   @@ DF.run "opam-2.5 install ."
-  @@ DF.run "opam-2.5 exec -- dune build --profile=static bin/main.exe"
+  @@ DF.run "opam-2.5 exec -- dune build --profile=release bin/main.exe"
   @@ DF.user "root"
   @@ DF.run
        "mkdir -p /out && cp _build/default/bin/main.exe /out/oi && chmod 755 \
