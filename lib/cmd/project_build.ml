@@ -1,30 +1,5 @@
 let ( / ) = Filename.concat
 
-(* Copy [src] to [dst], dereferencing if [src] is a symlink. [_build]
-   installs binaries as symlinks pointing at [_build/default/.../foo.exe],
-   so a naive [Sys.rename] / cp would carry that link out into [dist/],
-   which makes the file useless as a CI artifact. [Unix.openfile] follows
-   symlinks by default. *)
-let copy_resolved ~src ~dst =
-  let buf_size = 65536 in
-  let buf = Bytes.create buf_size in
-  let perm = (Unix.stat src).st_perm in
-  let ic = Unix.openfile src [ O_RDONLY ] 0 in
-  let oc = Unix.openfile dst [ O_WRONLY; O_CREAT; O_TRUNC ] perm in
-  let rec loop () =
-    let n = Unix.read ic buf 0 buf_size in
-    if n > 0 then begin
-      let _ : int = Unix.write oc buf 0 n in
-      loop ()
-    end
-  in
-  Fun.protect
-    ~finally:(fun () ->
-      (try Unix.close ic with _ -> ());
-      try Unix.close oc with _ -> ())
-    loop;
-  Unix.chmod dst perm
-
 (* Scan [_build/install/default/{bin,sbin}] under [cwd] and copy each
    entry into [cwd/dist/<basename>-<os_key>]. Returns the list of
    (source basename, destination path) pairs actually written, in the
@@ -36,19 +11,11 @@ let collect_dist ~cwd ~os_key =
   (try Unix.mkdir dist_root 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
   let install_root = cwd / "_build" / "install" / "default" in
   let scan sub =
-    let dir = install_root / sub in
-    if not (Sys.file_exists dir) then []
-    else
-      Sys.readdir dir
-      |> Array.to_list
-      |> List.sort String.compare
-      |> List.filter_map (fun name ->
-             let src = dir / name in
-             if (Unix.stat src).st_kind <> S_REG then None
-             else
-               let dst = dist_root / Fmt.str "%s-%s" name os_key in
-               copy_resolved ~src ~dst;
-               Some (name, dst))
+    Dist.list_files (install_root / sub)
+    |> List.map (fun (name, src) ->
+        let dst = dist_root / Fmt.str "%s-%s" name os_key in
+        Dist.copy_resolved ~src ~dst;
+        (name, dst))
   in
   scan "bin" @ scan "sbin"
 

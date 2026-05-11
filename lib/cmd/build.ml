@@ -652,7 +652,7 @@ let mirror_archives ~fs ~cache ~label archives =
 let cmd =
   let run (c : Terms.common) refresh locked skip_local all only skip registry
       use_registry with_repos with_deps jobs toolchain_override depext_only
-      export envrc_mode archives_only every_version save_d10ir targets =
+      export envrc_mode archives_only every_version save_d10ir dist targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -784,6 +784,12 @@ let cmd =
     in
     let target_group : (string, int) Hashtbl.t = Hashtbl.create 16 in
     let group_results : (int, group_outcome) Hashtbl.t = Hashtbl.create 16 in
+    (* Accumulator for [--dist=DIR]: each successful per-bucket build
+       appends [(subdir, basename, dst-path)] triples for the binaries
+       it surfaced from its root layers. Printed in a "Dist artifacts:"
+       block AFTER [with_ui] closes so the live progress bar isn't
+       overwritten. Stays empty when [--dist] is unset. *)
+    let dist_mapping : (string * string * string) list ref = ref [] in
     (* One [Progress_ui] covers slow setup ([ensure_base],
        classify_with_args, pick_toolchain) AND the build itself.
        The body returns [unit] — the build_summary print fires
@@ -1555,6 +1561,26 @@ let cmd =
                             in
                             Hashtbl.replace group_results gi outcome))
                   solved.groups);
+            (* [--dist=DIR]: copy [bin/] + [sbin/] + [share/] from each
+               root layer's fs prefix into
+               [DIR/{bin,sbin,share}/]. Skips roots whose layer never
+               materialised (solve / build failure); silently no-ops
+               when [dist] is unset. *)
+            (match (dist, result_opt, solved.merged) with
+            | Some dir, Some _, Some merged ->
+                (try Unix.mkdir dir 0o755
+                 with Unix.Unix_error (EEXIST, _, _) -> ());
+                List.iter
+                  (fun root_hash ->
+                    let h = D10ir.Layer_hash.to_string root_hash in
+                    let layer_fs = cache_root / "layers" / os_key / h / "fs" in
+                    if Sys.file_exists layer_fs then
+                      let added =
+                        Dist.collect_install ~root:layer_fs ~dst:dir
+                      in
+                      dist_mapping := !dist_mapping @ added)
+                  merged.roots
+            | _ -> ());
             gi_offset_ref := !gi_offset_ref + List.length solved.groups)
           buckets);
     (* Progress_ui closed; the summary block prints on a clean
@@ -1587,7 +1613,31 @@ let cmd =
     end;
     (* [--export DIR]: publish the local cache once the build phase has
        settled. *)
-    do_export_if_set ()
+    do_export_if_set ();
+    (* [--dist=DIR] mapping print — fired after [with_ui] has closed so
+       the bar isn't overwritten. Counts by sub-dir to keep the share
+       tree (which can be 100s of entries) summarised rather than
+       enumerated line by line. *)
+    if !dist_mapping <> [] then begin
+      let by_sub = Hashtbl.create 4 in
+      List.iter
+        (fun (sub, _, _) ->
+          Hashtbl.replace by_sub sub
+            (1 + Stdlib.Option.value (Hashtbl.find_opt by_sub sub) ~default:0))
+        !dist_mapping;
+      Fmt.pr "@.%a@." Oi.Style.header_string "Dist artifacts:";
+      List.iter
+        (fun (_, name, dst) ->
+          Fmt.pr "  %s %a %s@." name Oi.Style.dim_string "→" dst)
+        (List.filter
+           (fun (sub, _, _) -> sub = "bin" || sub = "sbin")
+           !dist_mapping);
+      match Hashtbl.find_opt by_sub "share" with
+      | Some n when n > 0 ->
+          Fmt.pr "  share/ %a %a@." Oi.Style.dim_string (Fmt.str "(%d files)" n)
+            Oi.Style.dim_string "—"
+      | _ -> ()
+    end
   in
   let targets =
     Arg.(
@@ -1663,6 +1713,19 @@ let cmd =
              $(b,<root-pkg>.d10ir.json). Build still runs."
           [ "save-d10ir" ])
   in
+  let dist =
+    Arg.(
+      value
+      & opt (some string) None
+      & info ~docv:"DIR"
+          ~doc:
+            "After a successful build, copy the $(b,bin/) and $(b,sbin/) \
+             contents of every root layer (resolving symlinks) into \
+             $(i,DIR/bin/) and $(i,DIR/sbin/). Used by the multi-stage $(b,oi \
+             docker) image to surface installed binaries for the runtime \
+             stage's $(b,COPY --from=build)."
+          [ "dist" ])
+  in
   let info =
     Cmd.info "build" ~doc:"Build a project, package, overlay, or every overlay"
       ~man:
@@ -1703,7 +1766,7 @@ let cmd =
       $ all $ only $ skip $ Terms.registry $ Terms.use_registry
       $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
       $ depext_only $ export $ Sync.envrc_mode_arg $ archives_only
-      $ every_version $ save_d10ir $ targets)
+      $ every_version $ save_d10ir $ dist $ targets)
 
 (* -- oi test ------------------------------------------------------------ *)
 

@@ -1,11 +1,12 @@
-(** [oi docker TARGET]: emit a Dockerfile (plus sidecar [recipe.json]) that
-    reproduces a single solve target inside a container.
+(** [oi docker TARGET]: emit a Dockerfile that builds a target inside a
+    container.
 
     The Dockerfile is d10ir-aware: it walks the solved [D10ir.Plan.t], lists
     every unique source-archive sha256, and bakes them into one heredoc'd RUN
-    that curls them in parallel under a BuildKit cache mount. The recipe is
-    written out next to the Dockerfile so [oi ir run /work] inside the container
-    has the plan to replay. *)
+    that curls them in parallel under a BuildKit cache mount. The container then
+    runs [oi build --use-registry=archives TARGET], which solves against the
+    reporepo and consumes the prefetched archives — no [recipe.json] sidecar,
+    and reporepo changes between bake time and [docker build] are picked up. *)
 
 module Distro = Dockerfile_opam.Distro
 
@@ -46,12 +47,11 @@ val emit :
   unit
 (** [emit ~targets ~distro ~output …] solves [targets] under [distro]'s os_key
     via [Build_pipeline.solve], collects unique archive shas from the merged
-    [D10ir.Plan.t], and writes:
-
-    - [<output>/Dockerfile.oi-<slug>.<distro>] (or that name in the cwd when
-      [output] is [None])
-    - [<output>/recipe.json] — the d10ir plan the Dockerfile's [oi ir run] step
-      consumes.
+    [D10ir.Plan.t], and writes a single Dockerfile to
+    [<output>/Dockerfile.oi-<slug>.<distro>] (or that name in the cwd when
+    [output] is [None]). The plan is only used at generation time to derive the
+    sha list embedded in the fetch step; the container re-solves at build time
+    via [oi build TARGET] so no recipe sidecar is emitted.
 
     [oi_version] is passed through as the default for the [ARG OI_VERSION] in
     the emitted Dockerfile ([latest] resolves at docker-build time via the
