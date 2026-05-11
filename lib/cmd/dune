@@ -4,6 +4,7 @@
   oi
   d10
   d10ir
+  d10ir_cmd
   osrel
   cmdliner
   dune-build-info
