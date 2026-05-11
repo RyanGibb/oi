@@ -6,9 +6,7 @@ type display = (unit, unit) Progress.Display.t
 
 let active : display option ref = ref None
 let mutex = Mutex.create ()
-
 let with_lock f = Mutex.protect mutex f
-
 let set_active d = with_lock (fun () -> active := Some d)
 let clear_active () = with_lock (fun () -> active := None)
 
@@ -21,9 +19,9 @@ let () =
   at_exit (fun () ->
       match !active with
       | None -> ()
-      | Some d ->
+      | Some d -> (
           active := None;
-          (try Progress.Display.finalise d with _ -> ()))
+          try Progress.Display.finalise d with _ -> ()))
 
 let interject f =
   match !active with

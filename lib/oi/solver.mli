@@ -205,7 +205,6 @@ module Memo : sig
     key:string ->
     OpamPackage.t list ->
     unit
-
 end
 
 (** {1 Solving} *)

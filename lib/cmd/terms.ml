@@ -48,8 +48,7 @@ let data_dir =
   let home = Sys.getenv "HOME" in
   let default_path = home / ".local" / "share" / Workspace.app_name in
   let doc =
-    Fmt.str
-      "Data directory. Falls back to $(b,%s), then $(b,%s). Default: %s."
+    Fmt.str "Data directory. Falls back to $(b,%s), then $(b,%s). Default: %s."
       app_env xdg_var default_path
   in
   let arg =
@@ -88,8 +87,8 @@ let format_term =
     value & opt format_conv Text
     & info ~docv:"FORMAT"
         ~doc:
-          "Output format: $(b,text) (default) or $(b,json). See $(b,oi \
-           --help) AUTOMATION and EXIT STATUS."
+          "Output format: $(b,text) (default) or $(b,json). See $(b,oi --help) \
+           AUTOMATION and EXIT STATUS."
         [ "format" ])
 
 (* -- Shared "global" options ------------------------------------------- *)
@@ -112,9 +111,7 @@ let common =
 let refresh =
   Arg.(
     value & flag
-    & info
-        ~doc:
-          "Re-fetch repos, pinned sources, and git URLs even if fresh."
+    & info ~doc:"Re-fetch repos, pinned sources, and git URLs even if fresh."
         [ "refresh" ])
 
 let locked =
@@ -122,9 +119,8 @@ let locked =
     value & flag
     & info
         ~doc:
-          "Forbid registry fetches and reporepo refreshes; fail fast on \
-           cache miss. Implies $(b,--use-registry=never); overrides \
-           $(b,--refresh)."
+          "Forbid registry fetches and reporepo refreshes; fail fast on cache \
+           miss. Implies $(b,--use-registry=never); overrides $(b,--refresh)."
         [ "locked" ])
 
 let skip_local =
@@ -166,17 +162,14 @@ let toolchain =
     value
     & opt (some string) None
     & info ~docv:"HANDLE"
-        ~doc:
-          "Select a reporepo toolchain by name. List with $(b,oi config)."
+        ~doc:"Select a reporepo toolchain by name. List with $(b,oi config)."
         [ "toolchain" ])
 
 let default_registry = "https://oi.thicket.dev"
 
 let registry =
   let doc =
-    Fmt.str
-      "Remote layer registry URL (default: %s)."
-      default_registry
+    Fmt.str "Remote layer registry URL (default: %s)." default_registry
   in
   Arg.(
     value & opt string default_registry & info ~docv:"URL" ~doc [ "registry" ])

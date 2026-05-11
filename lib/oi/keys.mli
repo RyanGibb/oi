@@ -79,11 +79,11 @@ val reporepo_hash : string
 
 val d10_archive : string
 (** [x-d10-archive: <sha>] — sha256 of the consolidated d10ir source archive
-    produced by [oi repo bake] / [oi repo bump]. Set in-place on every
-    reporepo opam after a successful bake; consumers ([oi build] / [oi show])
-    skip the fetch+patch+extras+substs pipeline whenever this is present and
-    look the archive up in [<cache>/d10ir/archives/<sha>.tar.zst]. Hard-error
-    if the registered archive isn't available locally — the user must re-bake. *)
+    produced by [oi repo bake] / [oi repo bump]. Set in-place on every reporepo
+    opam after a successful bake; consumers ([oi build] / [oi show]) skip the
+    fetch+patch+extras+substs pipeline whenever this is present and look the
+    archive up in [<cache>/d10ir/archives/<sha>.tar.zst]. Hard-error if the
+    registered archive isn't available locally — the user must re-bake. *)
 
 (** {1 Helpers} *)
 

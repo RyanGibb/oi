@@ -56,7 +56,7 @@ let strip_ansi s =
       while !i < n && s.[!i] <> 'm' do
         incr i
       done;
-      if !i < n then incr i  (* skip the terminating 'm' *)
+      if !i < n then incr i (* skip the terminating 'm' *)
     end
     else begin
       Buffer.add_char buf s.[!i];

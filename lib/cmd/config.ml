@@ -518,17 +518,19 @@ let cmd =
               "Data and cache dirs. Override with $(b,OI_DATA_DIR), \
                $(b,OI_CACHE_DIR), or XDG defaults." );
           `I ("$(b,Registry)", "Layer registry URL and index TTL.");
-          `I ("$(b,Source mirror)", "Local opam source mirror: path, blob count, total size.");
+          `I
+            ( "$(b,Source mirror)",
+              "Local opam source mirror: path, blob count, total size." );
           `I
             ( "$(b,Toolchains)",
               "Handles accepted by $(b,--toolchain=NAME), tagged \
-               $(b,[relocatable]) or $(b,[fixed-prefix]), with source URL \
-               and install status." );
+               $(b,[relocatable]) or $(b,[fixed-prefix]), with source URL and \
+               install status." );
           `I
             ( "$(b,Base overlays)",
               "Overlays declared by the reporepo, each marked \
-               $(b,materialised), $(b,not materialised), or \
-               $(b,definition only)." );
+               $(b,materialised), $(b,not materialised), or $(b,definition \
+               only)." );
           `I
             ( "$(b,Project)",
               "Shown when run in a project tree (suppress with \
@@ -536,8 +538,8 @@ let cmd =
                handles, project-local $(b,packages/) opam-repository." );
           `I
             ( "$(b,Dev tools)",
-              "Tools the next $(b,oi build) would install. $(b,hit) = \
-               trigger fired; $(b,miss) = skipped." );
+              "Tools the next $(b,oi build) would install. $(b,hit) = trigger \
+               fired; $(b,miss) = skipped." );
         ]
   in
   Cmd.v info Term.(const run $ Terms.common $ Terms.skip_local)

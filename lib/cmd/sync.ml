@@ -80,14 +80,14 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
           conf;
           local_packages_dir = None;
           project_root = Some cwd;
-        force_source = false;
+          force_source = false;
           refresh = Stdlib.Option.value ~default:false refresh;
         }
       in
       let hashes =
         Progress_ui.with_ui ~target:tool_name
           ~clock:(clock :> _ Eio.Resource.t)
-          ~enabled:(not quiet && Tty.is_tty ())
+          ~enabled:((not quiet) && Tty.is_tty ())
         @@ fun reporter ->
         let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
         let _ : D10ir.Direct.result option =
@@ -240,10 +240,10 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
   in
   let say_field_list label items =
-    if quiet then begin
-      if items <> [] then
+    if quiet then
+      begin if items <> [] then
         Logs.info (fun m -> m "%s: %s" label (String.concat ", " items))
-    end
+      end
     else Oi.Say.field_list label items
   in
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
@@ -331,7 +331,13 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     let req : Oi.Build_pipeline.request =
       {
         targets =
-          [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+          [
+            Group
+              {
+                tokens = List.map OpamPackage.Name.to_string names;
+                handles = [];
+              };
+          ];
         with_repos = [];
         pins = project.pins @ url_project.pins;
         extra_repos = all_extras;
@@ -345,8 +351,9 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
         refresh;
       }
     in
-    Progress_ui.with_ui ~target:cwd ~clock:(clock :> _ Eio.Resource.t)
-      ~enabled:(not quiet && Tty.is_tty ())
+    Progress_ui.with_ui ~target:cwd
+      ~clock:(clock :> _ Eio.Resource.t)
+      ~enabled:((not quiet) && Tty.is_tty ())
     @@ fun reporter ->
     let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
     let _ : D10ir.Direct.result option =
@@ -364,8 +371,8 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   D10.Prefix.assemble d10 ~layer_hashes ~dst:Eio.Path.(fs / prefix);
   say_step "Installing dev tools";
   let tools =
-    install_tools ~quiet ?refresh:(Some refresh) ?jobs ~proc_mgr ~fs ~clock
-      ~sys ~cache ~data_dir ~conf ~os_key ~session ~extra_repos:all_extras
+    install_tools ~quiet ?refresh:(Some refresh) ?jobs ~proc_mgr ~fs ~clock ~sys
+      ~cache ~data_dir ~conf ~os_key ~session ~extra_repos:all_extras
       ~pins:project.pins ?toolchain ?layer_remote ?source_remote ~cwd ()
   in
   if envrc_should_write envrc_mode then begin

@@ -43,9 +43,8 @@ let info =
       [
         `S Manpage.s_description;
         `P
-          "Solve $(b,*.opam) manifests against opam-repository and build, \
-           run, or publish the result. Builds are content-addressed and \
-           cached.";
+          "Solve $(b,*.opam) manifests against opam-repository and build, run, \
+           or publish the result. Builds are content-addressed and cached.";
         `S "QUICK START";
         `P "$(b,1.) Run a tool from opam:";
         `Pre
@@ -92,13 +91,13 @@ let info =
         `P
           "Each token is an opam package, with optional version constraint \
            ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
-           wired in as preprocessors. $(b,oi run -vv SCRIPT.ml) prints the \
-           generated dune project.";
+           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
+           in as preprocessors. $(b,oi run -vv SCRIPT.ml) prints the generated \
+           dune project.";
         `S "PROJECT LAYOUT";
         `P
-          "$(b,oi build) installs deps and dev tools into $(b,_oi/) under \
-           the project root. Activate per shell:";
+          "$(b,oi build) installs deps and dev tools into $(b,_oi/) under the \
+           project root. Activate per shell:";
         `Pre
           "  eval \"\\$(oi env)\"          # one shell\n\
           \  oi exec -- CMD              # one command\n\
@@ -106,9 +105,9 @@ let info =
         `P "$(b,_oi/) is rebuildable. Add to $(b,.gitignore).";
         `S "AUTOMATION";
         `P
-          "Non-interactive, idempotent, non-zero exit on failure (see \
-           $(b,EXIT STATUS)). $(b,oi self version --format=json) reports \
-           parseable schemas.";
+          "Non-interactive, idempotent, non-zero exit on failure (see $(b,EXIT \
+           STATUS)). $(b,oi self version --format=json) reports parseable \
+           schemas.";
         `Pre
           "  $(b,Discover)   oi CMD --help=plain, oi config, oi search \
            PATTERN, oi show TARGET\n\
@@ -124,8 +123,8 @@ let info =
         `S Manpage.s_environment;
         `P
           "Long-lived state lives in the data directory (opam-repository \
-           clones, toolchains). Rebuildable state lives in the cache \
-           directory (layers, prefixes, source mirror).";
+           clones, toolchains). Rebuildable state lives in the cache directory \
+           (layers, prefixes, source mirror).";
         `I
           ( "$(b,OI_DATA_DIR)",
             "Data directory. Falls back to $(b,XDG_DATA_HOME/oi), then \
@@ -136,8 +135,7 @@ let info =
              $(b,~/.cache/oi)." );
         `I
           ( "$(b,OI_REPOREPO)",
-            "Reporepo clone path. Defaults to \
-             $(b,\\$OI_DATA_DIR/reporepo)." );
+            "Reporepo clone path. Defaults to $(b,\\$OI_DATA_DIR/reporepo)." );
         `I
           ( "$(b,OI_REPOREPO_URL)",
             "Upstream URL for the initial reporepo clone. Ignored once the \
@@ -156,9 +154,7 @@ let force_plain_help_when_redirected argv =
   if isatty then argv
   else
     Array.map
-      (function
-        | "--help" | "--help=auto" -> "--help=plain"
-        | a -> a)
+      (function "--help" | "--help=auto" -> "--help=plain" | a -> a)
       argv
 
 let () =

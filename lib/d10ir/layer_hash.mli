@@ -1,9 +1,9 @@
 (** A d10 layer hash.
 
     Identical format to {!D10.Layer.hash} output: hex string, MD5 of the
-    concatenated SHA-512 effective-opam hashes of the package and its
-    transitive deps. The d10ir library does not compute layer hashes
-    itself — it consumes them as identifiers. *)
+    concatenated SHA-512 effective-opam hashes of the package and its transitive
+    deps. The d10ir library does not compute layer hashes itself — it consumes
+    them as identifiers. *)
 
 type t = private string
 

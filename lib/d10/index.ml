@@ -169,9 +169,7 @@ let parse_pkg_string s =
 let parse_meta_file ~package_dir contents =
   let len = String.length contents in
   let acc = ref [] in
-  let push name archive =
-    acc := (name, archive) :: !acc
-  in
+  let push name archive = acc := (name, archive) :: !acc in
   let rec skip_ws i =
     if i >= len then i
     else
@@ -204,8 +202,7 @@ let parse_meta_file ~package_dir contents =
       loop (i + 1) (Buffer.create 16)
   in
   let starts_with p i =
-    i + String.length p <= len
-    && String.sub contents i (String.length p) = p
+    i + String.length p <= len && String.sub contents i (String.length p) = p
   in
   let read_archive_at i =
     (* Match [archive(byte) = "X"] or [archive(native) = "X"] or
@@ -214,16 +211,18 @@ let parse_meta_file ~package_dir contents =
       if i >= len then None
       else if starts_with "archive" i then
         let j = skip_ws (i + 7) in
-        let j = if j < len && contents.[j] = '(' then
-          let rec close k = if k >= len || contents.[k] = ')' then k + 1 else close (k + 1) in
-          close j
-        else j in
+        let j =
+          if j < len && contents.[j] = '(' then
+            let rec close k =
+              if k >= len || contents.[k] = ')' then k + 1 else close (k + 1)
+            in
+            close j
+          else j
+        in
         let j = skip_ws j in
         let j = if j < len && contents.[j] = '=' then j + 1 else j in
         let j = skip_ws j in
-        match read_quoted j with
-        | Some (s, _) -> Some s
-        | None -> scan (i + 1)
+        match read_quoted j with Some (s, _) -> Some s | None -> scan (i + 1)
       else scan (i + 1)
     in
     scan i
@@ -270,9 +269,7 @@ let scan_meta ~fs fs_dir =
   let lib_dir = Eio.Path.(fs / fs_dir / "lib") in
   if not (Sysops.file_exists lib_dir) then []
   else
-    let entries =
-      try Eio.Path.read_dir lib_dir with Eio.Exn.Io _ -> []
-    in
+    let entries = try Eio.Path.read_dir lib_dir with Eio.Exn.Io _ -> [] in
     List.concat_map
       (fun pkg_dir ->
         let meta_path = Eio.Path.(lib_dir / pkg_dir / "META") in
@@ -280,8 +277,7 @@ let scan_meta ~fs fs_dir =
           try
             let st = Eio.Path.stat ~follow:false meta_path in
             match st.kind with
-            | `Regular_file | `Symbolic_link ->
-                Some (Eio.Path.load meta_path)
+            | `Regular_file | `Symbolic_link -> Some (Eio.Path.load meta_path)
             | _ -> None
           with Eio.Exn.Io _ -> None
         with
@@ -289,7 +285,7 @@ let scan_meta ~fs fs_dir =
         | Some contents ->
             parse_meta_file ~package_dir:pkg_dir contents
             |> List.map (fun (findlib_pkg, archive) ->
-                   (pkg_dir, findlib_pkg, archive)))
+                (pkg_dir, findlib_pkg, archive)))
       entries
 
 let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
@@ -396,9 +392,7 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
               List.iter
                 (fun (package_dir, findlib_pkg, archive) ->
                   let archive_q =
-                    match archive with
-                    | None -> "NULL"
-                    | Some a -> quote a
+                    match archive with None -> "NULL" | Some a -> quote a
                   in
                   exec db
                     (Fmt.str
@@ -561,8 +555,8 @@ let all_tarballs db ~os_key =
   ignore
     (Sqlite3.exec_not_null_no_headers db ~cb
        (Fmt.str
-          "SELECT hash, tarball_sha256, tarball_size FROM layers WHERE \
-           os_key = %s AND tarball_sha256 IS NOT NULL"
+          "SELECT hash, tarball_sha256, tarball_size FROM layers WHERE os_key \
+           = %s AND tarball_sha256 IS NOT NULL"
           (quote os_key)));
   List.rev !results
 
@@ -594,7 +588,6 @@ let files db ~hash =
           (quote hash)));
   List.rev !results
 
-
 let all_binaries db ~os_key =
   let results = ref [] in
   let cb row =
@@ -617,8 +610,8 @@ let all_binaries db ~os_key =
 let record_tarball db ~hash ~sha256 ~size =
   exec db
     (Fmt.str
-       "UPDATE layers SET tarball_sha256 = %s, tarball_size = %Ld WHERE \
-        hash = %s"
+       "UPDATE layers SET tarball_sha256 = %s, tarball_size = %Ld WHERE hash = \
+        %s"
        (quote sha256) size (quote hash))
 
 let stats db ~os_key =
@@ -697,8 +690,7 @@ let column_names db ~schema ~table =
   let cols = ref [] in
   let cb row _headers =
     match row with
-    | [| _cid; Some name; _ty; _nn; _dflt; _pk |] ->
-        cols := name :: !cols
+    | [| _cid; Some name; _ty; _nn; _dflt; _pk |] -> cols := name :: !cols
     | _ -> ()
   in
   let sql =

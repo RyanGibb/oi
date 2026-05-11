@@ -24,15 +24,15 @@
     built before tagging was introduced or for packages that came from a
     pin-depends tree.
 
-    [tarball_sha256] / [tarball_size] are populated for every layer published
-    in a registry export ({!record_tarball}). NULL on a bin-index registry that
+    [tarball_sha256] / [tarball_size] are populated for every layer published in
+    a registry export ({!record_tarball}). NULL on a bin-index registry that
     ships only the SQLite index without the per-layer [.tar.zst] payload.
 
     [layer_binaries] enables [oi run <binary>] to look up the package providing
     a binary without scanning layer trees. [layer_meta] is the equivalent for
-    ocamlfind: each [lib/<dir>/META] in a layer contributes one row per
-    declared subpackage so [oi search ppx_deriving] can route findlib lookups
-    to the producing opam package. *)
+    ocamlfind: each [lib/<dir>/META] in a layer contributes one row per declared
+    subpackage so [oi search ppx_deriving] can route findlib lookups to the
+    producing opam package. *)
 
 (** {1 Database lifecycle} *)
 
@@ -55,36 +55,31 @@ val rebuild :
   db ->
   unit
 (** [rebuild c ?overlay_for ?include_files db] scans all layers under
-    [<root>/layers/<os_key>/] and populates the index tables. Existing data
-    for [c.os_key] is replaced atomically within a transaction. Each layer's
-    [layer.json] is parsed for metadata; its [fs/] tree is scanned for
-    binary names ([fs/bin/], [fs/sbin/]) and findlib package metadata
-    (every [fs/lib/<dir>/META] is parsed and its declared subpackages
-    recorded in [layer_meta]).
+    [<root>/layers/<os_key>/] and populates the index tables. Existing data for
+    [c.os_key] is replaced atomically within a transaction. Each layer's
+    [layer.json] is parsed for metadata; its [fs/] tree is scanned for binary
+    names ([fs/bin/], [fs/sbin/]) and findlib package metadata (every
+    [fs/lib/<dir>/META] is parsed and its declared subpackages recorded in
+    [layer_meta]).
 
-    [include_files] (default [false]) controls whether the full file path
-    list lands in [layer_files]. The bin-index registry shape leaves this
-    off — the table is the bulk of [index.db]'s on-disk size and is only
-    needed by the layer-cache shape (where [oi build] verifies tarball
-    contents). [oi search] / [find_binary] / [find_meta] don't consult
-    [layer_files] and work with [include_files = false].
+    [include_files] (default [false]) controls whether the full file path list
+    lands in [layer_files]. The bin-index registry shape leaves this off — the
+    table is the bulk of [index.db]'s on-disk size and is only needed by the
+    layer-cache shape (where [oi build] verifies tarball contents). [oi search]
+    / [find_binary] / [find_meta] don't consult [layer_files] and work with
+    [include_files = false].
 
     [overlay_for] supplies the per-layer overlay attribution (defaulted to
     [fun ~hash:_ -> None]). The [oi] cache wires this to read from the layer's
     [provenance.json] sidecar; tools that don't care about overlay routing can
     leave it at the default. *)
 
-val record_tarball :
-  db ->
-  hash:string ->
-  sha256:string ->
-  size:int64 ->
-  unit
-(** [record_tarball db ~hash ~sha256 ~size] populates the
-    [tarball_sha256] / [tarball_size] columns on the [layers] row.
-    Called per-layer after the [.tar.zst] has been written to the
-    export dir. A row whose tarball columns are NULL belongs to a
-    bin-index registry — no layer restore is possible from there. *)
+val record_tarball : db -> hash:string -> sha256:string -> size:int64 -> unit
+(** [record_tarball db ~hash ~sha256 ~size] populates the [tarball_sha256] /
+    [tarball_size] columns on the [layers] row. Called per-layer after the
+    [.tar.zst] has been written to the export dir. A row whose tarball columns
+    are NULL belongs to a bin-index registry — no layer restore is possible from
+    there. *)
 
 (** {1 Queries} *)
 
@@ -133,20 +128,17 @@ val find_meta :
   findlib_pkg:string ->
   os_key:string ->
   (string * string * string * Overlay.t option) list
-(** [find_meta db ~findlib_pkg ~os_key] returns layers whose findlib
-    metadata declares [findlib_pkg] (e.g. ["cohttp.async"]), as
-    [(package_name, package_version, layer_hash, overlay)] sorted by
-    opam version descending. Use [*] as a wildcard for substring search.
-    Reads the [layer_meta] table populated by {!rebuild}. *)
+(** [find_meta db ~findlib_pkg ~os_key] returns layers whose findlib metadata
+    declares [findlib_pkg] (e.g. ["cohttp.async"]), as
+    [(package_name, package_version, layer_hash, overlay)] sorted by opam
+    version descending. Use [*] as a wildcard for substring search. Reads the
+    [layer_meta] table populated by {!rebuild}. *)
 
-val all_tarballs :
-  db ->
-  os_key:string ->
-  (string * string * int64) list
-(** [all_tarballs db ~os_key] returns [(hash, sha256, size)] for every
-    layer in [os_key] that has a published tarball. Empty list on a
-    bin-index registry. The cmdliner layer's [fetch_remote_index]
-    consumes this to populate {!Layer.remote_index}. *)
+val all_tarballs : db -> os_key:string -> (string * string * int64) list
+(** [all_tarballs db ~os_key] returns [(hash, sha256, size)] for every layer in
+    [os_key] that has a published tarball. Empty list on a bin-index registry.
+    The cmdliner layer's [fetch_remote_index] consumes this to populate
+    {!Layer.remote_index}. *)
 
 val deps : db -> hash:string -> (string * string * string) list
 (** [deps db ~hash] returns the direct dependencies of a layer as
@@ -166,14 +158,14 @@ type stats = {
   findlib : int;
   tarballs : int;
 }
-(** Row counts for a single [os_key], scoped to that platform via the
-    [layers] join. [files] is zero unless the index was rebuilt with
-    [include_files:true]; [tarballs] counts layers that carry a
-    published [.tar.zst] (i.e. would survive a registry export). *)
+(** Row counts for a single [os_key], scoped to that platform via the [layers]
+    join. [files] is zero unless the index was rebuilt with
+    [include_files:true]; [tarballs] counts layers that carry a published
+    [.tar.zst] (i.e. would survive a registry export). *)
 
 val stats : db -> os_key:string -> stats
-(** [stats db ~os_key] gathers every count for one platform in a single
-    sqlite round-trip per row. *)
+(** [stats db ~os_key] gathers every count for one platform in a single sqlite
+    round-trip per row. *)
 
 (** {1 Invalidation} *)
 

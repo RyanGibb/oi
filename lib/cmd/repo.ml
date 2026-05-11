@@ -1,6 +1,5 @@
 open Cmdliner
 
-
 let ( / ) = Filename.concat
 
 let reporepo_term =
@@ -29,8 +28,8 @@ let depend_term =
     value & opt_all string []
     & info ~docv:"HANDLE[=VERSION]"
         ~doc:
-          "Declare a dependency on another overlay. $(b,HANDLE=VERSION) pins \
-           a recorded version; bare $(b,HANDLE) accepts any. Repeatable. \
+          "Declare a dependency on another overlay. $(b,HANDLE=VERSION) pins a \
+           recorded version; bare $(b,HANDLE) accepts any. Repeatable. \
            Defaults to the current $(b,default) and $(b,relocatable)."
         [ "depend"; "d" ])
 
@@ -298,8 +297,7 @@ module Ls = struct
     let no_check =
       Arg.(
         value & flag
-        & info
-            ~doc:"Skip the $(b,git ls-remote) upstream check (offline)."
+        & info ~doc:"Skip the $(b,git ls-remote) upstream check (offline)."
             [ "no-check" ])
     in
     let info =
@@ -328,9 +326,8 @@ module Ls = struct
               "Compiler bundles. Select with $(b,--toolchain=NAME); the \
                $(b,DEFAULT) entry is used otherwise.";
             `P
-              "Columns: $(b,NAME), $(b,VERSION), $(b,MODE) \
-               ($(b,relocatable) or $(b,fixed-prefix)), $(b,DEFAULT), \
-               $(b,COMPILER).";
+              "Columns: $(b,NAME), $(b,VERSION), $(b,MODE) ($(b,relocatable) \
+               or $(b,fixed-prefix)), $(b,DEFAULT), $(b,COMPILER).";
           ]
     in
     Cmd.v info
@@ -472,16 +469,13 @@ module Add = struct
         required
         & pos 0 (some string) None
         & info ~docv:"HANDLE"
-            ~doc:"Short opam-valid overlay name (e.g. $(b,avsm))."
-            [])
+            ~doc:"Short opam-valid overlay name (e.g. $(b,avsm))." [])
     in
     let url =
       Arg.(
         required
         & pos 1 (some string) None
-        & info ~docv:"URL"
-            ~doc:"Git URL of the upstream opam-repository."
-            [])
+        & info ~docv:"URL" ~doc:"Git URL of the upstream opam-repository." [])
     in
     let force =
       Arg.(
@@ -501,8 +495,8 @@ module Add = struct
               "Register $(b,HANDLE), pinned to the current commit on \
                $(b,URL)'s default branch (or $(b,--ref BRANCH)).";
             `P
-              "Non-base overlays auto-depend on the current $(b,default) \
-               and $(b,relocatable). $(b,--toolchain=NAME) substitutes the \
+              "Non-base overlays auto-depend on the current $(b,default) and \
+               $(b,relocatable). $(b,--toolchain=NAME) substitutes the \
                toolchain's own base set.";
             `S Manpage.s_examples;
             `Pre
@@ -549,25 +543,25 @@ module Bump = struct
       let url =
         OpamFile.OPAM.url opam
         |> Stdlib.Option.map (fun urlf ->
-               let u = OpamUrl.to_string (OpamFile.URL.url urlf) in
-               let cks =
-                 OpamFile.URL.checksum urlf
-                 |> List.map OpamHash.to_string
-                 |> List.sort String.compare
-               in
-               (u, cks))
+            let u = OpamUrl.to_string (OpamFile.URL.url urlf) in
+            let cks =
+              OpamFile.URL.checksum urlf
+              |> List.map OpamHash.to_string
+              |> List.sort String.compare
+            in
+            (u, cks))
       in
       let extras =
         OpamFile.OPAM.extra_sources opam
         |> List.map (fun (b, urlf) ->
-               let n = OpamFilename.Base.to_string b in
-               let u = OpamUrl.to_string (OpamFile.URL.url urlf) in
-               let cks =
-                 OpamFile.URL.checksum urlf
-                 |> List.map OpamHash.to_string
-                 |> List.sort String.compare
-               in
-               (n, u, cks))
+            let n = OpamFilename.Base.to_string b in
+            let u = OpamUrl.to_string (OpamFile.URL.url urlf) in
+            let cks =
+              OpamFile.URL.checksum urlf
+              |> List.map OpamHash.to_string
+              |> List.sort String.compare
+            in
+            (n, u, cks))
         |> List.sort compare
       in
       Some ((url, extras), Oi.Keys.read_string_ext Oi.Keys.d10_archive opam)
@@ -579,30 +573,29 @@ module Bump = struct
     else
       Sys.readdir pkgs_dir
       |> Array.iter (fun pkg ->
-             let pkg_dir = pkgs_dir / pkg in
-             if Sys.is_directory pkg_dir then
-               Sys.readdir pkg_dir
-               |> Array.iter (fun ver_dir ->
-                      let opam_path = pkg_dir / ver_dir / "opam" in
-                      if Sys.file_exists opam_path then
-                        let prefix = pkg ^ "." in
-                        if String.starts_with ~prefix ver_dir then
-                          let version =
-                            String.sub ver_dir (String.length prefix)
-                              (String.length ver_dir - String.length prefix)
-                          in
-                          f ~pkg ~version ~pkg_dir:(pkg_dir / ver_dir)
-                            ~opam_path))
+          let pkg_dir = pkgs_dir / pkg in
+          if Sys.is_directory pkg_dir then
+            Sys.readdir pkg_dir
+            |> Array.iter (fun ver_dir ->
+                let opam_path = pkg_dir / ver_dir / "opam" in
+                if Sys.file_exists opam_path then
+                  let prefix = pkg ^ "." in
+                  if String.starts_with ~prefix ver_dir then
+                    let version =
+                      String.sub ver_dir (String.length prefix)
+                        (String.length ver_dir - String.length prefix)
+                    in
+                    f ~pkg ~version ~pkg_dir:(pkg_dir / ver_dir) ~opam_path))
 
   (* Capture (pkg, ver_dir) -> (source_identity, baked sha) for every
      opam file in v2/<handle>/ that already has an x-d10-archive set.
      Called BEFORE materialise wipes the tree. *)
   let snapshot_handle ~reporepo ~handle =
     let snap = Hashtbl.create 256 in
-    iter_handle_opams ~reporepo ~handle (fun ~pkg ~version ~pkg_dir:_ ~opam_path ->
+    iter_handle_opams ~reporepo ~handle
+      (fun ~pkg ~version ~pkg_dir:_ ~opam_path ->
         match read_source_identity_and_sha opam_path with
-        | Some (id, Some sha) ->
-            Hashtbl.replace snap (pkg, version) (id, sha)
+        | Some (id, Some sha) -> Hashtbl.replace snap (pkg, version) (id, sha)
         | _ -> ());
     snap
 
@@ -612,14 +605,15 @@ module Bump = struct
      restored entries. *)
   let restore_unchanged_archives ~reporepo ~handle ~snap =
     let restored = ref 0 in
-    iter_handle_opams ~reporepo ~handle (fun ~pkg ~version ~pkg_dir:_ ~opam_path ->
+    iter_handle_opams ~reporepo ~handle
+      (fun ~pkg ~version ~pkg_dir:_ ~opam_path ->
         match
           ( read_source_identity_and_sha opam_path,
             Hashtbl.find_opt snap (pkg, version) )
         with
-        | Some (new_id, _), Some (prior_id, prior_sha)
-          when new_id = prior_id ->
-            (match Ir.opam_set_x_d10_archive ~path:opam_path ~sha:prior_sha with
+        | Some (new_id, _), Some (prior_id, prior_sha) when new_id = prior_id
+          -> (
+            match Ir.opam_set_x_d10_archive ~path:opam_path ~sha:prior_sha with
             | `Added -> incr restored
             | `Already -> ())
         | _ -> ());
@@ -632,15 +626,15 @@ module Bump = struct
       ~handle =
     let baked = ref 0 in
     let failed = ref 0 in
-    iter_handle_opams ~reporepo ~handle (fun ~pkg ~version ~pkg_dir ~opam_path ->
+    iter_handle_opams ~reporepo ~handle
+      (fun ~pkg ~version ~pkg_dir ~opam_path ->
         match read_source_identity_and_sha opam_path with
-        | Some (_, Some _) -> ()  (* already has x-d10-archive *)
+        | Some (_, Some _) -> () (* already has x-d10-archive *)
         | _ -> (
             try
               let built =
-                Oi.Archive_builder.build_no_solve ~proc_mgr ~fs ~d10
-                  ~cache_root ~platform ~name:pkg ~version ~pkg_dir ~opam_path
-                  ()
+                Oi.Archive_builder.build_no_solve ~proc_mgr ~fs ~d10 ~cache_root
+                  ~platform ~name:pkg ~version ~pkg_dir ~opam_path ()
               in
               (match
                  Ir.opam_set_x_d10_archive ~path:opam_path ~sha:built.sha256
@@ -656,7 +650,8 @@ module Bump = struct
 
   let count_packages_missing_archive ~reporepo ~handle =
     let n = ref 0 in
-    iter_handle_opams ~reporepo ~handle (fun ~pkg:_ ~version:_ ~pkg_dir:_ ~opam_path ->
+    iter_handle_opams ~reporepo ~handle
+      (fun ~pkg:_ ~version:_ ~pkg_dir:_ ~opam_path ->
         match read_source_identity_and_sha opam_path with
         | Some (_, Some _) -> ()
         | _ -> incr n);
@@ -753,8 +748,7 @@ module Bump = struct
           c.cache_dir
       in
       if rebake && no_bake then begin
-        Fmt.epr
-          "oi repo bump: --rebake and --no-bake are mutually exclusive.@.";
+        Fmt.epr "oi repo bump: --rebake and --no-bake are mutually exclusive.@.";
         exit 1
       end;
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
@@ -781,8 +775,7 @@ module Bump = struct
            and [bake_changed_archives] sees every opam without
            x-d10-archive. *)
         let snap =
-          if rebake then Hashtbl.create 0
-          else snapshot_handle ~reporepo ~handle
+          if rebake then Hashtbl.create 0 else snapshot_handle ~reporepo ~handle
         in
         let entry =
           bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
@@ -790,8 +783,9 @@ module Bump = struct
         in
         if entry.url <> "" then begin
           if rebake then
-            Fmt.pr "@.--rebake: discarding previous x-d10-archive shas, will \
-                    re-bake every package@."
+            Fmt.pr
+              "@.--rebake: discarding previous x-d10-archive shas, will \
+               re-bake every package@."
           else begin
             Fmt.pr "@.Restoring x-d10-archive for unchanged sources ...@.";
             let restored = restore_unchanged_archives ~reporepo ~handle ~snap in
@@ -806,8 +800,9 @@ module Bump = struct
             Fmt.pr "  %d baked, %d failed@." baked failed
           end
           else
-            Fmt.pr "  --no-bake: skipping fresh bakes; %d package(s) without \
-                    x-d10-archive will be left unbaked@."
+            Fmt.pr
+              "  --no-bake: skipping fresh bakes; %d package(s) without \
+               x-d10-archive will be left unbaked@."
               (count_packages_missing_archive ~reporepo ~handle);
           (* The bake step has folded each package's patches + extra-files
              into the consolidated d10ir archive, so the freshly
@@ -876,8 +871,7 @@ module Bump = struct
         value
         & opt (some string) None
         & info ~docv:"URL"
-            ~doc:"Override the upstream URL recorded by the overlay."
-            [ "url" ])
+            ~doc:"Override the upstream URL recorded by the overlay." [ "url" ])
     in
     let default =
       let set =
@@ -919,17 +913,17 @@ module Bump = struct
                and rewrite $(b,<reporepo>/v2/<HANDLE>/). Pass $(b,--all) for \
                every overlay.";
             `P
-              "Bakes consolidated source archives for new or changed \
-               packages, then strips $(b,patches:) and $(b,extra-files:) \
-               from baked opam files (the archive subsumes them).";
+              "Bakes consolidated source archives for new or changed packages, \
+               then strips $(b,patches:) and $(b,extra-files:) from baked opam \
+               files (the archive subsumes them).";
             `P
               "Idempotent: prints $(b,No change) when commit, URL, ref, \
-               depends, and flags are unchanged. The $(b,v2/) tree is \
-               rebuilt either way.";
+               depends, and flags are unchanged. The $(b,v2/) tree is rebuilt \
+               either way.";
             `P
               "Non-base overlays auto-relock against the current \
-               $(b,default)/$(b,relocatable), or the toolchain's own base \
-               set when $(b,x-oi-toolchain) is set. $(b,--depend) overrides.";
+               $(b,default)/$(b,relocatable), or the toolchain's own base set \
+               when $(b,x-oi-toolchain) is set. $(b,--depend) overrides.";
           ]
     in
     let no_bake =
@@ -937,8 +931,8 @@ module Bump = struct
         value & flag
         & info
             ~doc:
-              "Skip the bake step. Opam files reference upstream \
-               $(b,url{src; checksum}) only."
+              "Skip the bake step. Opam files reference upstream $(b,url{src; \
+               checksum}) only."
             [ "no-bake" ])
     in
     let rebake =
@@ -992,12 +986,10 @@ module Bake = struct
       in
       let cache_root = Oi.Cache.root_s cache in
       let bake_one handle =
-        let missing =
-          Bump.count_packages_missing_archive ~reporepo ~handle
-        in
+        let missing = Bump.count_packages_missing_archive ~reporepo ~handle in
         if missing = 0 then
-          Fmt.pr "@.%a %s: every package already baked@."
-            Oi.Style.ok_string "✓" handle
+          Fmt.pr "@.%a %s: every package already baked@." Oi.Style.ok_string "✓"
+            handle
         else begin
           Fmt.pr "@.%a %s: baking %d missing archive(s)...@."
             Oi.Style.info_string "▸" handle missing;
@@ -1034,10 +1026,9 @@ module Bake = struct
     in
     let handle =
       Arg.(
-        value & pos 0 (some string) None
-        & info ~docv:"HANDLE"
-            ~doc:"Overlay to bake. Omit for every overlay."
-            [])
+        value
+        & pos 0 (some string) None
+        & info ~docv:"HANDLE" ~doc:"Overlay to bake. Omit for every overlay." [])
     in
     let to_dir =
       Arg.(
@@ -1052,24 +1043,23 @@ module Bake = struct
     let info =
       Cmd.info "bake"
         ~doc:
-          "Bake an overlay's consolidated source archives and publish them \
-           to a directory"
+          "Bake an overlay's consolidated source archives and publish them to \
+           a directory"
         ~man:
           [
             `S Manpage.s_description;
             `P
               "Bake every package in $(b,<reporepo>/v2/HANDLE/) (or every \
                overlay) that lacks $(b,x-d10-archive): fetch sources, apply \
-               patches, write a consolidated tarball, and record its sha. \
-               Then strip $(b,patches:) and $(b,extra-files:) from baked \
-               opam files.";
+               patches, write a consolidated tarball, and record its sha. Then \
+               strip $(b,patches:) and $(b,extra-files:) from baked opam \
+               files.";
             `P
-              "Hardlink every $(b,x-d10-archive) into \
-               $(b,DIR/d10ir-archives/) — the layout $(b,oi build) expects \
-               from a remote registry.";
+              "Hardlink every $(b,x-d10-archive) into $(b,DIR/d10ir-archives/) \
+               — the layout $(b,oi build) expects from a remote registry.";
             `P
-              "No-op on packages already carrying $(b,x-d10-archive). \
-               $(b,oi repo bump) runs the same bake as a side effect.";
+              "No-op on packages already carrying $(b,x-d10-archive). $(b,oi \
+               repo bump) runs the same bake as a side effect.";
             `S Manpage.s_examples;
             `Pre
               "  oi repo bake @avsm --to=./registry\n\
@@ -1194,9 +1184,7 @@ module Remove = struct
         required
         & pos 0 (some string) None
         & info ~docv:"HANDLE[=VERSION]"
-            ~doc:
-              "Overlay to remove. Bare $(b,HANDLE) removes every version."
-            [])
+            ~doc:"Overlay to remove. Bare $(b,HANDLE) removes every version." [])
     in
     let info =
       Cmd.info "remove" ~doc:"Delete an overlay from the reporepo"
@@ -1285,12 +1273,12 @@ module Push = struct
               "Three steps: auto-commit any uncommitted changes, $(b,git pull \
                --rebase), then $(b,git push) if ahead. Idempotent.";
             `P
-              "Authentication uses the system $(b,git) configuration. \
-               $(b,oi) shells out and never handles credentials.";
+              "Authentication uses the system $(b,git) configuration. $(b,oi) \
+               shells out and never handles credentials.";
             `P
-              "$(b,--push-url URL) sets the push remote on the local \
-               checkout. Useful when the clone URL is read-only HTTPS but \
-               push goes over SSH.";
+              "$(b,--push-url URL) sets the push remote on the local checkout. \
+               Useful when the clone URL is read-only HTTPS but push goes over \
+               SSH.";
             `S Manpage.s_examples;
             `P "Bump and publish:";
             `Pre "  oi repo bump avsm && oi repo push";
@@ -1343,9 +1331,7 @@ module Lint = struct
       problem list =
     let problems = ref [] in
     let add ~where ~paths fmt =
-      Fmt.kstr
-        (fun msg -> problems := { where; paths; msg } :: !problems)
-        fmt
+      Fmt.kstr (fun msg -> problems := { where; paths; msg } :: !problems) fmt
     in
     let toolchain_names =
       List.filter_map
@@ -1369,8 +1355,7 @@ module Lint = struct
         if e.url <> "" && e.commit = "" then
           here "[url: %s] is set but no commit is pinned" e.url;
         if e.commit <> "" && not (Oi.Source.Reporepo.is_sha_string e.commit)
-        then
-          here "pinned commit %S is not a 40-char hex sha" e.commit;
+        then here "pinned commit %S is not a 40-char hex sha" e.commit;
         (match e.toolchain_name with
         | None ->
             if e.relocatable <> None then
@@ -1422,7 +1407,7 @@ module Lint = struct
            highlights toolchain depends specially since "your overlay
            is using a stale toolchain" is the common case the user
            cares about. *)
-        (match Hashtbl.find_opt latest e.handle with
+        match Hashtbl.find_opt latest e.handle with
         | Some l when l.opam_path = e.opam_path ->
             List.iter
               (fun (h, vopt) ->
@@ -1440,18 +1425,18 @@ module Lint = struct
                         match latest_dep.toolchain_name with
                         | Some tname ->
                             here
-                              "uses out-of-date toolchain %S: pinned [%s = \
-                               %s] but latest is %s. Run 'oi repo bump %s' to \
+                              "uses out-of-date toolchain %S: pinned [%s = %s] \
+                               but latest is %s. Run 'oi repo bump %s' to \
                                update."
                               tname h pinned latest_dep.version e.handle
                         | None ->
                             here
-                              "out-of-date depend [%s = %s]: latest is %s. \
-                               Run 'oi repo bump %s' to update."
+                              "out-of-date depend [%s = %s]: latest is %s. Run \
+                               'oi repo bump %s' to update."
                               h pinned latest_dep.version e.handle)
                     | Some _ -> ()))
               e.depends
-        | _ -> ()))
+        | _ -> ())
       entries;
     (* Default-toolchain validation. Match {!Reporepo.load}'s
        semantics: count one default per HANDLE using its latest
@@ -1542,9 +1527,7 @@ module Lint = struct
         List.iter
           (fun { where; paths; msg } ->
             Fmt.pr "%a %s: %s@." Oi.Style.error_string "error:" where msg;
-            List.iter
-              (fun p -> Fmt.pr "    %a@." Oi.Style.dim_string p)
-              paths)
+            List.iter (fun p -> Fmt.pr "    %a@." Oi.Style.dim_string p) paths)
           problems;
         Fmt.pr "@.%d problem(s) in %s@." (List.length problems) reporepo;
         exit 1
@@ -1557,8 +1540,8 @@ module Lint = struct
             `S Manpage.s_description;
             `P
               "Check every entry for the invariants $(b,oi) relies on. Each \
-               problem prints the offending opam file path so it can be \
-               opened and fixed directly.";
+               problem prints the offending opam file path so it can be opened \
+               and fixed directly.";
             `I
               ( "Default toolchain.",
                 "Exactly one toolchain handle's latest version carries \
@@ -1604,15 +1587,15 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "A $(i,reporepo) is a directory of pinned opam-repository \
-             commits. Each $(i,handle) names a package set; entries with \
+            "A $(i,reporepo) is a directory of pinned opam-repository commits. \
+             Each $(i,handle) names a package set; entries with \
              $(b,x-oi-toolchain-name) define toolchains.";
           `P
             "Reference handles as $(b,@HANDLE/PKG), $(b,--with-repo=@HANDLE), \
              or $(b,x-repos: [\"@HANDLE\"]) in $(b,*.opam).";
           `P
-            "First $(b,oi repo) command auto-clones the upstream reporepo. \
-             The working copy is yours to edit, commit, and push.";
+            "First $(b,oi repo) command auto-clones the upstream reporepo. The \
+             working copy is yours to edit, commit, and push.";
           `S "FILES";
           `I
             ( "$(b,\\$OI_REPOREPO) (default: $(b,\\$OI_DATA_DIR/reporepo))",

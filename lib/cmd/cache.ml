@@ -515,8 +515,11 @@ let index_cmd =
     let index_path = layers_root / "index.db" in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(d10.fs / layers_root);
     let db = D10.Index.open_ ~path:index_path in
-    let totals = ref D10.Index.{ layers = 0; binaries = 0; files = 0;
-                                 findlib = 0; tarballs = 0 } in
+    let totals =
+      ref
+        D10.Index.
+          { layers = 0; binaries = 0; files = 0; findlib = 0; tarballs = 0 }
+    in
     let rows = ref [] in
     if Sys.file_exists layers_root then
       Array.iter
@@ -539,13 +542,14 @@ let index_cmd =
             D10.Index.rebuild c ~overlay_for ~include_files db;
             let s = D10.Index.stats db ~os_key:entry in
             let t = !totals in
-            totals := {
-              layers = t.layers + s.layers;
-              binaries = t.binaries + s.binaries;
-              files = t.files + s.files;
-              findlib = t.findlib + s.findlib;
-              tarballs = t.tarballs + s.tarballs;
-            };
+            totals :=
+              {
+                layers = t.layers + s.layers;
+                binaries = t.binaries + s.binaries;
+                files = t.files + s.files;
+                findlib = t.findlib + s.findlib;
+                tarballs = t.tarballs + s.tarballs;
+              };
             let base =
               [
                 Tty.Span.text entry;
@@ -556,7 +560,8 @@ let index_cmd =
               ]
             in
             let cells =
-              if include_files then base @ [ Tty.Span.text (string_of_int s.files) ]
+              if include_files then
+                base @ [ Tty.Span.text (string_of_int s.files) ]
               else base
             in
             rows := cells :: !rows
@@ -589,8 +594,8 @@ let index_cmd =
         Fmt.str "%d layers, %d binaries, %d findlib, %d tarballs, %d files"
           t.layers t.binaries t.findlib t.tarballs t.files
       else
-        Fmt.str "%d layers, %d binaries, %d findlib, %d tarballs"
-          t.layers t.binaries t.findlib t.tarballs
+        Fmt.str "%d layers, %d binaries, %d findlib, %d tarballs" t.layers
+          t.binaries t.findlib t.tarballs
     in
     Fmt.pr "@.%a %s@." Oi.Style.header_string "Total:" trailer;
     Fmt.pr "Index: %s@." index_path
@@ -616,8 +621,17 @@ type stats_view = {
 let stats_envelope_codec =
   let open Jsont in
   Object.map ~kind:"oi_cache_stats"
-    (fun _schema_version os_key index_present n_layers n_bin n_findlib
-         n_tar n_files n_archives ->
+    (fun
+      _schema_version
+      os_key
+      index_present
+      n_layers
+      n_bin
+      n_findlib
+      n_tar
+      n_files
+      n_archives
+    ->
       let s : D10.Index.stats =
         {
           layers = n_layers;
@@ -670,8 +684,9 @@ let stats_cmd =
         D10.Index.close db;
         s
       end
-      else D10.Index.{ layers = 0; binaries = 0; files = 0; findlib = 0;
-                       tarballs = 0 }
+      else
+        D10.Index.
+          { layers = 0; binaries = 0; files = 0; findlib = 0; tarballs = 0 }
     in
     let archives = count_d10ir_archives ~cache:h.cache in
     let view = { os_key = d10.os_key; index_present; s; archives } in
@@ -715,8 +730,7 @@ let archive_entry_codec =
 
 let archives_envelope_codec =
   let open Jsont in
-  Object.map ~kind:"oi_cache_archives"
-    (fun _schema_version dir entries ->
+  Object.map ~kind:"oi_cache_archives" (fun _schema_version dir entries ->
       (dir, entries))
   |> Object.mem "schema_version" string ~enc:(fun _ ->
       Oi.Stamp.json_schema_version)
@@ -745,14 +759,13 @@ let archives_cmd =
     in
     match to_dir with
     | Some output ->
-        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
-          Eio.Path.(h.fs / output);
+        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(h.fs / output);
         let n = Oi.D10ir_archives.publish_all ~cache:h.cache ~output in
         let dst = Oi.D10ir_archives.dst_dir ~output in
         Fmt.pr "%a %d archive(s) published to %s (%d total in cache)@."
           Oi.Style.ok_string "✓" n dst (List.length entries)
-    | None ->
-        (match c.format with
+    | None -> (
+        match c.format with
         | Json -> (
             match
               Jsont_bytesrw.encode_string ~format:Jsont.Indent
@@ -797,31 +810,29 @@ let archives_cmd =
       & opt (some string) None
       & info ~docv:"DIR"
           ~doc:
-            "Hardlink every cached archive into $(b,DIR/d10ir-archives/) — \
-             the layout $(b,oi build) expects from a remote registry. \
-             Idempotent on repeat invocations."
+            "Hardlink every cached archive into $(b,DIR/d10ir-archives/) — the \
+             layout $(b,oi build) expects from a remote registry. Idempotent \
+             on repeat invocations."
           [ "to"; "export" ])
   in
   let info =
-    Cmd.info "archives"
-      ~doc:"List or export baked d10ir source archives"
+    Cmd.info "archives" ~doc:"List or export baked d10ir source archives"
       ~man:
         [
           `S Manpage.s_description;
           `P
             "Without $(b,--to), enumerate every $(b,<sha>.tar.zst) under \
              $(b,\\$OI_CACHE_DIR/d10ir/archives/), the consolidated source \
-             archives produced by $(b,oi repo bake) and consumed by \
-             $(b,oi build) when an opam carries an $(b,x-d10-archive) marker.";
+             archives produced by $(b,oi repo bake) and consumed by $(b,oi \
+             build) when an opam carries an $(b,x-d10-archive) marker.";
           `P
             "With $(b,--to=DIR), hardlink every archive into \
              $(b,DIR/d10ir-archives/) — the publishable layout a remote \
              registry serves. Use this when you want just the source-archive \
              tier without the layer cache that $(b,oi build --export) would \
-             also publish. Reaches every archive in the cache, including \
-             ones not currently referenced by any reporepo overlay (use \
-             $(b,oi repo bake --to=DIR) to publish just the reporepo-referenced \
-             subset).";
+             also publish. Reaches every archive in the cache, including ones \
+             not currently referenced by any reporepo overlay (use $(b,oi repo \
+             bake --to=DIR) to publish just the reporepo-referenced subset).";
           `S Manpage.s_examples;
           `Pre
             "  oi cache archives\n\
@@ -925,12 +936,11 @@ let explain_cmd =
     Arg.(
       required
       & pos 0 (some string) None
-      & info ~docv:"HASH" ~doc:"Full layer hash, as printed by $(b,oi cache list)."
-          [])
+      & info ~docv:"HASH"
+          ~doc:"Full layer hash, as printed by $(b,oi cache list)." [])
   in
   let info =
-    Cmd.info "explain"
-      ~doc:"Trace a layer's provenance and dependency closure"
+    Cmd.info "explain" ~doc:"Trace a layer's provenance and dependency closure"
       ~man:
         [
           `S Manpage.s_description;
@@ -957,11 +967,11 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "Read-only views into the content-addressed layer cache that \
-             backs $(b,oi build) and $(b,oi run). Layers live under \
+            "Read-only views into the content-addressed layer cache that backs \
+             $(b,oi build) and $(b,oi run). Layers live under \
              $(b,\\$OI_CACHE_DIR/layers/<os_key>/) with a sqlite index at \
-             $(b,\\$OI_CACHE_DIR/layers/index.db); baked source archives \
-             live under $(b,\\$OI_CACHE_DIR/d10ir/archives/).";
+             $(b,\\$OI_CACHE_DIR/layers/index.db); baked source archives live \
+             under $(b,\\$OI_CACHE_DIR/d10ir/archives/).";
           `P
             "$(b,oi cache index) rebuilds the index; other subcommands query \
              it or read $(b,layer.json) sidecars. $(b,oi cache archives) \

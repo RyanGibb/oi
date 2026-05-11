@@ -1,9 +1,4 @@
-type phase =
-  | Solving
-  | Fetching
-  | Baking
-  | Building
-  | Assembling
+type phase = Solving | Fetching | Baking | Building | Assembling
 
 let phase_to_string = function
   | Solving -> "solving"
@@ -30,7 +25,7 @@ type event =
       key : string;
       bytes : int64;
       total : int64;
-        (* declared total bytes if known (HTTP Content-Length etc.),
+          (* declared total bytes if known (HTTP Content-Length etc.),
            else 0L. Lets callers refine the per-fetch total mid-flight
            when [Fetch_started] couldn't supply it. *)
     }
@@ -38,11 +33,7 @@ type event =
   | Solve_started of { label : string }
   | Solve_finished of { label : string }
   | Plan_ready of D10ir.Plan.t
-  | Total_estimate of {
-      fetches : int;
-      builds : int;
-      fetch_bytes : int64;
-    }
+  | Total_estimate of { fetches : int; builds : int; fetch_bytes : int64 }
   | Build of D10ir.Direct.event
   | Build_summary of D10ir.Direct.result
 

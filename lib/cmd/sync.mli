@@ -67,5 +67,5 @@ val run :
     env vars without re-resolving). [quiet] (default [false]) routes narration
     to [Logs.info] instead of stdout.
 
-    A unified [Progress_ui] is opened internally when on a TTY (and
-    not [quiet]); otherwise narration goes to [Logs.info]. *)
+    A unified [Progress_ui] is opened internally when on a TTY (and not
+    [quiet]); otherwise narration goes to [Logs.info]. *)

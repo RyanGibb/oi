@@ -270,21 +270,18 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
            ~override:toolchain_override ~toolchain
     in
     let pipeline_env : Oi.Build_pipeline.env =
-      {
-        proc_mgr;
-        fs;
-        clock;
-        sys;
-        os_key;
-        cache;
-        data_dir;
-        http_session;
-      }
+      { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
     in
     let req : Oi.Build_pipeline.request =
       {
         targets =
-          [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+          [
+            Group
+              {
+                tokens = List.map OpamPackage.Name.to_string names;
+                handles = [];
+              };
+          ];
         with_repos = [];
         pins = project_pins;
         extra_repos = all_extras;
@@ -332,18 +329,17 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                     | t :: _ ->
                         String.map
                           (fun c ->
-                            if (c >= 'a' && c <= 'z')
-                               || (c >= 'A' && c <= 'Z')
-                               || (c >= '0' && c <= '9')
-                               || c = '.' || c = '-' || c = '_'
+                            if
+                              (c >= 'a' && c <= 'z')
+                              || (c >= 'A' && c <= 'Z')
+                              || (c >= '0' && c <= '9')
+                              || c = '.' || c = '-' || c = '_'
                             then c
                             else '_')
                           t
                     | [] -> "recipe"
                   in
-                  let dst =
-                    Filename.concat dir (stem ^ ".d10ir.json")
-                  in
+                  let dst = Filename.concat dir (stem ^ ".d10ir.json") in
                   D10ir.Plan.save Eio.Path.(fs / dst) recipe)
             solved.groups);
       let build_result =
@@ -381,34 +377,36 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
             "build pipeline produced no executable plan (%s). Re-run with \
              --verbosity=debug for the per-group trace."
             (String.concat ", " group_msgs)
-      | Some r when r.failed = 0 && r.skipped = 0 && r.built = 0 && r.cached = 0 ->
+      | Some r when r.failed = 0 && r.skipped = 0 && r.built = 0 && r.cached = 0
+        ->
           (* Direct.run was handed an empty plan. Likely cause: every
              package was filtered out of the d10ir recipe (e.g. all
              marked Binary against a stale d10 cache, or recipe emit
              skipped them silently). Without this guard we'd assemble
              an empty prefix and report a misleading "no bin/<X>". *)
           Oi.Error.config_error
-            "build pipeline ran with an empty d10ir plan: solver \
-             picked packages but the d10ir executor saw 0 nodes. The \
-             most likely cause is a stale d10 layer cache; try \
-             [oi clean --layers] and re-run."
+            "build pipeline ran with an empty d10ir plan: solver picked \
+             packages but the d10ir executor saw 0 nodes. The most likely \
+             cause is a stale d10 layer cache; try [oi clean --layers] and \
+             re-run."
       | Some r when r.failed = 0 && r.skipped = 0 -> ()
       | Some r ->
           let pp_fail (f : D10ir.Direct.failure) =
             Fmt.str "%s.%s @ %s — see %s" f.package.name f.package.version
-              (D10ir.Direct.phase_to_string f.phase) f.log_path
+              (D10ir.Direct.phase_to_string f.phase)
+              f.log_path
           in
           if r.failures <> [] then begin
             let summary = List.map pp_fail r.failures |> String.concat "\n  " in
             Oi.Error.config_error
-              "build failed: %d node(s) failed, %d skipped.@\n  %s"
-              r.failed r.skipped summary
+              "build failed: %d node(s) failed, %d skipped.@\n  %s" r.failed
+              r.skipped summary
           end
           else
             Oi.Error.config_error
-              "build failed: 0 nodes built, %d skipped (likely a dep \
-               chain broke upstream). Re-run with --verbosity=debug for \
-               the per-node trace."
+              "build failed: 0 nodes built, %d skipped (likely a dep chain \
+               broke upstream). Re-run with --verbosity=debug for the per-node \
+               trace."
               r.skipped);
       Oi.Build_pipeline.layer_hashes solved
     in
@@ -513,22 +511,17 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
       if dep_opam_names = [] then []
       else
         let pipeline_env : Oi.Build_pipeline.env =
-          {
-            proc_mgr;
-            fs;
-            clock;
-            sys;
-            os_key;
-            cache;
-            data_dir;
-            http_session;
-          }
+          { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
         in
         let req : Oi.Build_pipeline.request =
           {
             targets =
               [
-                Group { tokens = List.map OpamPackage.Name.to_string dep_opam_names; handles = [] };
+                Group
+                  {
+                    tokens = List.map OpamPackage.Name.to_string dep_opam_names;
+                    handles = [];
+                  };
               ];
             with_repos = [];
             pins = project_pins;
@@ -539,11 +532,12 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
             conf;
             local_packages_dir;
             project_root = None;
-        force_source = false;
+            force_source = false;
             refresh;
           }
         in
-        Progress_ui.with_ui ~target ~clock:(clock :> _ Eio.Resource.t)
+        Progress_ui.with_ui ~target
+          ~clock:(clock :> _ Eio.Resource.t)
           ~enabled:(Tty.is_tty ())
         @@ fun reporter ->
         let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
@@ -787,15 +781,13 @@ let target =
     & info ~docv:"TARGET"
         ~doc:
           "Binary name, $(b,@HANDLE/PKG) overlay shortcut, $(b,.ml) script \
-           path, or $(b,https://) URL pointing at a $(b,.ml) script ($(b,http://) \
-           also accepted)."
+           path, or $(b,https://) URL pointing at a $(b,.ml) script \
+           ($(b,http://) also accepted)."
         [])
 
 let dry_run =
   Arg.(
-    value & flag
-    & info ~doc:"Print the build plan and exit."
-        [ "n"; "dry-run" ])
+    value & flag & info ~doc:"Print the build plan and exit." [ "n"; "dry-run" ])
 
 let args =
   Arg.(
@@ -821,14 +813,16 @@ let info_run =
           "Resolve $(b,TARGET)'s dependencies into the shared cache and exec \
            $(b,TARGET). Arguments after $(b,TARGET) are forwarded unchanged.";
         `P "$(b,TARGET) is one of:";
-        `I ("$(b,name)", "Binary name. Looked up in the layer index; \
-                          dash-prefixes fall back ($(b,ocluster-admin) tries \
-                          $(b,ocluster)).");
+        `I
+          ( "$(b,name)",
+            "Binary name. Looked up in the layer index; dash-prefixes fall \
+             back ($(b,ocluster-admin) tries $(b,ocluster))." );
         `I ("$(b,@HANDLE/PKG)", "Take $(b,PKG) from the named overlay.");
         `I ("$(b,path/to/script.ml)", "Local OCaml script.");
-        `I ("$(b,https://...ml)", "Remote OCaml script ($(b,http://) also \
-                                    accepted). Refetched each run; cached \
-                                    by content hash.");
+        `I
+          ( "$(b,https://...ml)",
+            "Remote OCaml script ($(b,http://) also accepted). Refetched each \
+             run; cached by content hash." );
         `S "BINARIES";
         `Pre
           "  oi run utop\n\
@@ -838,10 +832,10 @@ let info_run =
         `P "Declare deps on the first line:";
         `Pre "  [@@@opam fmt cmdliner lwt>=5.0]";
         `P
-          "Each token is an opam package with optional constraint \
-           ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired \
-           as preprocessors.";
+          "Each token is an opam package with optional constraint ($(b,>=), \
+           $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib sub-library \
+           ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired as \
+           preprocessors.";
         `Pre
           "  oi run my_script.ml\n\
           \  oi run my_script.ml --with=tls -- arg1 arg2\n\
@@ -856,24 +850,28 @@ let info_run =
           "  oi run @avsm/owntracks\n  oi run --with=@avsm/crockford roguedoi";
         `S "PROJECT EXTRAS";
         `P "Read from the cwd (or a $(b,--with=URL) clone):";
-        `I ("$(b,*.opam)",
+        `I
+          ( "$(b,*.opam)",
             "$(b,depends:), $(b,pin-depends:), $(b,x-repos:) merge into the \
-             solve.");
-        `I ("$(b,packages/) + $(b,repo)",
+             solve." );
+        `I
+          ( "$(b,packages/) + $(b,repo)",
             "Highest-priority opam-repository overlay for patched transitive \
-             deps.");
+             deps." );
         `S "TOOLCHAIN";
         `P "Picked in order:";
         `I ("1.", "$(b,--toolchain=NAME).");
-        `I ("2.", "$(b,x-oi-toolchain) on an in-scope $(b,@HANDLE). Conflicts \
-                  error.");
+        `I
+          ( "2.",
+            "$(b,x-oi-toolchain) on an in-scope $(b,@HANDLE). Conflicts error."
+          );
         `I ("3.", "Reporepo's $(b,x-oi-default-toolchain).");
         `S "GIT URLS";
         `P
           "$(b,--with=URL) clones the repo and pins every root $(b,*.opam). \
            Schemes: $(b,http://), $(b,https://), $(b,git+), $(b,git@), \
-           $(b,git://), $(b,ssh://). Append $(b,#REF) for a tag, branch, \
-           or commit.";
+           $(b,git://), $(b,ssh://). Append $(b,#REF) for a tag, branch, or \
+           commit.";
         `Pre
           "  oi run --with=https://github.com/owner/project.git target\n\
           \  oi run --with=git+https://example.org/foo.git#branch foo";
@@ -911,9 +909,9 @@ let info_oix =
           \  oix -n utop";
         `S "EXTRA DEPENDENCIES";
         `P
-          "$(b,--with) accepts a bare name, opam atom \
-           ($(b,fmt>=0.9), $(b,dune.3.20.0)), or git URL \
-           (every root $(b,*.opam) becomes a pin). Repeatable.";
+          "$(b,--with) accepts a bare name, opam atom ($(b,fmt>=0.9), \
+           $(b,dune.3.20.0)), or git URL (every root $(b,*.opam) becomes a \
+           pin). Repeatable.";
         `Pre
           "  oix --with=tls --with=cohttp my_client\n\
           \  oix --with=dune.3.20.0 dune --version\n\
@@ -921,8 +919,7 @@ let info_oix =
         `S "OVERLAYS";
         `P
           "$(b,@HANDLE/PKG) on $(b,TARGET) or $(b,--with) takes one package \
-           from an overlay. $(b,--with-repo=@HANDLE) stacks the whole \
-           overlay.";
+           from an overlay. $(b,--with-repo=@HANDLE) stacks the whole overlay.";
         `Pre "  oix @avsm/owntracks\n  oix --with-repo=@avsm crockford";
         `S "TOOLCHAIN";
         `P
@@ -930,15 +927,14 @@ let info_oix =
            $(b,x-oi-toolchain) wins, falling back to the reporepo default.";
         `S "SCRIPT FORMAT";
         `P
-          "$(b,TARGET) may be a $(b,.ml) script path or an $(b,https://) \
-           URL ($(b,http://) also accepted). Declare deps on the first \
-           line:";
+          "$(b,TARGET) may be a $(b,.ml) script path or an $(b,https://) URL \
+           ($(b,http://) also accepted). Declare deps on the first line:";
         `Pre "  [@@@opam fmt cmdliner>=1.2.0 lwt]";
         `P
-          "Each token is an opam package with optional constraint \
-           ($(b,>=), $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib \
-           sub-library ($(b,ppx_deriving.show)). $(b,ppx_*) packages are \
-           wired as preprocessors.";
+          "Each token is an opam package with optional constraint ($(b,>=), \
+           $(b,>), $(b,<=), $(b,<), $(b,=)) and optional findlib sub-library \
+           ($(b,ppx_deriving.show)). $(b,ppx_*) packages are wired as \
+           preprocessors.";
         `S Manpage.s_see_also;
         `P "$(b,oi)(1).";
       ]

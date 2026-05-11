@@ -8,7 +8,8 @@ let sh_escape s =
   let buf = Buffer.create (String.length s + 2) in
   Buffer.add_char buf '\'';
   String.iter
-    (fun c -> if c = '\'' then Buffer.add_string buf "'\\''" else Buffer.add_char buf c)
+    (fun c ->
+      if c = '\'' then Buffer.add_string buf "'\\''" else Buffer.add_char buf c)
     s;
   Buffer.add_char buf '\'';
   Buffer.contents buf
@@ -37,18 +38,40 @@ let script_of_commands ~build_cmds ~install_cmds =
 
 let blessed_host_keys =
   [
-    "HOME"; "USER"; "LOGNAME"; "TMPDIR"; "TZ"; "LANG"; "LC_ALL";
-    "LC_CTYPE"; "LC_COLLATE"; "LC_MESSAGES"; "LC_TIME"; "LC_NUMERIC";
-    "LC_MONETARY"; "TERM"; "SHELL"; "SOURCE_DATE_EPOCH";
+    "HOME";
+    "USER";
+    "LOGNAME";
+    "TMPDIR";
+    "TZ";
+    "LANG";
+    "LC_ALL";
+    "LC_CTYPE";
+    "LC_COLLATE";
+    "LC_MESSAGES";
+    "LC_TIME";
+    "LC_NUMERIC";
+    "LC_MONETARY";
+    "TERM";
+    "SHELL";
+    "SOURCE_DATE_EPOCH";
   ]
 
 let blessed_prefixes =
   [
-    "PATH=";          "MANPATH=";
-    "OPAM_";          "OPAMROOT=";        "OPAMCLI=";       "OPAMSWITCH=";
-    "OCAML";          "CAML_";            "DUNE_";
-    "OI_";            "OINDEX_";
-    "MAKEFLAGS=";     "MAKELEVEL=";       "CDPATH=";
+    "PATH=";
+    "MANPATH=";
+    "OPAM_";
+    "OPAMROOT=";
+    "OPAMCLI=";
+    "OPAMSWITCH=";
+    "OCAML";
+    "CAML_";
+    "DUNE_";
+    "OI_";
+    "OINDEX_";
+    "MAKEFLAGS=";
+    "MAKELEVEL=";
+    "CDPATH=";
   ]
 
 let key_of entry =
@@ -84,9 +107,7 @@ let scrub_path ~cache_root entry =
   let prefix = "PATH=" in
   if not (String.length entry >= 5 && String.sub entry 0 5 = prefix) then entry
   else
-    let value =
-      String.sub entry 5 (String.length entry - 5)
-    in
+    let value = String.sub entry 5 (String.length entry - 5) in
     let parts = String.split_on_char ':' value in
     let oi_owned =
       List.filter
@@ -136,8 +157,7 @@ let opam_file_sha256_of (p : Plan.package_plan) =
    before [D10ir.Direct.run] takes over. The Direct executor itself
    does no network I/O; if an archive is still missing post-prefetch,
    it errors at unpack time. *)
-let node_of_package_plan ~cache_root (p : Plan.package_plan) :
-    D10ir.Plan.node =
+let node_of_package_plan ~cache_root (p : Plan.package_plan) : D10ir.Plan.node =
   let archive : D10ir.Archive.t =
     let handle_str =
       match p.overlay with Some o -> o.handle | None -> "<handle>"
@@ -152,15 +172,11 @@ let node_of_package_plan ~cache_root (p : Plan.package_plan) :
         Error.config_error
           "%s: opam file has no [x-d10-archive] — run [oi repo bump %s] to \
            populate the consolidated source archive sha.%s@\n\
-           Bake is solver-free and writes shas into the v2 reporepo as part \
-           of the bump."
+           Bake is solver-free and writes shas into the v2 reporepo as part of \
+           the bump."
           p.pkg handle_str opam_loc
     | Some sha ->
-        {
-          path = Fmt.str "%s.tar.zst" sha;
-          sha256 = sha;
-          strip_components = 0;
-        }
+        { path = Fmt.str "%s.tar.zst" sha; sha256 = sha; strip_components = 0 }
   in
   let env = env_of_array ~cache_root p.env in
   let pkg_name, pkg_version =
@@ -206,9 +222,7 @@ let dune_cache_root () =
       match Sys.getenv_opt "XDG_CACHE_HOME" with
       | Some d -> Filename.concat d "dune"
       | None ->
-          let home =
-            try Sys.getenv "HOME" with Not_found -> "/tmp"
-          in
+          let home = try Sys.getenv "HOME" with Not_found -> "/tmp" in
           Filename.concat home ".cache/dune")
 
 (* Default mount set shared across every recipe.
@@ -264,8 +278,7 @@ let emit ~d10 ?(cli_invocation = []) ~toolchain_name ~toolchain_layer
     List.iter
       (fun (n : D10ir.Plan.node) ->
         List.iter
-          (fun h ->
-            Hashtbl.replace dep_set (D10ir.Layer_hash.to_string h) ())
+          (fun h -> Hashtbl.replace dep_set (D10ir.Layer_hash.to_string h) ())
           n.dep_layer_hashes)
       nodes;
     List.filter_map
@@ -300,7 +313,8 @@ let emit ~d10 ?(cli_invocation = []) ~toolchain_name ~toolchain_layer
        recipe.json's location and bundling the archives, which is a
        v2 concern. *)
     archive_root =
-      Filename.concat (Eio.Path.native_exn d10.D10.Config.root)
+      Filename.concat
+        (Eio.Path.native_exn d10.D10.Config.root)
         (Filename.concat "d10ir" "archives");
     nodes;
     roots;

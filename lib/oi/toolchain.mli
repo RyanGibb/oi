@@ -153,5 +153,5 @@ val ensure_installed :
     non-relocatable toolchain the install prefix is left partial and the next
     call retries from scratch.
 
-    [?reporter] receives a [Status "Installing toolchain <handle>"] event
-    when the install actually runs. *)
+    [?reporter] receives a [Status "Installing toolchain <handle>"] event when
+    the install actually runs. *)

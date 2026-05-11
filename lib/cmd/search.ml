@@ -396,16 +396,12 @@ let cmd =
     else begin
       let row_spans r =
         let kind_s =
-          match r.kind with
-          | `Bin -> "bin"
-          | `Lib -> "lib"
-          | `Pkg -> "pkg"
+          match r.kind with `Bin -> "bin" | `Lib -> "lib" | `Pkg -> "pkg"
         in
         let nv =
           match (r.binary, r.findlib) with
           | Some b, _ -> Fmt.str "%s (%s.%s)" b r.pkg_name r.pkg_version
-          | None, Some lib ->
-              Fmt.str "%s (%s.%s)" lib r.pkg_name r.pkg_version
+          | None, Some lib -> Fmt.str "%s (%s.%s)" lib r.pkg_name r.pkg_version
           | None, None -> Fmt.str "%s.%s" r.pkg_name r.pkg_version
         in
         let state_style =
@@ -475,15 +471,14 @@ let cmd =
           ~doc:
             "Name or glob ($(b,*) wildcard). Matched against binary names, \
              opam package names, and ocamlfind library names. \
-             $(b,@HANDLE/PATTERN) restricts to one overlay; bare \
-             $(b,@HANDLE) lists everything in it ($(b,@HANDLE/*))."
+             $(b,@HANDLE/PATTERN) restricts to one overlay; bare $(b,@HANDLE) \
+             lists everything in it ($(b,@HANDLE/*))."
           [])
   in
   let all_versions =
     Arg.(
       value & flag
-      & info
-          ~doc:"List every version. Default: latest per overlay only."
+      & info ~doc:"List every version. Default: latest per overlay only."
           [ "all-versions" ])
   in
   let overlay =
@@ -491,41 +486,45 @@ let cmd =
       value & opt_all string []
       & info ~docv:"HANDLE"
           ~doc:
-            "Restrict results to an overlay. Repeatable. \
-             $(b,@HANDLE/PATTERN) is shorthand."
+            "Restrict results to an overlay. Repeatable. $(b,@HANDLE/PATTERN) \
+             is shorthand."
           [ "overlay" ])
   in
   let long =
     Arg.(
       value & flag
-      & info
-          ~doc:"List direct dependencies under each built match."
+      & info ~doc:"List direct dependencies under each built match."
           [ "l"; "long" ])
   in
   let info =
     Cmd.info "search"
-      ~doc:"Find binaries, libraries, and opam packages across caches and overlays"
+      ~doc:
+        "Find binaries, libraries, and opam packages across caches and overlays"
       ~man:
         [
           `S Manpage.s_description;
           `P
             "Match $(b,PATTERN) against the local layer cache, the remote \
-             registry, and every reporepo overlay's package list. One row \
-             per match.";
+             registry, and every reporepo overlay's package list. One row per \
+             match.";
           `S "COLUMNS";
-          `I ("$(b,KIND)",
+          `I
+            ( "$(b,KIND)",
               "$(b,bin) (binary in $(b,fs/bin/)), $(b,lib) (ocamlfind \
-               library), or $(b,pkg) (opam metadata).");
-          `I ("$(b,OVERLAY)",
+               library), or $(b,pkg) (opam metadata)." );
+          `I
+            ( "$(b,OVERLAY)",
               "$(b,@handle) the match came from, or $(b,-) for \
-               pin-depends/untagged layers.");
-          `I ("$(b,NAME.VERSION)",
+               pin-depends/untagged layers." );
+          `I
+            ( "$(b,NAME.VERSION)",
               "Package; binary or library name prefixed for $(b,bin) and \
-               $(b,lib) rows.");
+               $(b,lib) rows." );
           `I ("$(b,HASH)", "Short layer hash.");
-          `I ("$(b,STATE)",
-              "$(b,local) (cached), $(b,remote) (fetchable), or \
-               $(b,declared) (metadata only).");
+          `I
+            ( "$(b,STATE)",
+              "$(b,local) (cached), $(b,remote) (fetchable), or $(b,declared) \
+               (metadata only)." );
           `S Manpage.s_examples;
           `Pre
             "  oi search dune\n\

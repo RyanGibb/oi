@@ -929,7 +929,6 @@ module Memo = struct
     write_marshal ~fs ~label:"solve-cache" path (pkgs : OpamPackage.t list);
     Log.debug (fun m ->
         m "solve-cache stored %s (%d pkgs)" (short_key key) (List.length pkgs))
-
 end
 
 (* -- Solving ------------------------------------------------------------ *)

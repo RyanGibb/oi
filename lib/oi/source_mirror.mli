@@ -1,5 +1,5 @@
-(** Source archive mirror cache used by registry builds. Was
-    [Source.Mirror] in [source.mli]. *)
+(** Source archive mirror cache used by registry builds. Was [Source.Mirror] in
+    [source.mli]. *)
 
 val dir : cache:Cache.t -> string
 (** Absolute path to the mirror root: [{cache_root}/mirror]. *)
@@ -24,9 +24,9 @@ val import_from_opam_cache :
   fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> OpamHash.t list -> int
 (** [import_from_opam_cache ~fs ~cache_root checksums] copies fetched-source
     blobs out of opam's download-cache and into the mirror at
-    [<cache_root>/mirror/<algo>/<XX>/<hash>] for each declared checksum.
-    Returns the number of blobs newly added; [0] if nothing was imported (no
-    checksums supplied, or no cached file found). Idempotent. *)
+    [<cache_root>/mirror/<algo>/<XX>/<hash>] for each declared checksum. Returns
+    the number of blobs newly added; [0] if nothing was imported (no checksums
+    supplied, or no cached file found). Idempotent. *)
 
 type archive = { url : OpamUrl.t; checksums : OpamHash.t list; pkg : string }
 (** One downloadable source entity: either an [url {…}] block or an
@@ -63,12 +63,12 @@ val fetch_archives :
   ?on_progress:(fetched:int -> total:int -> current:string option -> unit) ->
   archive list ->
   fetch_summary
-(** Fetch each archive and deposit it into the mirror. Skips entries whose
-    first declared checksum is already present (the [cached] tally). On a hard
-    failure (after retries), records the URL + message in [failed] and moves
-    on — no exception is raised. [on_progress] receives [current=Some label]
-    just before each fetch and [current=None] after the last; [label] is the
-    host + basename of the URL, suitable for an in-place progress line. *)
+(** Fetch each archive and deposit it into the mirror. Skips entries whose first
+    declared checksum is already present (the [cached] tally). On a hard failure
+    (after retries), records the URL + message in [failed] and moves on — no
+    exception is raised. [on_progress] receives [current=Some label] just before
+    each fetch and [current=None] after the last; [label] is the host + basename
+    of the URL, suitable for an in-place progress line. *)
 
 type origin =
   | Local_mirror of string
@@ -82,8 +82,8 @@ type origin =
 val source_origin :
   cache_urls:OpamUrl.t list -> checksums:OpamHash.t list -> origin
 (** [source_origin ~cache_urls ~checksums] probes each [file://] cache_url for
-    any of [checksums] via {!Sys.file_exists}, returning [Local_mirror path]
-    on the first hit and [Other] otherwise. Used by {!Execute} to log whether
-    a fetch hits the local mirror — HTTP cache_urls are intentionally not
-    probed (a per-package HEAD round-trip just to refine the log line isn't
-    worth it; opam's [pull_tree] handles the cache hierarchy itself). *)
+    any of [checksums] via {!Sys.file_exists}, returning [Local_mirror path] on
+    the first hit and [Other] otherwise. Used by {!Execute} to log whether a
+    fetch hits the local mirror — HTTP cache_urls are intentionally not probed
+    (a per-package HEAD round-trip just to refine the log line isn't worth it;
+    opam's [pull_tree] handles the cache hierarchy itself). *)

@@ -512,19 +512,19 @@ let cmd =
       value & opt string ""
       & info ~docv:"DIR"
           ~doc:
-            "Output directory (required). Created if missing; existing \
-             entries are kept."
+            "Output directory (required). Created if missing; existing entries \
+             are kept."
           [ "o"; "output" ])
   in
   let targets =
     Arg.(
       value & pos_all string []
-      & info ~docv:"TARGET"
-          ~doc:"Package name or $(b,@HANDLE/PKG). Repeatable."
+      & info ~docv:"TARGET" ~doc:"Package name or $(b,@HANDLE/PKG). Repeatable."
           [])
   in
   let info =
-    Cmd.info "source" ~doc:"Vendor a target's sources into a self-contained bundle"
+    Cmd.info "source"
+      ~doc:"Vendor a target's sources into a self-contained bundle"
       ~man:
         [
           `S Manpage.s_description;
@@ -534,24 +534,29 @@ let cmd =
              under $(b,DIR) as a vendored workspace. Hand off to $(b,oi \
              build), $(b,dune pkg lock), or $(b,opam install --deps-only).";
           `S "OUTPUT LAYOUT";
-          `I ("$(b,DIR/vendor/<pkg>/)",
+          `I
+            ( "$(b,DIR/vendor/<pkg>/)",
               "Per-package source tree. Tarballs unpacked, $(b,git+) URLs \
-               cloned at the pinned commit. Packages sharing an archive \
-               share a directory.");
-          `I ("$(b,DIR/reporepo/)",
-              "Snapshot of the opam metadata the solve consulted.");
-          `I ("$(b,DIR/root.opam)",
+               cloned at the pinned commit. Packages sharing an archive share \
+               a directory." );
+          `I
+            ( "$(b,DIR/reporepo/)",
+              "Snapshot of the opam metadata the solve consulted." );
+          `I
+            ( "$(b,DIR/root.opam)",
               "Bundle manifest. $(b,depends:) pins externally-resolved \
                packages; dune-buildable in-tree packages build from \
-               $(b,vendor/). $(b,x-repos:) and $(b,x-reporepo-hash:) stamp \
-               the reporepo.");
-          `I ("$(b,DIR/dune-project), $(b,DIR/dune)",
+               $(b,vendor/). $(b,x-repos:) and $(b,x-reporepo-hash:) stamp the \
+               reporepo." );
+          `I
+            ( "$(b,DIR/dune-project), $(b,DIR/dune)",
               "Workspace marker; $(b,(vendored_dirs vendor)) relaxes \
-               warnings-as-errors over $(b,vendor/).");
+               warnings-as-errors over $(b,vendor/)." );
           `S "NOTES";
           `P "$(b,extra-sources:) blocks are skipped.";
-          `P "Toolchain packages are pinned via $(b,--toolchain), not \
-              $(b,depends:).";
+          `P
+            "Toolchain packages are pinned via $(b,--toolchain), not \
+             $(b,depends:).";
           `S Manpage.s_examples;
           `Pre
             "  oi source @avsm/owntracks-cli -o ./bundle\n\

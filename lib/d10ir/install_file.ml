@@ -35,8 +35,8 @@ let copy_file ~fs ~optional ~exec ~src:src_s ~dst:dst_s =
         Eio.Path.(fs / Filename.dirname dst_s);
       (try
          Eio.Path.with_open_in src_path @@ fun i ->
-         Eio.Path.with_open_out ~create:(`Or_truncate perm) dst_path
-         @@ fun o -> Eio.Flow.copy i o
+         Eio.Path.with_open_out ~create:(`Or_truncate perm) dst_path @@ fun o ->
+         Eio.Flow.copy i o
        with Eio.Exn.Io (e, _) ->
          Fmt.failwith "install: %s -> %s: %a" src_s dst_s Eio.Exn.pp_err e);
       (try Unix.chmod dst_s perm with Unix.Unix_error _ -> ());
@@ -91,8 +91,8 @@ let apply ~fs ~prefix ~build_dir ~install_file =
         let base_s = OpamFilename.Base.to_string base.OpamTypes.c in
         let src_s = build_dir / base_s in
         let _ : bool =
-          copy_file ~fs ~optional:base.OpamTypes.optional ~exec:false
-            ~src:src_s ~dst:dst_s
+          copy_file ~fs ~optional:base.OpamTypes.optional ~exec:false ~src:src_s
+            ~dst:dst_s
         in
         ()
       else

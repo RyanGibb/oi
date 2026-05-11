@@ -5,7 +5,6 @@
 (* Pin-depends materialisation. Re-exported as [Source.Pin]. *)
 
 let ( / ) = Filename.concat
-
 let log_src = Logs.Src.create "oi.source.pin"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
@@ -75,8 +74,8 @@ module Lock = struct
     let sorted = List.sort (fun a b -> String.compare a.pkg b.pkg) entries in
     List.iter
       (fun e ->
-        Printf.bprintf buf "(pin %s\n  (origin   %S)\n  (resolved %S))\n"
-          e.pkg e.origin e.resolved)
+        Printf.bprintf buf "(pin %s\n  (origin   %S)\n  (resolved %S))\n" e.pkg
+          e.origin e.resolved)
       sorted;
     Eio.Path.save ~create:(`Or_truncate 0o644)
       Eio.Path.(fs / path)
@@ -128,9 +127,7 @@ let resolve_pins ~fs ~sys ?project_root pins =
       in
       let entry_key (e : Lock.entry) = (e.pkg, e.origin, e.resolved) in
       let sorted_keys items = List.sort compare (List.map entry_key items) in
-      let prev =
-        Hashtbl.fold (fun _ v acc -> v :: acc) tbl [] |> sorted_keys
-      in
+      let prev = Hashtbl.fold (fun _ v acc -> v :: acc) tbl [] |> sorted_keys in
       if sorted_keys entries <> prev then begin
         Lock.write ~fs ~project_root entries;
         Log.info (fun m ->
@@ -145,16 +142,14 @@ let fetch_pin ?(reporter = Build_progress.null) ~fs ~cache ~refresh
   let root = Cache.pins_dir cache in
   let src_dir = root / "sources" / url_key pin.url in
   let sentinel = sentinel_path src_dir in
-  if Cache.fresh ~refresh ~sentinel ~max_age:Cache.refresh_max_age then
-    src_dir
+  if Cache.fresh ~refresh ~sentinel ~max_age:Cache.refresh_max_age then src_dir
   else begin
     Log.info (fun m ->
         m "Fetching pin %s from %s"
           (OpamPackage.to_string pin.pkg)
           (OpamUrl.to_string pin.url));
     reporter.Build_progress.event
-      (Status
-         (Fmt.str "Fetching pin %s" (OpamPackage.to_string pin.pkg)));
+      (Status (Fmt.str "Fetching pin %s" (OpamPackage.to_string pin.pkg)));
     if Sys.file_exists src_dir then
       Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / src_dir);
     let dst = OpamFilename.Dir.of_string src_dir in
@@ -183,8 +178,7 @@ let resolved_revision ~sys (pin : Project.pin) ~src_dir =
   match pin.url.OpamUrl.backend with
   | `git -> (
       try
-        D10.Sysops.Cmd.run_out sys
-          [ "git"; "-C"; src_dir; "rev-parse"; "HEAD" ]
+        D10.Sysops.Cmd.run_out sys [ "git"; "-C"; src_dir; "rev-parse"; "HEAD" ]
       with Failure _ -> url_key pin.url)
   | _ -> url_key pin.url
 
@@ -205,9 +199,7 @@ let rewrite_opam ~src_dir ~opam_path ~revision (pin : Project.pin) =
       Error.config_error "pin: failed to read %s: %s" opam_path
         (Printexc.to_string exn)
   in
-  let local_url =
-    OpamUrl.of_string (Fmt.str "file://%s#%s" src_dir revision)
-  in
+  let local_url = OpamUrl.of_string (Fmt.str "file://%s#%s" src_dir revision) in
   let new_url = OpamFile.URL.create local_url in
   opam
   |> OpamFile.OPAM.with_url new_url
@@ -227,11 +219,7 @@ let write_pin_opam ~packages_dir (pin : Project.pin) opam =
   let target = dir / "opam" in
   OpamFile.OPAM.write (OpamFile.make (OpamFilename.raw target)) opam
 
-type resolved = {
-  pin : Project.pin;
-  opam : OpamFile.OPAM.t;
-  revision : string;
-}
+type resolved = { pin : Project.pin; opam : OpamFile.OPAM.t; revision : string }
 
 let materialize ?(reporter = Build_progress.null) ~fs ~sys ~cache
     ?(refresh = false) pins =
@@ -251,8 +239,7 @@ let materialize ?(reporter = Build_progress.null) ~fs ~sys ~cache
             let opam = rewrite_opam ~src_dir ~opam_path ~revision pin in
             incr counter;
             reporter.Build_progress.event
-              (Aggregate
-                 { phase = Fetching; total; current = !counter });
+              (Aggregate { phase = Fetching; total; current = !counter });
             { pin; opam; revision })
           pins
       in

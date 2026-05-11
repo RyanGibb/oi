@@ -76,20 +76,10 @@ let cmd =
           @ List.map OpamPackage.Name.of_string url_project.roots
         in
         let pipeline_env : Oi.Build_pipeline.env =
-          {
-            proc_mgr;
-            fs;
-            clock;
-            sys;
-            os_key;
-            cache;
-            data_dir;
-            http_session;
-          }
+          { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
         in
         let names =
-          "ocaml"
-          :: List.map OpamPackage.Name.to_string extra_names
+          "ocaml" :: List.map OpamPackage.Name.to_string extra_names
         in
         let req : Oi.Build_pipeline.request =
           {
@@ -103,7 +93,7 @@ let cmd =
             conf;
             local_packages_dir = url_project.packages_dir;
             project_root = Some cwd_s;
-        force_source = false;
+            force_source = false;
             refresh;
           }
         in
@@ -146,10 +136,10 @@ let cmd =
           `Pre "  eval \"\\$(oi env)\"";
           `P
             "Reuses $(b,_oi/prefix/) when it exists and no extras are \
-             requested. With $(b,--with), $(b,--with-repo), \
-             $(b,--toolchain), $(b,--skip-local), or a missing prefix, \
-             builds a one-shot prefix in-process; $(b,.envrc) and dev tools \
-             are not updated. Use $(b,oi build --deps-only) for that.";
+             requested. With $(b,--with), $(b,--with-repo), $(b,--toolchain), \
+             $(b,--skip-local), or a missing prefix, builds a one-shot prefix \
+             in-process; $(b,.envrc) and dev tools are not updated. Use $(b,oi \
+             build --deps-only) for that.";
           `S "TOOLCHAIN";
           `P "Active toolchain, in order:";
           `I ("1.", "$(b,--toolchain=NAME).");
@@ -158,9 +148,7 @@ let cmd =
               "$(b,x-oi-toolchain) on any in-scope $(b,@HANDLE) — from \
                $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
                $(b,x-repos:). Conflicting tags error out." );
-          `I
-            ( "3.",
-              "Reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
+          `I ("3.", "Reporepo entry flagged $(b,x-oi-default-toolchain: true).");
         ]
   in
   Cmd.v info

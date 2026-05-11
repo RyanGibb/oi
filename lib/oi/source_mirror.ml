@@ -6,7 +6,6 @@
    builds). Re-exported as [Source.Mirror]. *)
 
 let ( / ) = Filename.concat
-
 let log_src = Logs.Src.create "oi.source.mirror"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
@@ -26,8 +25,7 @@ let mkdir_p ~fs d =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / d)
 
 let file_size path =
-  try Int64.of_int (Unix.stat path).Unix.st_size
-  with Unix.Unix_error _ -> 0L
+  try Int64.of_int (Unix.stat path).Unix.st_size with Unix.Unix_error _ -> 0L
 
 let resolve_symlink path =
   try
@@ -65,8 +63,7 @@ let link_or_copy ~fs ~src ~dst =
     | exception Unix.Unix_error (Unix.EEXIST, _, _) -> ()
     | exception
         Unix.Unix_error
-          ((Unix.EXDEV | Unix.EMLINK | Unix.EPERM | Unix.EOPNOTSUPP), _, _)
-      -> (
+          ((Unix.EXDEV | Unix.EMLINK | Unix.EPERM | Unix.EOPNOTSUPP), _, _) -> (
         (* Cross-device or filesystem doesn't support hardlinks
            (typical for some bind-mounted volumes). Fall back to a
            byte-copy via a unique tmp path, then atomically link
@@ -132,9 +129,7 @@ let stats ~cache =
   else
     let blobs = walk_blobs ~mirror_dir in
     let total =
-      List.fold_left
-        (fun acc (_, _, p) -> Int64.add acc (file_size p))
-        0L blobs
+      List.fold_left (fun acc (_, _, p) -> Int64.add acc (file_size p)) 0L blobs
     in
     { count = List.length blobs; total_size = total }
 
@@ -200,20 +195,15 @@ let import_from_opam_cache ~fs ~cache_root checksums =
           in
           List.iter
             (fun ck ->
-              let dst =
-                List.fold_left ( / ) mirror_dir (OpamHash.to_path ck)
-              in
+              let dst = List.fold_left ( / ) mirror_dir (OpamHash.to_path ck) in
               put dst)
             checksums;
-          (if
-             not
-               (List.exists (fun ck -> OpamHash.kind ck = `SHA256) checksums)
+          (if not (List.exists (fun ck -> OpamHash.kind ck = `SHA256) checksums)
            then
              try
                let sha256_hash = OpamHash.compute ~kind:`SHA256 src in
                let dst =
-                 List.fold_left ( / ) mirror_dir
-                   (OpamHash.to_path sha256_hash)
+                 List.fold_left ( / ) mirror_dir (OpamHash.to_path sha256_hash)
                in
                put dst
              with _ -> ());
@@ -242,9 +232,7 @@ let archive_of_url ~pkg u =
    the place of an integrity check), which are resolved by clone, not
    by archive download. *)
 let archives_of_opam ~pkg opam =
-  let main =
-    match OpamFile.OPAM.url opam with None -> [] | Some u -> [ u ]
-  in
+  let main = match OpamFile.OPAM.url opam with None -> [] | Some u -> [ u ] in
   let extras = List.map snd (OpamFile.OPAM.extra_sources opam) in
   main @ extras
   |> List.map (archive_of_url ~pkg)
@@ -350,8 +338,8 @@ let fetch_one ~fs ~mirror_dir ~cache_root ~cache_dir ~tmp_dir a =
   let dst_file = OpamFilename.of_string tmp in
   let result =
     try
-      OpamRepository.pull_file a.pkg ~cache_dir ~cache_urls:[]
-        ~silent_hits:true dst_file a.checksums [ a.url ]
+      OpamRepository.pull_file a.pkg ~cache_dir ~cache_urls:[] ~silent_hits:true
+        dst_file a.checksums [ a.url ]
       |> OpamProcess.Job.run
     with exn -> OpamTypes.Not_available (None, Printexc.to_string exn)
   in

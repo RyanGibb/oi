@@ -9,6 +9,7 @@ let log_src = Logs.Src.create "oi.execute"
 module Log = (val Logs.src_log log_src : Logs.LOG)
 
 let ( / ) = Filename.concat
+
 let fetch_log_path_of ~cache_root ~(p : Plan.package_plan) =
   Cache.Logs.path ~cache_root ~kind:"fetch" ~name:p.pkg ~hash:p.layer_hash
 
@@ -150,9 +151,7 @@ let apply_patches (p : Plan.package_plan) =
       let patch_file = p.build_dir / patch.file in
       if Sys.file_exists patch_file then
         let pf = OpamFilename.of_string patch_file in
-        match
-          OpamFilename.patch ~allow_unclean:true (`Patch_file pf) dir
-        with
+        match OpamFilename.patch ~allow_unclean:true (`Patch_file pf) dir with
         | Ok _ -> ()
         | Error exn ->
             Error.build_failed ~pkg:p.pkg

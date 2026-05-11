@@ -18,7 +18,6 @@ let flush_out () = try Stdlib.flush stdout with _ -> ()
    while a print happens, then resumes them. Keeps lib/oi free of
    any progress-bar machinery. *)
 let around_emit_hook : ((unit -> unit) -> unit) ref = ref (fun f -> f ())
-
 let set_around_emit f = around_emit_hook := f
 
 let interject f =

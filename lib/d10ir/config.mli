@@ -1,27 +1,26 @@
 (** Executor configuration.
 
-    Decoupled from the producer (the d10ir library doesn't care how
-    plans are produced). Designed to be the public knob surface
-    consumers like [oi] expose to their CLI. *)
+    Decoupled from the producer (the d10ir library doesn't care how plans are
+    produced). Designed to be the public knob surface consumers like [oi] expose
+    to their CLI. *)
 
 type t = {
   build_parallelism : int;
-      (** Maximum number of nodes whose script runs concurrently. Each
-          slot may spawn a recursive tree of subprocesses, so this is
-          really an upper bound on concurrent build phases, not on total
-          subprocess count. *)
+      (** Maximum number of nodes whose script runs concurrently. Each slot may
+          spawn a recursive tree of subprocesses, so this is really an upper
+          bound on concurrent build phases, not on total subprocess count. *)
   keep_staging : bool;
-      (** If [true], leave staging directories in place after a build
-          (success or failure) for debugging. Default [false]. *)
+      (** If [true], leave staging directories in place after a build (success
+          or failure) for debugging. Default [false]. *)
   log_dir : string option;
-      (** Directory for per-node build logs. If [None], logs go to a
-          subdir of the d10 cache root. *)
+      (** Directory for per-node build logs. If [None], logs go to a subdir of
+          the d10 cache root. *)
   inject_env : (string * string) list;
       (** Extra environment variables injected into every node's script
-          environment, in addition to whatever the node carries. The
-          d10ir library is opam-agnostic — defaults are empty.
-          Consumers like [oi] add their own (e.g.
-          [OCAMLFIND_LDCONF=ignore] for opam build hardening). *)
+          environment, in addition to whatever the node carries. The d10ir
+          library is opam-agnostic — defaults are empty. Consumers like [oi] add
+          their own (e.g. [OCAMLFIND_LDCONF=ignore] for opam build hardening).
+      *)
 }
 
 val default : t

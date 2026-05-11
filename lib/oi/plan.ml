@@ -266,14 +266,14 @@ type t = {
   ocaml_version : string;
   build_prefix : string;
   external_layer_hashes : string list;
-      (** Layer hashes of toolchain packages whose binaries the host
-          provides (a non-relocatable toolchain switch, currently). They
-          are not in {!packages} — they are not built by the d10ir
-          executor and have no d10 layer of their own — but their hashes
-          still appear in every consumer node's [dep_layer_hashes] (so
-          consumer layers invalidate when the toolchain changes). The
-          d10ir recipe surfaces them via {!D10ir.Plan.external_layers}
-          so the executor knows to treat the references as satisfied. *)
+      (** Layer hashes of toolchain packages whose binaries the host provides (a
+          non-relocatable toolchain switch, currently). They are not in
+          {!packages} — they are not built by the d10ir executor and have no d10
+          layer of their own — but their hashes still appear in every consumer
+          node's [dep_layer_hashes] (so consumer layers invalidate when the
+          toolchain changes). The d10ir recipe surfaces them via
+          {!D10ir.Plan.external_layers} so the executor knows to treat the
+          references as satisfied. *)
 }
 
 let find_pkg_source_dir ~packages_dirs pkg =
@@ -519,8 +519,14 @@ let elaborate ctx ~packages_dirs ~cache_root ~os_key ~ocaml_version
   let external_layer_hashes =
     List.sort_uniq String.compare !external_layer_hashes
   in
-  { packages; cache_root; os_key; ocaml_version; build_prefix;
-    external_layer_hashes }
+  {
+    packages;
+    cache_root;
+    os_key;
+    ocaml_version;
+    build_prefix;
+    external_layer_hashes;
+  }
 
 (* -- Pretty-printing ----------------------------------------------------- *)
 

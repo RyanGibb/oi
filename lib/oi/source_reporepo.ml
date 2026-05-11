@@ -5,7 +5,6 @@
 (* Reporepo (overlay-of-overlays metadata). Re-exported as [Source.Reporepo]. *)
 
 let ( / ) = Filename.concat
-
 let log_src = Logs.Src.create "oi.source.reporepo"
 
 module Log = (val Logs.src_log log_src : Logs.LOG)
@@ -63,9 +62,7 @@ let v1_root ~path = path / schema_dir
 let meta_root ~path = v1_root ~path / "reporepo"
 let meta_packages_dir ~path = meta_root ~path / "packages"
 let overlay_dir ~path ~handle = v1_root ~path / handle
-
-let overlay_packages_dir ~path ~handle =
-  overlay_dir ~path ~handle / "packages"
+let overlay_packages_dir ~path ~handle = overlay_dir ~path ~handle / "packages"
 
 let iter_opam_files ~path ?(include_handles = []) ?(skip_handles = []) f =
   let v1 = v1_root ~path in
@@ -167,8 +164,8 @@ let last_refresh_age_s ~now path =
   in
   Option.map (fun m -> now -. m) mtime
 
-let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path
-    ~url () =
+let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path ~url
+    () =
   let dot_git = path / ".git" in
   if Sys.file_exists dot_git then
     begin if refresh then begin
@@ -217,8 +214,8 @@ let git_at_inherit ~sys ~path args =
 let assert_clone path =
   if not (Sys.file_exists (path / ".git")) then
     Error.config_error
-      "reporepo at %s is not a git working copy — run an [oi repo] \
-       subcommand first to bootstrap the clone"
+      "reporepo at %s is not a git working copy — run an [oi repo] subcommand \
+       first to bootstrap the clone"
       path
 
 let set_push_url ~sys ~path url =
@@ -309,8 +306,7 @@ let push ?(on_step_start = fun _ _ -> ()) ~sys ~path () =
 let split_url_commit s =
   match String.index_opt s '#' with
   | None -> (s, "")
-  | Some i ->
-      (String.sub s 0 i, String.sub s (i + 1) (String.length s - i - 1))
+  | Some i -> (String.sub s 0 i, String.sub s (i + 1) (String.length s - i - 1))
 
 let is_overlay_extension extensions =
   match OpamStd.String.Map.find_opt Keys.overlay extensions with
@@ -347,12 +343,11 @@ let read_string_list_extension ~path extensions name =
             (fun (it : OpamParserTypes.FullPos.value) ->
               match it.pelem with
               | OpamParserTypes.FullPos.String s -> s
-              | _ ->
-                  Error.config_error "%s: %s items must be strings" path name)
+              | _ -> Error.config_error "%s: %s items must be strings" path name)
             items
       | _ ->
-          Error.config_error "%s: %s must be a string or a list of strings"
-            path name)
+          Error.config_error "%s: %s must be a string or a list of strings" path
+            name)
 
 let read_root_packages_extension ~path extensions name =
   let as_string_item (v : OpamParserTypes.FullPos.value) =
@@ -397,8 +392,7 @@ let parse_depends_formula formula =
   OpamFormula.iter
     (fun (name, cond) ->
       out :=
-        (OpamPackage.Name.to_string name, pin_version_of_condition cond)
-        :: !out)
+        (OpamPackage.Name.to_string name, pin_version_of_condition cond) :: !out)
     formula;
   List.rev !out
 
@@ -427,8 +421,8 @@ let parse_entry_file path : entry option =
         read_string_extension extensions Keys.toolchain_name
       in
       if url_bare = "" && toolchain_name = None then
-        Error.config_error "%s: entry needs either a [url:] block or [%s]"
-          path Keys.toolchain_name;
+        Error.config_error "%s: entry needs either a [url:] block or [%s]" path
+          Keys.toolchain_name;
       let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
       let ref_ = read_string_extension extensions Keys.ref in
       let toolchain = read_string_extension extensions Keys.toolchain in
@@ -440,9 +434,7 @@ let parse_entry_file path : entry option =
           "%s: %s is set but %s is missing — every toolchain definition must \
            declare its compiler package (e.g. \"ocaml-base-compiler.5.4.1\")"
           path Keys.toolchain_name Keys.toolchain_compiler;
-      let relocatable =
-        read_bool_extension ~path extensions Keys.relocatable
-      in
+      let relocatable = read_bool_extension ~path extensions Keys.relocatable in
       let toolchain_roots =
         read_root_packages_extension ~path extensions Keys.toolchain_roots
       in
@@ -456,8 +448,8 @@ let parse_entry_file path : entry option =
       in
       if default_toolchain && toolchain_name = None then
         Error.config_error
-          "%s: %s is only meaningful on toolchain definitions (entries with \
-           %s set)"
+          "%s: %s is only meaningful on toolchain definitions (entries with %s \
+           set)"
           path Keys.default_toolchain Keys.toolchain_name;
       let root_packages =
         read_root_packages_extension ~path extensions Keys.root_packages
@@ -534,9 +526,9 @@ let load ~path =
     | [] | [ _ ] -> ()
     | many ->
         Error.config_error
-          "reporepo at %s has %d toolchains marked as default (%s: true): \
-           %s. Exactly one toolchain may be the default — clear the flag on \
-           the others."
+          "reporepo at %s has %d toolchains marked as default (%s: true): %s. \
+           Exactly one toolchain may be the default — clear the flag on the \
+           others."
           path (List.length many) Keys.default_toolchain
           (String.concat ", " many));
     entries
@@ -620,9 +612,7 @@ let resolve entries ~roots =
         OpamPackage.Name.Map.empty roots
     in
     let env _ = None in
-    let ctx =
-      Opam_0install.Dir_context.create ~constraints ~env packages_dir
-    in
+    let ctx = Opam_0install.Dir_context.create ~constraints ~env packages_dir in
     let names =
       List.map (fun (r : root) -> OpamPackage.Name.of_string r.handle) roots
     in
@@ -694,9 +684,8 @@ let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false)
         match last_refresh_age_s ~now:(Unix.time ()) path with
         | Some age when age > threshold ->
             Log.info (fun m ->
-                m
-                  "Reporepo at %s is %.0fs old (>%.0fs); auto-refreshing"
-                  path age threshold);
+                m "Reporepo at %s is %.0fs old (>%.0fs); auto-refreshing" path
+                  age threshold);
             true
         | _ -> false
   in
@@ -772,8 +761,8 @@ let ls_remote_sha ~sys ?ref_ url =
                   match refs with
                   | (sha, _) :: _ -> sha
                   | [] ->
-                      Error.config_error "git ls-remote %s returned no refs"
-                        url))))
+                      Error.config_error "git ls-remote %s returned no refs" url
+                  ))))
 
 let today_yyyymmdd () =
   let tm = Unix.gmtime (Unix.time ()) in
@@ -839,8 +828,8 @@ type toolchain_def = {
   td_default : bool;
 }
 
-let render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ?toolchain_def
-    ~depends ~root_packages () =
+let render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ?toolchain_def ~depends
+    ~root_packages () =
   let buf = Buffer.create 512 in
   Printf.bprintf buf "opam-version: \"2.0\"\n";
   Printf.bprintf buf "synopsis: %s\n" (escape_string synopsis);
@@ -905,8 +894,7 @@ let ensure_repo_marker ~fs ~path =
   if not (Sys.file_exists marker) then
     write_file ~fs marker "opam-version: \"2.0\"\n"
 
-let default_synopsis handle =
-  "Overlay: " ^ handle ^ " — pinned opam repository"
+let default_synopsis handle = "Overlay: " ^ handle ^ " — pinned opam repository"
 
 let is_base_handle h = h = "default" || h = "relocatable"
 let default_base_handles = [ "relocatable"; "default" ]
@@ -1028,10 +1016,7 @@ type materialise_summary = {
 
 let set_extension key str opam =
   let v : OpamParserTypes.FullPos.value =
-    {
-      pelem = OpamParserTypes.FullPos.String str;
-      pos = OpamTypesBase.pos_null;
-    }
+    { pelem = OpamParserTypes.FullPos.String str; pos = OpamTypesBase.pos_null }
   in
   let exts = OpamStd.String.Map.add key v (OpamFile.OPAM.extensions opam) in
   OpamFile.OPAM.with_extensions exts opam
@@ -1157,8 +1142,7 @@ let scratch_clone ~fs ~sys ~url ~commit =
       [ "git"; "-C"; scratch; "checkout"; "--quiet"; commit ];
     scratch
   with exn ->
-    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch)
-     with _ -> ());
+    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch) with _ -> ());
     Error.config_error "failed to clone %s at %s: %s" url commit
       (Printexc.to_string exn)
 
@@ -1218,9 +1202,7 @@ let materialise_handle ~fs ~sys ~path ~handle ~url ~commit =
             try Unix.link s d
             with Unix.Unix_error _ ->
               let bytes = Eio.Path.load Eio.Path.(fs / s) in
-              Eio.Path.save ~create:(`Or_truncate 0o644)
-                Eio.Path.(fs / d)
-                bytes)
+              Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / d) bytes)
     end
   in
   let outcomes =
@@ -1265,9 +1247,8 @@ let add ~fs ~sys ~path ~handle ~url ?ref_ ?toolchain ?base_handles ?depends
   in
   if handle_exists && not force then
     Error.config_error
-      "overlay %s already exists in reporepo; use 'oi repo bump' to add a \
-       new version, or pass --force to register a new entry with a different \
-       URL"
+      "overlay %s already exists in reporepo; use 'oi repo bump' to add a new \
+       version, or pass --force to register a new entry with a different URL"
       handle;
   let base_handles =
     Stdlib.Option.value base_handles ~default:default_base_handles
@@ -1286,8 +1267,8 @@ let add ~fs ~sys ~path ~handle ~url ?ref_ ?toolchain ?base_handles ?depends
     Stdlib.Option.value synopsis ~default:(default_synopsis handle)
   in
   let content =
-    render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ~depends
-      ~root_packages ()
+    render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ~depends ~root_packages
+      ()
   in
   ensure_repo_marker ~fs ~path;
   let opam_path = write_entry ~fs ~path ~handle ~version content in
@@ -1332,9 +1313,7 @@ let bump ~fs ~sys ~path ~handle ?url ?ref_ ?toolchain ?base_handles ?depends
   let toolchain =
     match toolchain with Some _ -> toolchain | None -> prev.toolchain
   in
-  let commit =
-    if url = "" then prev.commit else ls_remote_sha ~sys ?ref_ url
-  in
+  let commit = if url = "" then prev.commit else ls_remote_sha ~sys ?ref_ url in
   (* Auto-derive a fresh, accurate depends list. The set of handles
      comes from [auto] (bumped explicitly via [base_handles]) plus any
      extra handles [prev] carried (preserved as-is in the set). Every

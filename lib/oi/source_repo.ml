@@ -53,8 +53,7 @@ let dir_needs_refresh dir =
     Unix.time () -. st.Unix.st_mtime > Cache.refresh_max_age
   with Unix.Unix_error _ -> true
 
-let ensure ?(reporter = Build_progress.null) ~fs ~refresh ~label ~url ~dir
-    () =
+let ensure ?(reporter = Build_progress.null) ~fs ~refresh ~label ~url ~dir () =
   let pkg_dir = dir / "packages" in
   if not (Sys.file_exists pkg_dir) then begin
     if Sys.file_exists dir then begin
@@ -63,15 +62,13 @@ let ensure ?(reporter = Build_progress.null) ~fs ~refresh ~label ~url ~dir
       Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / dir)
     end;
     Log.info (fun m -> m "Cloning %s from %s..." label url);
-    reporter.Build_progress.event
-      (Status (Fmt.str "Cloning %s" label));
+    reporter.Build_progress.event (Status (Fmt.str "Cloning %s" label));
     pull_repo ~label ~url_s:url ~dst:dir;
     touch_dir dir
   end
   else if refresh || dir_needs_refresh dir then begin
     Log.info (fun m -> m "Updating %s..." label);
-    reporter.Build_progress.event
-      (Status (Fmt.str "Updating %s" label));
+    reporter.Build_progress.event (Status (Fmt.str "Updating %s" label));
     try
       pull_repo ~label ~url_s:url ~dst:dir;
       touch_dir dir
@@ -88,7 +85,6 @@ let ensure_many ?(reporter = Build_progress.null) ~fs ~data_dir
       | Some d -> d
       | None ->
           let path = dir ~data_dir e.name in
-          ensure ~reporter ~fs ~refresh ~label:e.name ~url:e.url ~dir:path
-            ();
+          ensure ~reporter ~fs ~refresh ~label:e.name ~url:e.url ~dir:path ();
           path / "packages")
     extras

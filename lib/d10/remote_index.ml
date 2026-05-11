@@ -44,17 +44,14 @@ let fetch (c : Config.t) ~session ~remote =
                let rows = Index.all_tarballs db ~os_key:c.os_key in
                List.iter
                  (fun (hash, sha, size) ->
-                   Hashtbl.replace idx hash
-                     { Layer.sha256 = sha; size })
+                   Hashtbl.replace idx hash { Layer.sha256 = sha; size })
                  rows;
                Log.info (fun m ->
-                   m "Loaded %d tarball entries from %s"
-                     (List.length rows) url))
+                   m "Loaded %d tarball entries from %s" (List.length rows) url))
          with exn ->
            Log.info (fun m ->
-               m "Could not read %s: %s" url
-                 (Printexc.to_string exn)));
-        (try Eio.Path.unlink tmp with _ -> ())
+               m "Could not read %s: %s" url (Printexc.to_string exn)));
+        try Eio.Path.unlink tmp with _ -> ()
       end;
       Hashtbl.replace cache url idx;
       idx

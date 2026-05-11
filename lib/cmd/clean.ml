@@ -77,9 +77,9 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
 (* -- Bulk clean ---------------------------------------------------------- *)
 
 let cmd =
-  let run (c : Terms.common) all toolchains sources mirror layers prefixes
-      build runs run_cache solve_cache dune_cache repos opam_root pins dry_run
-      target =
+  let run (c : Terms.common) all toolchains sources mirror layers prefixes build
+      runs run_cache solve_cache dune_cache repos opam_root pins dry_run target
+      =
     Harness.run @@ fun ~sw env ->
     let { Harness.fs; clock; sys; os_key; cache; _ } =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
@@ -96,9 +96,9 @@ let cmd =
         if bulk_flags then begin
           Oi.Say.error
             "PKG positional cannot be combined with bulk flags (--all, \
-             --toolchains, --sources, --mirror, --layers, --prefixes, \
-             --build, --runs, --run-cache, --solve-cache, --dune, --repos, \
-             --opam-root, --pins)";
+             --toolchains, --sources, --mirror, --layers, --prefixes, --build, \
+             --runs, --run-cache, --solve-cache, --dune, --repos, --opam-root, \
+             --pins)";
           exit 1
         end
         else
@@ -231,17 +231,13 @@ let cmd =
       & info ~doc:"Fast-exec cache for $(b,oi run) only." [ "run-cache" ])
   in
   let solve_cache =
-    Arg.(
-      value & flag
-      & info ~doc:"Solver memoisation only." [ "solve-cache" ])
+    Arg.(value & flag & info ~doc:"Solver memoisation only." [ "solve-cache" ])
   in
   let dune_cache =
     Arg.(value & flag & info ~doc:"Dune's shared build cache." [ "dune" ])
   in
   let repos =
-    Arg.(
-      value & flag
-      & info ~doc:"$(b,--with-repo) clones." [ "repos" ])
+    Arg.(value & flag & info ~doc:"$(b,--with-repo) clones." [ "repos" ])
   in
   let opam_root =
     Arg.(
@@ -278,13 +274,12 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Remove rebuildable cache data. With no flags or $(b,PKG), list \
-             each category and its disk usage. Flags are additive. A \
-             project's $(b,_oi/) and the reporepo are never touched.";
+             each category and its disk usage. Flags are additive. A project's \
+             $(b,_oi/) and the reporepo are never touched.";
           `P
             "$(b,PKG) drops every cached version of that package; \
-             $(b,PKG.VERSION) drops one. Layers that transitively depend on \
-             a removed entry are dropped too. Re-run $(b,oi build) to \
-             rebuild.";
+             $(b,PKG.VERSION) drops one. Layers that transitively depend on a \
+             removed entry are dropped too. Re-run $(b,oi build) to rebuild.";
           `Pre "  oi clean --layers\n  oi clean dune\n  oi clean dune.3.22.1 -n";
         ]
   in

@@ -41,8 +41,7 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
         | None -> R.Skipped { msg = "unknown"; log_path = "" }
         | Some gi -> (
             match Hashtbl.find_opt group_results gi with
-            | None ->
-                R.Skipped { msg = "group not built"; log_path = "" }
+            | None -> R.Skipped { msg = "group not built"; log_path = "" }
             | Some (Group_ok counts) -> R.Ok counts
             | Some (Group_failed { counts; msg; per_pkg_logs }) ->
                 R.Failed { counts; msg; per_pkg_logs }))
@@ -520,7 +519,13 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
     let req : Oi.Build_pipeline.request =
       {
         targets =
-          [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+          [
+            Group
+              {
+                tokens = List.map OpamPackage.Name.to_string names;
+                handles = [];
+              };
+          ];
         with_repos = [];
         pins = url_project.pins;
         extra_repos = all_extras;
@@ -535,7 +540,8 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
       }
     in
     let layer_hashes =
-      Progress_ui.with_ui ~target ~clock:(clock :> _ Eio.Resource.t)
+      Progress_ui.with_ui ~target
+        ~clock:(clock :> _ Eio.Resource.t)
         ~enabled:(Tty.is_tty ())
       @@ fun reporter ->
       let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
@@ -641,10 +647,9 @@ let mirror_archives ~fs ~cache ~label archives =
 (* -- oi build dispatcher ------------------------------------------------ *)
 
 let cmd =
-  let run (c : Terms.common) refresh locked skip_local all only skip
-      registry use_registry with_repos with_deps jobs toolchain_override
-      depext_only export envrc_mode archives_only every_version
-      save_d10ir targets =
+  let run (c : Terms.common) refresh locked skip_local all only skip registry
+      use_registry with_repos with_deps jobs toolchain_override depext_only
+      export envrc_mode archives_only every_version save_d10ir targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -691,9 +696,8 @@ let cmd =
         "oi build: --export and --depext are mutually exclusive";
     if archives_only && (export <> None || depext_only) then
       Oi.Error.config_error
-        "oi build --archives-only: cannot combine with --export or \
-         --depext (no build runs, so there's nothing to publish or \
-         depext)";
+        "oi build --archives-only: cannot combine with --export or --depext \
+         (no build runs, so there's nothing to publish or depext)";
     let no_spec = targets = [] && (not all) && not project_mode in
     if no_spec && export <> None then needs_spec "--export";
     if no_spec && depext_only then needs_spec "--depext";
@@ -763,10 +767,7 @@ let cmd =
     let run_start_time = Unix.time () in
     let target_label =
       if all then "all"
-      else
-        match targets with
-        | [] -> "."
-        | xs -> String.concat ", " xs
+      else match targets with [] -> "." | xs -> String.concat ", " xs
     in
     (* [cache_root] needed by both the in-bar phases and the
        post-bar [print_build_summary] / log-listing logic. *)
@@ -789,17 +790,17 @@ let cmd =
       ~clock:(clock :> _ Eio.Resource.t)
       ~enabled:(Tty.is_tty ())
       (fun ui_reporter ->
-    Oi.Pipeline.init_opam_root ~fs ~data_dir;
-    ignore
-      (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh
-         ~reporter:ui_reporter ());
-    let conf =
-      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
-    in
-    let { Terms.layer_remote; source_remote } =
-      Terms.remotes_of ~url:registry ~mode:use_registry
-    in
-    (* When [--all] is set, walk every overlay in the reporepo and
+        Oi.Pipeline.init_opam_root ~fs ~data_dir;
+        ignore
+          (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh
+             ~reporter:ui_reporter ());
+        let conf =
+          Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+        in
+        let { Terms.layer_remote; source_remote } =
+          Terms.remotes_of ~url:registry ~mode:use_registry
+        in
+        (* When [--all] is set, walk every overlay in the reporepo and
        derive targets from each one:
        - skip [default] (ocaml/opam-repository) — its ~10k packages
          are never what [--all] should mean;
@@ -813,172 +814,174 @@ let cmd =
        [--only] restricts to named handles; [--skip] excludes them.
        [default] can still be included by explicitly listing it via
        [--only default]. *)
-    let reporepo_target_groups =
-      if not all then []
-      else begin
-        let path = Terms.reporepo_path () in
-        Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
-          ~url:(Terms.reporepo_url ()) ();
-        let entries = Oi.Source.Reporepo.load ~path in
-        let only_set =
-          if only = [] then None else Some (List.sort_uniq compare only)
-        in
-        let skip_set = List.sort_uniq compare skip in
-        let handles =
-          List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle) entries
-          |> List.sort_uniq String.compare
-        in
-        List.concat_map
-          (fun h ->
-            let default_skipped =
-              h = "default"
-              &&
-              match only_set with
-              | None -> true
-              | Some s -> not (List.mem h s)
+        let reporepo_target_groups =
+          if not all then []
+          else begin
+            let path = Terms.reporepo_path () in
+            Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
+              ~url:(Terms.reporepo_url ()) ();
+            let entries = Oi.Source.Reporepo.load ~path in
+            let only_set =
+              if only = [] then None else Some (List.sort_uniq compare only)
             in
-            if default_skipped then begin
-              Log.info (fun m ->
-                  m "--all: skipping %s (pass --only default to include)" h);
-              []
-            end
-            else
-              let included =
-                (match only_set with None -> true | Some s -> List.mem h s)
-                && not (List.mem h skip_set)
-              in
-              if not included then []
-              else
-                match Oi.Source.Reporepo.latest entries ~handle:h with
-                | None -> []
-                | Some e when e.toolchain_name <> None ->
-                    Log.info (fun m ->
-                        m "--all: skipping toolchain definition %s" h);
-                    []
-                | Some e ->
-                    if e.root_packages = [] then begin
-                      Log.info (fun m ->
-                          m
-                            "--all: overlay %s has no x-root-packages, \
-                             expanding to every package in the overlay"
-                            h);
-                      [ [ "@" ^ h ] ]
-                    end
-                    else
-                      List.map
-                        (fun group ->
-                          List.map (fun p -> "@" ^ h ^ "/" ^ p) group)
-                        e.root_packages)
-          handles
-      end
-    in
-    (* Each CLI-supplied target is its own (singleton) solve group, so
+            let skip_set = List.sort_uniq compare skip in
+            let handles =
+              List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle) entries
+              |> List.sort_uniq String.compare
+            in
+            List.concat_map
+              (fun h ->
+                let default_skipped =
+                  h = "default"
+                  &&
+                  match only_set with
+                  | None -> true
+                  | Some s -> not (List.mem h s)
+                in
+                if default_skipped then begin
+                  Log.info (fun m ->
+                      m "--all: skipping %s (pass --only default to include)" h);
+                  []
+                end
+                else
+                  let included =
+                    (match only_set with
+                      | None -> true
+                      | Some s -> List.mem h s)
+                    && not (List.mem h skip_set)
+                  in
+                  if not included then []
+                  else
+                    match Oi.Source.Reporepo.latest entries ~handle:h with
+                    | None -> []
+                    | Some e when e.toolchain_name <> None ->
+                        Log.info (fun m ->
+                            m "--all: skipping toolchain definition %s" h);
+                        []
+                    | Some e ->
+                        if e.root_packages = [] then begin
+                          Log.info (fun m ->
+                              m
+                                "--all: overlay %s has no x-root-packages, \
+                                 expanding to every package in the overlay"
+                                h);
+                          [ [ "@" ^ h ] ]
+                        end
+                        else
+                          List.map
+                            (fun group ->
+                              List.map (fun p -> "@" ^ h ^ "/" ^ p) group)
+                            e.root_packages)
+              handles
+          end
+        in
+        (* Each CLI-supplied target is its own (singleton) solve group, so
        [oi build a b] solves [a] and [b] independently. Reporepo groups
        may be multi-element (compiler variants etc.). The tokens are
        still raw — [@handle]-only entries haven't been fanned out to
        the overlay's packages yet (we need the clone first). *)
-    let token_groups =
-      List.map (fun t -> [ t ]) targets @ reporepo_target_groups
-    in
-    let tokens = List.concat token_groups in
-    if tokens = [] then
-      begin if all then
-        Oi.Error.config_error
-          "--all expanded to nothing in %s (all overlays filtered by \
-           --skip/--only, or the reporepo only contains 'default')"
-          (Terms.reporepo_path ())
-      else
-        Oi.Error.config_error
-          "no targets to build (pass PKG arguments or --all)"
-      end;
-    (* Classify each input into a plain target or an overlay form.
+        let token_groups =
+          List.map (fun t -> [ t ]) targets @ reporepo_target_groups
+        in
+        let tokens = List.concat token_groups in
+        if tokens = [] then
+          begin if all then
+            Oi.Error.config_error
+              "--all expanded to nothing in %s (all overlays filtered by \
+               --skip/--only, or the reporepo only contains 'default')"
+              (Terms.reporepo_path ())
+          else
+            Oi.Error.config_error
+              "no targets to build (pass PKG arguments or --all)"
+          end;
+        (* Classify each input into a plain target or an overlay form.
        Overlay forms collect handles to thread through [with_repos]
        so the later [Target.cli_extra_repos] run clones them up front. The
        "build everything in this overlay" form is expanded once the
        clones exist. *)
-    let parsed = List.map Target.parse_build_target tokens in
-    let with_repos =
-      let handles =
-        List.filter_map
-          (function
-            | Target.Plain_target _ -> None
-            | Target.Overlay_pkg (h, _) | Target.Overlay_all h -> Some h)
-          parsed
-        |> List.sort_uniq String.compare
-      in
-      with_repos @ handles
-    in
-    let extra_cli, url_project =
-      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh
-        ~reporter:ui_reporter with_deps
-    in
-    (* Split handles into two scopes:
+        let parsed = List.map Target.parse_build_target tokens in
+        let with_repos =
+          let handles =
+            List.filter_map
+              (function
+                | Target.Plain_target _ -> None
+                | Target.Overlay_pkg (h, _) | Target.Overlay_all h -> Some h)
+              parsed
+            |> List.sort_uniq String.compare
+          in
+          with_repos @ handles
+        in
+        let extra_cli, url_project =
+          Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh
+            ~reporter:ui_reporter with_deps
+        in
+        (* Split handles into two scopes:
        - [global_handles] apply to every solve (explicit [--with-repo]
          + any URL-project [x-repos] @-handles).
        - [token_handles] come from [@h/pkg] tokens and only apply to
          their group's solve.
        [with_repos] at this point already contains both, so recover
        [global_handles] by subtracting the token-derived set. *)
-    let token_handles =
-      List.filter_map
-        (function
-          | Target.Overlay_pkg (h, _) | Target.Overlay_all h -> Some h
-          | Target.Plain_target _ -> None)
-        parsed
-    in
-    let global_handles =
-      let tokens = List.sort_uniq String.compare token_handles in
-      List.filter (fun h -> not (List.mem h tokens)) with_repos
-      @ url_project.overlays
-    in
-    (* Clone every relevant overlay (global + token) upfront so
+        let token_handles =
+          List.filter_map
+            (function
+              | Target.Overlay_pkg (h, _) | Target.Overlay_all h -> Some h
+              | Target.Plain_target _ -> None)
+            parsed
+        in
+        let global_handles =
+          let tokens = List.sort_uniq String.compare token_handles in
+          List.filter (fun h -> not (List.mem h tokens)) with_repos
+          @ url_project.overlays
+        in
+        (* Clone every relevant overlay (global + token) upfront so
        per-group resolution below just reads already-materialised
        packages dirs. We don't keep the merged paths list — packages
        dirs are recomputed per-group from the handle subset. *)
-    let all_handles =
-      List.sort_uniq String.compare (global_handles @ token_handles)
-    in
-    let cli_extras_records =
-      Target.merge_extras
-        ~cli:(Target.cli_extra_repos ~fs ~sys all_handles)
-        ~project:url_project.extra_repos
-    in
-    let _ : string list =
-      Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh cli_extras_records
-    in
-    (* URL-project pins materialize into a synthetic packages/ tree
+        let all_handles =
+          List.sort_uniq String.compare (global_handles @ token_handles)
+        in
+        let cli_extras_records =
+          Target.merge_extras
+            ~cli:(Target.cli_extra_repos ~fs ~sys all_handles)
+            ~project:url_project.extra_repos
+        in
+        let _ : string list =
+          Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh cli_extras_records
+        in
+        (* URL-project pins materialize into a synthetic packages/ tree
        the solver consumes ahead of everything else, so the URL's
        dev-version of each local package wins over any stable version
        from the opam-repository. *)
-    let pin_dir =
-      Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh url_project.pins
-    in
-    (* Expand [@handle] into every package the overlay's clone
+        let pin_dir =
+          Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh url_project.pins
+        in
+        (* Expand [@handle] into every package the overlay's clone
        provides. List just the top-level names under the overlay's
        [packages/] dir — the solver will pick specific versions. If
        the overlay was force-bumped to a new version since the last
        [ensure_extra] call (e.g. the user just ran [oi repo add
        --force] pointing at a new URL), clone it on the fly rather
        than fail out. *)
-    let overlay_packages handle =
-      let path = Terms.reporepo_path () in
-      let entries = Oi.Source.Reporepo.load ~path in
-      match Oi.Source.Reporepo.latest entries ~handle with
-      | None -> Oi.Error.config_error "no overlay %s in reporepo" handle
-      | Some e ->
-          let pkgs_dir =
-            Oi.Source.Reporepo.overlay_packages_dir ~path ~handle:e.handle
-          in
-          if not (Sys.file_exists pkgs_dir) then
-            Oi.Error.config_error
-              "overlay %s.%s is not materialised at %s; run 'oi repo bump %s' \
-               to populate it (upstream %s)"
-              handle e.version pkgs_dir handle e.url;
-          Sys.readdir pkgs_dir |> Array.to_list
-          |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
-          |> List.sort String.compare
-    in
-    (* Expand each raw group into package-name groups. A group
+        let overlay_packages handle =
+          let path = Terms.reporepo_path () in
+          let entries = Oi.Source.Reporepo.load ~path in
+          match Oi.Source.Reporepo.latest entries ~handle with
+          | None -> Oi.Error.config_error "no overlay %s in reporepo" handle
+          | Some e ->
+              let pkgs_dir =
+                Oi.Source.Reporepo.overlay_packages_dir ~path ~handle:e.handle
+              in
+              if not (Sys.file_exists pkgs_dir) then
+                Oi.Error.config_error
+                  "overlay %s.%s is not materialised at %s; run 'oi repo bump \
+                   %s' to populate it (upstream %s)"
+                  handle e.version pkgs_dir handle e.url;
+              Sys.readdir pkgs_dir |> Array.to_list
+              |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
+              |> List.sort String.compare
+        in
+        (* Expand each raw group into package-name groups. A group
        containing just an [@handle] fallback (no [x-root-packages])
        fans out into one singleton group per package the overlay
        ships — "build everything in the overlay" isn't a single-solve
@@ -991,74 +994,75 @@ let cmd =
        [@avsm/karakeep] yields a group with handles [avsm], nothing
        else. That scope is what keeps [@avsm] solves from picking up
        conflicting packages out of [@samoht]'s overlay. *)
-    let raw_target_groups :
-        (string list (* targets *) * string list (* handles *)) list =
-      List.concat_map
-        (fun raw_group ->
-          match List.map Target.parse_build_target raw_group with
-          | [ Overlay_all h ] ->
-              let ps = overlay_packages h in
-              List.iter (fun p -> Hashtbl.replace target_handle p h) ps;
-              Log.info (fun m ->
-                  m "Overlay %s: %d package(s) to build" h (List.length ps));
-              List.map (fun p -> ([ p ], [ h ])) ps
-          | classified ->
-              let names =
-                List.map
-                  (function
-                    | Target.Plain_target t -> t
-                    | Target.Overlay_pkg (h, pkg_spec) ->
-                        Hashtbl.replace target_handle pkg_spec h;
-                        pkg_spec
-                    | Target.Overlay_all h ->
-                        Oi.Error.config_error
-                          "@%s cannot appear inside a multi-package solve \
-                           group; use @%s/PKG or list packages explicitly"
-                          h h)
-                  classified
-              in
-              let handles =
-                List.filter_map
-                  (function
-                    | Target.Plain_target _ -> None
-                    | Target.Overlay_pkg (h, _) | Target.Overlay_all h -> Some h)
-                  classified
-                |> List.sort_uniq String.compare
-              in
-              [ (names, handles) ])
-        token_groups
-    in
-    let target_groups = raw_target_groups in
-    let targets = List.concat_map fst target_groups in
-    if targets = [] && url_project.roots = [] then
-      Oi.Error.config_error "no targets to build";
-    (* [--with] adds extra packages to every target's root set plus any
+        let raw_target_groups :
+            (string list (* targets *) * string list (* handles *)) list =
+          List.concat_map
+            (fun raw_group ->
+              match List.map Target.parse_build_target raw_group with
+              | [ Overlay_all h ] ->
+                  let ps = overlay_packages h in
+                  List.iter (fun p -> Hashtbl.replace target_handle p h) ps;
+                  Log.info (fun m ->
+                      m "Overlay %s: %d package(s) to build" h (List.length ps));
+                  List.map (fun p -> ([ p ], [ h ])) ps
+              | classified ->
+                  let names =
+                    List.map
+                      (function
+                        | Target.Plain_target t -> t
+                        | Target.Overlay_pkg (h, pkg_spec) ->
+                            Hashtbl.replace target_handle pkg_spec h;
+                            pkg_spec
+                        | Target.Overlay_all h ->
+                            Oi.Error.config_error
+                              "@%s cannot appear inside a multi-package solve \
+                               group; use @%s/PKG or list packages explicitly"
+                              h h)
+                      classified
+                  in
+                  let handles =
+                    List.filter_map
+                      (function
+                        | Target.Plain_target _ -> None
+                        | Target.Overlay_pkg (h, _) | Target.Overlay_all h ->
+                            Some h)
+                      classified
+                    |> List.sort_uniq String.compare
+                  in
+                  [ (names, handles) ])
+            token_groups
+        in
+        let target_groups = raw_target_groups in
+        let targets = List.concat_map fst target_groups in
+        if targets = [] && url_project.roots = [] then
+          Oi.Error.config_error "no targets to build";
+        (* [--with] adds extra packages to every target's root set plus any
        version constraints they carry. *)
-    let base_constraints = Oi.Project.Script.constraints extra_cli in
-    let extra_names =
-      List.filter_map
-        (fun (d : Oi.Project.Script.dep) ->
-          if OpamPackage.Name.to_string d.name = "ocaml" then None
-          else Some d.name)
-        extra_cli
-      @ List.map OpamPackage.Name.of_string url_project.roots
-    in
-    let target_groups =
-      target_groups @ List.map (fun r -> ([ r ], [])) url_project.roots
-    in
-    let targets = List.concat_map fst target_groups in
-    targets_ref := targets;
-    (* Per-target result tracking; the final summary walks [targets] in
+        let base_constraints = Oi.Project.Script.constraints extra_cli in
+        let extra_names =
+          List.filter_map
+            (fun (d : Oi.Project.Script.dep) ->
+              if OpamPackage.Name.to_string d.name = "ocaml" then None
+              else Some d.name)
+            extra_cli
+          @ List.map OpamPackage.Name.of_string url_project.roots
+        in
+        let target_groups =
+          target_groups @ List.map (fun r -> ([ r ], [])) url_project.roots
+        in
+        let targets = List.concat_map fst target_groups in
+        targets_ref := targets;
+        (* Per-target result tracking; the final summary walks [targets] in
        order and looks each name up here. A target either fails to
        solve (status stored directly), or lands in some group. Groups
        are keyed by index; their build result (ok / failed, with the
        package counts) is written into [group_results] when the group
        finishes. *)
-    (* [solve_failures], [target_group] and [group_results] hoisted
+        (* [solve_failures], [target_group] and [group_results] hoisted
        to outer scope; populated below from [Build_pipeline.solve]'s
        per-group results. *)
-    (* -- Build_pipeline.solve + .build ----------------------------------- *)
-    (* The whole multi-group orchestration funnels into [Build_pipeline]:
+        (* -- Build_pipeline.solve + .build ----------------------------------- *)
+        (* The whole multi-group orchestration funnels into [Build_pipeline]:
        it runs the solver per group, elaborates each into a [Plan.t] +
        [D10ir.Plan.t] recipe, merges the recipes, and (when
        [Build_pipeline.build] runs) drives the unified fetch + archive
@@ -1066,35 +1070,35 @@ let cmd =
        layer is left with: target classification (above), short-circuit
        flag handling ([--depext], [--archives-only], [--save-d10ir]),
        failure mapping back into [group_results] for the summary. *)
-    let pipeline_env : Oi.Build_pipeline.env =
-      { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
-    in
-    let extra_token_names =
-      List.map OpamPackage.Name.to_string extra_names
-    in
-    let make_req ~override tgs : Oi.Build_pipeline.request =
-      let bp_targets : Oi.Build_pipeline.target list =
-        List.map
-          (fun (toks, handles) : Oi.Build_pipeline.target ->
-            Group { tokens = toks @ extra_token_names; handles })
-          tgs
-      in
-      {
-        targets = bp_targets;
-        with_repos = global_handles;
-        pins = [];
-        extra_repos = [];
-        constraints = base_constraints;
-        toolchain_override = override;
-        toolchain = None;
-        conf;
-        local_packages_dir = pin_dir;
-        project_root = None;
-        force_source = false;
-        refresh;
-      }
-    in
-    (* [--all] fans every reporepo overlay into a target group, and
+        let pipeline_env : Oi.Build_pipeline.env =
+          { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
+        in
+        let extra_token_names =
+          List.map OpamPackage.Name.to_string extra_names
+        in
+        let make_req ~override tgs : Oi.Build_pipeline.request =
+          let bp_targets : Oi.Build_pipeline.target list =
+            List.map
+              (fun (toks, handles) : Oi.Build_pipeline.target ->
+                Group { tokens = toks @ extra_token_names; handles })
+              tgs
+          in
+          {
+            targets = bp_targets;
+            with_repos = global_handles;
+            pins = [];
+            extra_repos = [];
+            constraints = base_constraints;
+            toolchain_override = override;
+            toolchain = None;
+            conf;
+            local_packages_dir = pin_dir;
+            project_root = None;
+            force_source = false;
+            refresh;
+          }
+        in
+        (* [--all] fans every reporepo overlay into a target group, and
        each overlay's [x-oi-toolchain] field can point at a different
        toolchain. [Build_pipeline.solve] requires one toolchain per
        request, so partition [target_groups] by toolchain and run
@@ -1102,407 +1106,412 @@ let cmd =
        offset across partitions so [target_group] / [group_results]
        stay collision-free. Only kicks in for the plain build path;
        [--depext] / [--archives-only] take the single-solve path. *)
-    let reporepo_entries =
-      lazy
-        (try Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ())
-         with _ -> [])
-    in
-    let toolchain_of_handles handles =
-      match handles with
-      | [] -> None
-      | h :: _ -> (
-          match
-            Oi.Pipeline.toolchain_names_of_handle
-              (Lazy.force reporepo_entries) h
-          with
-          | [ n ] -> Some n
-          | _ -> None)
-    in
-    let buckets : (string option * (string list * string list) list) list =
-      if
-        all
-        && toolchain_override = None
-        && (not depext_only)
-        && not archives_only
-      then begin
-        let by_tc : (string, (string list * string list) list) Hashtbl.t =
-          Hashtbl.create 4
+        let reporepo_entries =
+          lazy
+            (try Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ())
+             with _ -> [])
         in
-        let no_tc = ref [] in
-        List.iter
-          (fun (toks, handles) ->
-            match toolchain_of_handles handles with
-            | Some tc ->
-                let cur =
-                  Stdlib.Option.value (Hashtbl.find_opt by_tc tc) ~default:[]
-                in
-                Hashtbl.replace by_tc tc ((toks, handles) :: cur)
-            | None -> no_tc := (toks, handles) :: !no_tc)
-          target_groups;
-        let tc_buckets =
-          Hashtbl.fold
-            (fun tc gs acc -> (Some tc, List.rev gs) :: acc)
-            by_tc []
-          |> List.sort (fun (a, _) (b, _) -> compare a b)
+        let toolchain_of_handles handles =
+          match handles with
+          | [] -> None
+          | h :: _ -> (
+              match
+                Oi.Pipeline.toolchain_names_of_handle
+                  (Lazy.force reporepo_entries)
+                  h
+              with
+              | [ n ] -> Some n
+              | _ -> None)
         in
-        let buckets =
-          if !no_tc = [] then tc_buckets
-          else (None, List.rev !no_tc) :: tc_buckets
-        in
-        if List.length buckets <= 1 then [ (toolchain_override, target_groups) ]
-        else begin
-          let names =
-            List.filter_map (fun (tc, _) -> tc) buckets
-            |> List.sort String.compare
+        (* Group items by an optional string key, preserving input order
+       within each bucket. Items with [key x = None] end up under the
+       [None] bucket; keyed buckets sort alphabetically. *)
+        let partition_by ~key xs =
+          let by_k : (string, _ list) Hashtbl.t = Hashtbl.create 4 in
+          let none_bucket = ref [] in
+          List.iter
+            (fun x ->
+              match key x with
+              | Some k ->
+                  let cur =
+                    Stdlib.Option.value (Hashtbl.find_opt by_k k) ~default:[]
+                  in
+                  Hashtbl.replace by_k k (x :: cur)
+              | None -> none_bucket := x :: !none_bucket)
+            xs;
+          let keyed =
+            Hashtbl.fold (fun k vs acc -> (Some k, List.rev vs) :: acc) by_k []
+            |> List.sort (fun (a, _) (b, _) -> compare a b)
           in
-          Log.info (fun m ->
-              m
-                "--all: splitting solve into %d toolchain bucket(s) (%s); \
-                 pass --toolchain=NAME to force a single bucket"
-                (List.length buckets) (String.concat ", " names));
-          buckets
-        end
-      end
-      else [ (toolchain_override, target_groups) ]
-    in
-    let gi_offset_ref = ref 0 in
-    List.iter (fun (override, bucket_groups) ->
-      let gi_offset = !gi_offset_ref in
-      let req = make_req ~override bucket_groups in
-      let solved =
-        Oi.Build_pipeline.solve pipeline_env ~reporter:ui_reporter req
-      in
-      (* Populate per-target tracking from [solved.groups]: each
+          match !none_bucket with
+          | [] -> keyed
+          | xs -> (None, List.rev xs) :: keyed
+        in
+        let buckets : (string option * (string list * string list) list) list =
+          let split_for_all =
+            all && toolchain_override = None && (not depext_only)
+            && not archives_only
+          in
+          if not split_for_all then [ (toolchain_override, target_groups) ]
+          else
+            let buckets =
+              partition_by
+                ~key:(fun (_, handles) -> toolchain_of_handles handles)
+                target_groups
+            in
+            if List.length buckets <= 1 then
+              [ (toolchain_override, target_groups) ]
+            else begin
+              let names =
+                List.filter_map (fun (tc, _) -> tc) buckets
+                |> List.sort String.compare
+              in
+              Log.info (fun m ->
+                  m
+                    "--all: splitting solve into %d toolchain bucket(s) (%s); \
+                     pass --toolchain=NAME to force a single bucket"
+                    (List.length buckets) (String.concat ", " names));
+              buckets
+            end
+        in
+        let gi_offset_ref = ref 0 in
+        List.iter
+          (fun (override, bucket_groups) ->
+            let gi_offset = !gi_offset_ref in
+            let req = make_req ~override bucket_groups in
+            let solved =
+              Oi.Build_pipeline.solve pipeline_env ~reporter:ui_reporter req
+            in
+            (* Populate per-target tracking from [solved.groups]: each
          token's group index, each solve-failure's message + log path.
          [gi_offset] keeps indices unique across per-toolchain buckets. *)
-      List.iteri
-        (fun gi (gr : Oi.Build_pipeline.group_result) ->
-          let gi = gi + gi_offset in
-          List.iter
-            (fun t -> Hashtbl.replace target_group t gi)
-            gr.group.tokens;
-          match gr.error with
-          | Error (Solve_failed { msg; log_path }) ->
-              List.iter
-                (fun t ->
-                  Hashtbl.replace solve_failures t (msg, log_path))
-                gr.group.tokens;
-              (* Mirror the original Audit emission for solve failures. *)
-              let layer_hash =
-                let key =
-                  String.concat " "
-                    (gr.group.tokens
-                    @ List.map (fun h -> "@" ^ h) gr.group.handles)
-                in
-                Digest.to_hex (Digest.string key)
+            List.iteri
+              (fun gi (gr : Oi.Build_pipeline.group_result) ->
+                let gi = gi + gi_offset in
+                List.iter
+                  (fun t -> Hashtbl.replace target_group t gi)
+                  gr.group.tokens;
+                match gr.error with
+                | Error (Solve_failed { msg; log_path }) ->
+                    List.iter
+                      (fun t ->
+                        Hashtbl.replace solve_failures t (msg, log_path))
+                      gr.group.tokens;
+                    (* Mirror the original Audit emission for solve failures. *)
+                    let layer_hash =
+                      let key =
+                        String.concat " "
+                          (gr.group.tokens
+                          @ List.map (fun h -> "@" ^ h) gr.group.handles)
+                      in
+                      Digest.to_hex (Digest.string key)
+                    in
+                    let tail = Oi.Audit.tail_of_file ~path:log_path in
+                    let now = Unix.gettimeofday () in
+                    let context : Oi.Audit.context =
+                      {
+                        (Oi.Audit.default_context ()) with
+                        overlay =
+                          (match gr.group.handles with
+                          | [ h ] ->
+                              Some { D10.Overlay.handle = h; version = "" }
+                          | _ -> None);
+                        toolchain =
+                          Option.map
+                            (fun (i : Oi.Toolchain.info) -> i.handle)
+                            gr.toolchain;
+                      }
+                    in
+                    List.iter
+                      (fun target ->
+                        let event : Oi.Audit.event =
+                          {
+                            schema = 1;
+                            event_id = Oi.Audit.ulid ();
+                            invocation_id = Oi.Audit.invocation_id ();
+                            ts = now;
+                            os_key;
+                            target = Solve_key layer_hash;
+                            pkg = Oi.Identity.of_string target;
+                            outcome = Solve_failed { reason = msg };
+                            duration_s = 0.0;
+                            context;
+                            log = Some { text_path = log_path; tail };
+                          }
+                        in
+                        Oi.Audit.append ~fs ~cache_root:(Oi.Cache.root_s cache)
+                          event)
+                      gr.group.tokens
+                | _ -> ())
+              solved.groups;
+            let any_solved =
+              List.exists
+                (fun (gr : Oi.Build_pipeline.group_result) ->
+                  Result.is_ok gr.error)
+                solved.groups
+            in
+            if not any_solved then
+              Oi.Error.msg "no packages solved successfully";
+            (* [--depext]: every group is solved, sum their depexts. *)
+            if depext_only then begin
+              let group_conf, _ =
+                Oi.Pipeline.solver_inputs solved.toolchain conf
               in
-              let tail = Oi.Audit.tail_of_file ~path:log_path in
-              let now = Unix.gettimeofday () in
-              let context : Oi.Audit.context =
-                {
-                  (Oi.Audit.default_context ()) with
-                  overlay =
-                    (match gr.group.handles with
-                    | [ h ] -> Some { D10.Overlay.handle = h; version = "" }
-                    | _ -> None);
-                  toolchain =
-                    Option.map
-                      (fun (i : Oi.Toolchain.info) -> i.handle)
-                      gr.toolchain;
-                }
-              in
-              List.iter
-                (fun target ->
-                  let event : Oi.Audit.event =
-                    {
-                      schema = 1;
-                      event_id = Oi.Audit.ulid ();
-                      invocation_id = Oi.Audit.invocation_id ();
-                      ts = now;
-                      os_key;
-                      target = Solve_key layer_hash;
-                      pkg = Oi.Identity.of_string target;
-                      outcome = Solve_failed { reason = msg };
-                      duration_s = 0.0;
-                      context;
-                      log = Some { text_path = log_path; tail };
-                    }
-                  in
-                  Oi.Audit.append ~fs
-                    ~cache_root:(Oi.Cache.root_s cache) event)
-                gr.group.tokens
-          | _ -> ())
-        solved.groups;
-      let any_solved =
-        List.exists
-          (fun (gr : Oi.Build_pipeline.group_result) ->
-            Result.is_ok gr.error)
-          solved.groups
-      in
-      if not any_solved then Oi.Error.msg "no packages solved successfully";
-      (* [--depext]: every group is solved, sum their depexts. *)
-      if depext_only then begin
-        let group_conf, _ =
-          Oi.Pipeline.solver_inputs solved.toolchain conf
-        in
-        let all =
-          List.fold_left
-            (fun acc (gr : Oi.Build_pipeline.group_result) ->
-              if not (Result.is_ok gr.error) then acc
-              else
-                let entries =
-                  Oi.Depexts.compute_for_conf ~conf:group_conf
-                    ~packages_dirs:gr.pkgs_dir gr.pkgs
-                in
+              let all =
                 List.fold_left
-                  (fun acc e ->
-                    OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
-                  acc entries)
-            OpamSysPkg.Set.empty solved.groups
-        in
-        OpamSysPkg.Set.iter
-          (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
-          all;
-        exit 0
-      end;
-      if archives_only then begin
-        let archives =
-          List.concat_map
-            (fun (gr : Oi.Build_pipeline.group_result) ->
-              if not (Result.is_ok gr.error) then []
-              else
-                Oi.Source.Mirror.collect_archives
-                  ~packages_dirs:gr.pkgs_dir gr.pkgs)
-            solved.groups
-        in
-        exit (mirror_archives ~fs ~cache ~label:"solved" archives)
-      end;
-      (* Cycle-failed groups: log + emit Dep_failed events for the
+                  (fun acc (gr : Oi.Build_pipeline.group_result) ->
+                    if not (Result.is_ok gr.error) then acc
+                    else
+                      let entries =
+                        Oi.Depexts.compute_for_conf ~conf:group_conf
+                          ~packages_dirs:gr.pkgs_dir gr.pkgs
+                      in
+                      List.fold_left
+                        (fun acc e ->
+                          OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
+                        acc entries)
+                  OpamSysPkg.Set.empty solved.groups
+              in
+              OpamSysPkg.Set.iter
+                (fun p -> Fmt.pr "%s@." (OpamSysPkg.to_string p))
+                all;
+              exit 0
+            end;
+            if archives_only then begin
+              let archives =
+                List.concat_map
+                  (fun (gr : Oi.Build_pipeline.group_result) ->
+                    if not (Result.is_ok gr.error) then []
+                    else
+                      Oi.Source.Mirror.collect_archives
+                        ~packages_dirs:gr.pkgs_dir gr.pkgs)
+                  solved.groups
+              in
+              exit (mirror_archives ~fs ~cache ~label:"solved" archives)
+            end;
+            (* Cycle-failed groups: log + emit Dep_failed events for the
          counters + populate [group_results] so the summary reports
          them. They never reach [Direct.run] (no recipe to run). *)
-      List.iteri
-        (fun gi (gr : Oi.Build_pipeline.group_result) ->
-          let gi = gi + gi_offset in
-          match gr.error with
-          | Error (Cycle cycles) ->
-              let cycle_label =
-                Fmt.str "%a" Oi.Plan.pp_cycles cycles |> String.trim
-              in
-              Log.warn (fun m ->
-                  m
-                    "Skipping group %s: dependency cycle in solved set:@\n\
-                     %s@\n\
-                     This is an upstream metadata bug — the cyclic packages \
-                     all declare each other as [{= version}] dependencies. \
-                     Re-bump the offending overlay once the upstream opam \
-                     files are fixed."
-                    gr.group.label cycle_label);
-              let n_pkgs = List.length gr.pkgs in
-              Hashtbl.replace group_results gi
-                (Group_failed
-                   {
-                     counts = { n_pkgs; n_built = 0; n_cached = 0 };
-                     msg = Fmt.str "dependency cycle: %s" cycle_label;
-                     per_pkg_logs = [];
-                   })
-          | _ -> ())
-        solved.groups;
-      (* [--save-d10ir]: persist each group's recipe to disk. *)
-      (match save_d10ir with
-      | None -> ()
-      | Some dir ->
-          Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
-            Eio.Path.(fs / dir);
-          List.iter
-            (fun (gr : Oi.Build_pipeline.group_result) ->
-              match gr.recipe with
-              | None -> ()
-              | Some recipe ->
-                  let stem =
-                    match gr.group.tokens with
-                    | t :: _ ->
-                        String.map
-                          (fun c ->
-                            if (c >= 'a' && c <= 'z')
-                               || (c >= 'A' && c <= 'Z')
-                               || (c >= '0' && c <= '9')
-                               || c = '.' || c = '-' || c = '_'
-                            then c
-                            else '_')
-                          t
-                    | [] -> "recipe"
-                  in
-                  let dst =
-                    Filename.concat dir (stem ^ ".d10ir.json")
-                  in
-                  D10ir.Plan.save Eio.Path.(fs / dst) recipe;
-                  Logs.info (fun m ->
-                      m "Saved d10ir recipe to %s" dst))
-            solved.groups);
-      (* Audit emission for cached layers. [Direct.run] doesn't append
+            List.iteri
+              (fun gi (gr : Oi.Build_pipeline.group_result) ->
+                let gi = gi + gi_offset in
+                match gr.error with
+                | Error (Cycle cycles) ->
+                    let cycle_label =
+                      Fmt.str "%a" Oi.Plan.pp_cycles cycles |> String.trim
+                    in
+                    Log.warn (fun m ->
+                        m
+                          "Skipping group %s: dependency cycle in solved set:@\n\
+                           %s@\n\
+                           This is an upstream metadata bug — the cyclic \
+                           packages all declare each other as [{= version}] \
+                           dependencies. Re-bump the offending overlay once \
+                           the upstream opam files are fixed."
+                          gr.group.label cycle_label);
+                    let n_pkgs = List.length gr.pkgs in
+                    Hashtbl.replace group_results gi
+                      (Group_failed
+                         {
+                           counts = { n_pkgs; n_built = 0; n_cached = 0 };
+                           msg = Fmt.str "dependency cycle: %s" cycle_label;
+                           per_pkg_logs = [];
+                         })
+                | _ -> ())
+              solved.groups;
+            (* [--save-d10ir]: persist each group's recipe to disk. *)
+            (match save_d10ir with
+            | None -> ()
+            | Some dir ->
+                Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dir);
+                List.iter
+                  (fun (gr : Oi.Build_pipeline.group_result) ->
+                    match gr.recipe with
+                    | None -> ()
+                    | Some recipe ->
+                        let stem =
+                          match gr.group.tokens with
+                          | t :: _ ->
+                              String.map
+                                (fun c ->
+                                  if
+                                    (c >= 'a' && c <= 'z')
+                                    || (c >= 'A' && c <= 'Z')
+                                    || (c >= '0' && c <= '9')
+                                    || c = '.' || c = '-' || c = '_'
+                                  then c
+                                  else '_')
+                                t
+                          | [] -> "recipe"
+                        in
+                        let dst = Filename.concat dir (stem ^ ".d10ir.json") in
+                        D10ir.Plan.save Eio.Path.(fs / dst) recipe;
+                        Logs.info (fun m -> m "Saved d10ir recipe to %s" dst))
+                  solved.groups);
+            (* Audit emission for cached layers. [Direct.run] doesn't append
          audit events for [Cached] outcomes; record them ourselves so
          the manifest's [callers[]] list still attributes this run. *)
-      let audit_now = Unix.gettimeofday () in
-      let toolchain_handle =
-        Option.map
-          (fun (i : Oi.Toolchain.info) -> i.handle)
-          solved.toolchain
-      in
-      List.iter
-        (fun (gr : Oi.Build_pipeline.group_result) ->
-          if not (Result.is_ok gr.error) then ()
-          else
-            match gr.exec_plan with
-            | None -> ()
-            | Some xp ->
-                List.iter
-                  (fun (p : Oi.Plan.package_plan) ->
-                    if p.method_ = Oi.Identity.Binary then
-                      let opam_pkg =
-                        match OpamPackage.of_string_opt p.pkg with
-                        | Some op -> op
-                        | None -> OpamPackage.of_string (p.pkg ^ ".0.0")
-                      in
-                      let context : Oi.Audit.context =
-                        {
-                          (Oi.Audit.default_context ()) with
-                          overlay =
-                            Oi.Plan.overlay_of_pkg
-                              ~packages_dirs:gr.pkgs_dir opam_pkg;
-                          toolchain = toolchain_handle;
-                        }
-                      in
-                      let event : Oi.Audit.event =
-                        {
-                          schema = 1;
-                          event_id = Oi.Audit.ulid ();
-                          invocation_id = Oi.Audit.invocation_id ();
-                          ts = audit_now;
-                          os_key;
-                          target = Layer p.layer_hash;
-                          pkg = Oi.Identity.of_opam opam_pkg;
-                          outcome = Cached;
-                          duration_s = 0.0;
-                          context;
-                          log = None;
-                        }
-                      in
-                      Oi.Audit.append ~fs
-                        ~cache_root:(Oi.Cache.root_s cache) event)
-                  xp.packages)
-        solved.groups;
-      (* Run the unified post-merge fetch + Direct.run on the merged
-         plan. Returns [None] when no recipe was produced (every group
-         failed solve / cycle / emit). *)
-      let result_opt =
-        Oi.Build_pipeline.build pipeline_env ~reporter:ui_reporter
-          { solved; layer_remote; source_remote; jobs }
-      in
-      (* Map per-node failures back to per-group [group_results]. *)
-      let failed_layers : (string, string) Hashtbl.t =
-        Hashtbl.create 64
-      in
-      (match result_opt with
-      | None -> ()
-      | Some (result : D10ir.Direct.result) ->
-          List.iteri
-            (fun gi (gr : Oi.Build_pipeline.group_result) ->
-              let gi = gi + gi_offset in
-              match gr.error with
-              | Error (Cycle _) -> ()
-              | Error _ -> ()
-              | Ok () -> (
+            let audit_now = Unix.gettimeofday () in
+            let toolchain_handle =
+              Option.map
+                (fun (i : Oi.Toolchain.info) -> i.handle)
+                solved.toolchain
+            in
+            List.iter
+              (fun (gr : Oi.Build_pipeline.group_result) ->
+                if not (Result.is_ok gr.error) then ()
+                else
                   match gr.exec_plan with
                   | None -> ()
-                  | Some exec_plan ->
-                      let count_by f =
-                        List.length (List.filter f exec_plan.packages)
-                      in
-                      let n_build =
-                        count_by (fun (p : Oi.Plan.package_plan) ->
-                            p.method_ = Source)
-                      in
-                      let n_cached =
-                        count_by (fun (p : Oi.Plan.package_plan) ->
-                            p.method_ = Binary)
-                      in
-                      let n_pkgs = n_build + n_cached in
-                      let pkg_set : (string, unit) Hashtbl.t =
-                        Hashtbl.create 32
-                      in
+                  | Some xp ->
                       List.iter
                         (fun (p : Oi.Plan.package_plan) ->
-                          Hashtbl.replace pkg_set p.pkg ())
-                        exec_plan.packages;
-                      let group_failures =
-                        List.filter
-                          (fun (f : D10ir.Direct.failure) ->
-                            let pkg_str =
-                              Fmt.str "%s.%s" f.package.name
-                                f.package.version
+                          if p.method_ = Oi.Identity.Binary then
+                            let opam_pkg =
+                              match OpamPackage.of_string_opt p.pkg with
+                              | Some op -> op
+                              | None -> OpamPackage.of_string (p.pkg ^ ".0.0")
                             in
-                            Hashtbl.mem pkg_set pkg_str)
-                          result.failures
-                      in
-                      List.iter
-                        (fun (f : D10ir.Direct.failure) ->
-                          let pkg_str =
-                            Fmt.str "%s.%s" f.package.name f.package.version
-                          in
-                          List.iter
-                            (fun (p : Oi.Plan.package_plan) ->
-                              if p.pkg = pkg_str then
-                                Hashtbl.replace failed_layers
-                                  p.layer_hash f.log_path)
-                            exec_plan.packages)
-                        group_failures;
-                      let collect_failures
-                          (exec_plan : Oi.Plan.t) =
-                        let seen = Hashtbl.create 16 in
-                        List.filter_map
-                          (fun (p : Oi.Plan.package_plan) ->
-                            match
-                              Hashtbl.find_opt failed_layers p.layer_hash
-                            with
-                            | Some path
-                              when path <> ""
-                                   && not (Hashtbl.mem seen path) ->
-                                Hashtbl.replace seen path ();
-                                Some (p.pkg, path)
-                            | _ -> None)
-                          exec_plan.packages
-                      in
-                      let counts =
-                        { n_pkgs; n_built = n_build; n_cached }
-                      in
-                      let outcome =
-                        if group_failures = [] then Group_ok counts
-                        else
-                          let pkg_summary =
-                            match group_failures with
-                            | [ f ] ->
-                                Fmt.str "package %s.%s in phase %s"
-                                  f.package.name f.package.version
-                                  (D10ir.Direct.phase_to_string f.phase)
-                            | fs -> Fmt.str "%d packages" (List.length fs)
-                          in
-                          let output =
-                            Fmt.str "%a" D10ir.Direct.pp_failures
-                              group_failures
-                          in
-                          Group_failed
-                            {
-                              counts;
-                              msg =
-                                Fmt.str "build failed: %s\n%s" pkg_summary
-                                  output;
-                              per_pkg_logs = collect_failures exec_plan;
-                            }
-                      in
-                      Hashtbl.replace group_results gi outcome))
-            solved.groups);
-      gi_offset_ref := !gi_offset_ref + List.length solved.groups
-    ) buckets);
+                            let context : Oi.Audit.context =
+                              {
+                                (Oi.Audit.default_context ()) with
+                                overlay =
+                                  Oi.Plan.overlay_of_pkg
+                                    ~packages_dirs:gr.pkgs_dir opam_pkg;
+                                toolchain = toolchain_handle;
+                              }
+                            in
+                            let event : Oi.Audit.event =
+                              {
+                                schema = 1;
+                                event_id = Oi.Audit.ulid ();
+                                invocation_id = Oi.Audit.invocation_id ();
+                                ts = audit_now;
+                                os_key;
+                                target = Layer p.layer_hash;
+                                pkg = Oi.Identity.of_opam opam_pkg;
+                                outcome = Cached;
+                                duration_s = 0.0;
+                                context;
+                                log = None;
+                              }
+                            in
+                            Oi.Audit.append ~fs
+                              ~cache_root:(Oi.Cache.root_s cache) event)
+                        xp.packages)
+              solved.groups;
+            (* Run the unified post-merge fetch + Direct.run on the merged
+         plan. Returns [None] when no recipe was produced (every group
+         failed solve / cycle / emit). *)
+            let result_opt =
+              Oi.Build_pipeline.build pipeline_env ~reporter:ui_reporter
+                { solved; layer_remote; source_remote; jobs }
+            in
+            (* Map per-node failures back to per-group [group_results]. *)
+            let failed_layers : (string, string) Hashtbl.t =
+              Hashtbl.create 64
+            in
+            (match result_opt with
+            | None -> ()
+            | Some (result : D10ir.Direct.result) ->
+                List.iteri
+                  (fun gi (gr : Oi.Build_pipeline.group_result) ->
+                    let gi = gi + gi_offset in
+                    match gr.error with
+                    | Error (Cycle _) -> ()
+                    | Error _ -> ()
+                    | Ok () -> (
+                        match gr.exec_plan with
+                        | None -> ()
+                        | Some exec_plan ->
+                            let count_by f =
+                              List.length (List.filter f exec_plan.packages)
+                            in
+                            let n_build =
+                              count_by (fun (p : Oi.Plan.package_plan) ->
+                                  p.method_ = Source)
+                            in
+                            let n_cached =
+                              count_by (fun (p : Oi.Plan.package_plan) ->
+                                  p.method_ = Binary)
+                            in
+                            let n_pkgs = n_build + n_cached in
+                            let pkg_set : (string, unit) Hashtbl.t =
+                              Hashtbl.create 32
+                            in
+                            List.iter
+                              (fun (p : Oi.Plan.package_plan) ->
+                                Hashtbl.replace pkg_set p.pkg ())
+                              exec_plan.packages;
+                            let group_failures =
+                              List.filter
+                                (fun (f : D10ir.Direct.failure) ->
+                                  let pkg_str =
+                                    Fmt.str "%s.%s" f.package.name
+                                      f.package.version
+                                  in
+                                  Hashtbl.mem pkg_set pkg_str)
+                                result.failures
+                            in
+                            List.iter
+                              (fun (f : D10ir.Direct.failure) ->
+                                let pkg_str =
+                                  Fmt.str "%s.%s" f.package.name
+                                    f.package.version
+                                in
+                                List.iter
+                                  (fun (p : Oi.Plan.package_plan) ->
+                                    if p.pkg = pkg_str then
+                                      Hashtbl.replace failed_layers p.layer_hash
+                                        f.log_path)
+                                  exec_plan.packages)
+                              group_failures;
+                            let collect_failures (exec_plan : Oi.Plan.t) =
+                              let seen = Hashtbl.create 16 in
+                              List.filter_map
+                                (fun (p : Oi.Plan.package_plan) ->
+                                  match
+                                    Hashtbl.find_opt failed_layers p.layer_hash
+                                  with
+                                  | Some path
+                                    when path <> ""
+                                         && not (Hashtbl.mem seen path) ->
+                                      Hashtbl.replace seen path ();
+                                      Some (p.pkg, path)
+                                  | _ -> None)
+                                exec_plan.packages
+                            in
+                            let counts =
+                              { n_pkgs; n_built = n_build; n_cached }
+                            in
+                            let outcome =
+                              if group_failures = [] then Group_ok counts
+                              else
+                                let pkg_summary =
+                                  match group_failures with
+                                  | [ f ] ->
+                                      Fmt.str "package %s.%s in phase %s"
+                                        f.package.name f.package.version
+                                        (D10ir.Direct.phase_to_string f.phase)
+                                  | fs -> Fmt.str "%d packages" (List.length fs)
+                                in
+                                let output =
+                                  Fmt.str "%a" D10ir.Direct.pp_failures
+                                    group_failures
+                                in
+                                Group_failed
+                                  {
+                                    counts;
+                                    msg =
+                                      Fmt.str "build failed: %s\n%s" pkg_summary
+                                        output;
+                                    per_pkg_logs = collect_failures exec_plan;
+                                  }
+                            in
+                            Hashtbl.replace group_results gi outcome))
+                  solved.groups);
+            gi_offset_ref := !gi_offset_ref + List.length solved.groups)
+          buckets);
     (* Progress_ui closed; the summary block prints on a clean
        terminal. *)
     print_build_summary ~targets:!targets_ref ~target_handle ~solve_failures
@@ -1566,9 +1575,7 @@ let cmd =
   let depext_only =
     Arg.(
       value & flag
-      & info
-          ~doc:
-            "Solve only; print required system packages, one per line."
+      & info ~doc:"Solve only; print required system packages, one per line."
           [ "depext" ])
   in
   let export =
@@ -1577,9 +1584,9 @@ let cmd =
       & opt (some string) None
       & info ~docv:"DIR"
           ~doc:
-            "Publish a registry into $(i,DIR) after the build: layers, \
-             source archives, and $(b,index.db). Requires a build spec or \
-             project. Mutually exclusive with $(b,--depext)."
+            "Publish a registry into $(i,DIR) after the build: layers, source \
+             archives, and $(b,index.db). Requires a build spec or project. \
+             Mutually exclusive with $(b,--depext)."
           [ "export" ])
   in
   let archives_only =
@@ -1588,8 +1595,7 @@ let cmd =
       & info
           ~doc:
             "Fetch source archives into the local mirror; skip build and \
-             install. Mutually exclusive with $(b,--export) and \
-             $(b,--depext)."
+             install. Mutually exclusive with $(b,--export) and $(b,--depext)."
           [ "archives-only" ])
   in
   let every_version =
@@ -1618,10 +1624,9 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "Solve and build $(i,PKG) into the layer cache. With no \
-             $(i,PKG), build the cwd project: sync $(b,*.opam) deps and dev \
-             tools into $(b,_oi/), then run $(b,dune build \
-             --profile=release).";
+            "Solve and build $(i,PKG) into the layer cache. With no $(i,PKG), \
+             build the cwd project: sync $(b,*.opam) deps and dev tools into \
+             $(b,_oi/), then run $(b,dune build --profile=release).";
           `S "TARGETS";
           `I ("(none)", "Cwd $(b,*.opam) project.");
           `I ("$(b,PKG)", "Single package.");
@@ -1722,9 +1727,7 @@ let test_cmd =
   let targets =
     Arg.(
       value & pos_all string []
-      & info ~docv:"PKG"
-          ~doc:"Test target: $(b,PKG) or $(b,@HANDLE/PKG)."
-          [])
+      & info ~docv:"PKG" ~doc:"Test target: $(b,PKG) or $(b,@HANDLE/PKG)." [])
   in
   let info =
     Cmd.info "test" ~doc:"Run a project's or a package's tests"
@@ -1732,8 +1735,8 @@ let test_cmd =
         [
           `S Manpage.s_description;
           `P
-            "Build $(i,PKG) (same as $(b,oi build)) then run $(b,dune \
-             runtest) in its build directory.";
+            "Build $(i,PKG) (same as $(b,oi build)) then run $(b,dune runtest) \
+             in its build directory.";
           `P
             "With no $(i,PKG), test the cwd project: $(b,dune runtest \
              --profile=release) against the assembled $(b,_oi/) prefix.";

@@ -569,8 +569,7 @@ module Url = struct
       ?(refresh = false) urls =
     List.fold_left
       (fun acc url ->
-        merge acc
-          (materialize_one ~reporter ~fs ~sys ~cache ~refresh url))
+        merge acc (materialize_one ~reporter ~fs ~sys ~cache ~refresh url))
       empty urls
 end
 

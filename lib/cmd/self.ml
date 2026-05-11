@@ -152,9 +152,9 @@ let version_cmd =
           `S Manpage.s_description;
           `P
             "Print the running $(b,oi) version, host $(b,os_key), and every \
-             schema constant. With $(b,--format=json), emit a stable \
-             envelope suitable as a compatibility probe before parsing \
-             other $(b,--format=json) output.";
+             schema constant. With $(b,--format=json), emit a stable envelope \
+             suitable as a compatibility probe before parsing other \
+             $(b,--format=json) output.";
         ]
   in
   Cmd.v info Term.(const run $ Terms.common)
@@ -174,15 +174,14 @@ let where_cmd =
           Oi.Style.header_string "target:    " install_dir current
   in
   let info =
-    Cmd.info "where"
-      ~doc:"Locate the running oi binary"
+    Cmd.info "where" ~doc:"Locate the running oi binary"
       ~man:
         [
           `S Manpage.s_description;
           `P
             "Print the absolute path to the running $(b,oi), whether it is \
-             writable, and the install target $(b,oi self update) would \
-             pick (in-place when writable, $(b,~/.local/bin/oi) otherwise).";
+             writable, and the install target $(b,oi self update) would pick \
+             (in-place when writable, $(b,~/.local/bin/oi) otherwise).";
         ]
   in
   Cmd.v info Term.(const run $ Terms.log)
@@ -358,21 +357,18 @@ let update_cmd =
         names
     in
     let pipeline_env : Oi.Build_pipeline.env =
-      {
-        proc_mgr;
-        fs;
-        clock;
-        sys;
-        os_key;
-        cache;
-        data_dir;
-        http_session;
-      }
+      { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
     in
     let req : Oi.Build_pipeline.request =
       {
         targets =
-          [ Group { tokens = List.map OpamPackage.Name.to_string names; handles = [] } ];
+          [
+            Group
+              {
+                tokens = List.map OpamPackage.Name.to_string names;
+                handles = [];
+              };
+          ];
         with_repos = [];
         pins = url_project.pins;
         extra_repos = all_extras;
@@ -387,7 +383,8 @@ let update_cmd =
       }
     in
     let layer_hashes =
-      Progress_ui.with_ui ~target:"oi" ~clock:(clock :> _ Eio.Resource.t)
+      Progress_ui.with_ui ~target:"oi"
+        ~clock:(clock :> _ Eio.Resource.t)
         ~enabled:(Tty.is_tty ())
       @@ fun reporter ->
       let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
@@ -429,12 +426,11 @@ let update_cmd =
           `S Manpage.s_description;
           `P
             "Build $(b,oi) from source and atomically replace the running \
-             executable. The current process keeps running on the old \
-             image; the next invocation picks up the new binary.";
+             executable. The current process keeps running on the old image; \
+             the next invocation picks up the new binary.";
           `P
             "If the binary path is not writable, install into \
-             $(b,~/.local/bin/oi) and warn. Add that directory to \
-             $(b,PATH).";
+             $(b,~/.local/bin/oi) and warn. Add that directory to $(b,PATH).";
           `P "See $(b,oi self where) for the install target.";
           `S "OPTIONS";
         ]

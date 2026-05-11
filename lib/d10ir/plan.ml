@@ -49,8 +49,8 @@ let current_schema_version = 1
 (* Codecs. *)
 
 let layer_hash_jsont : Layer_hash.t Jsont.t =
-  Jsont.map ~kind:"layer_hash" ~dec:Layer_hash.of_string ~enc:Layer_hash.to_string
-    Jsont.string
+  Jsont.map ~kind:"layer_hash" ~dec:Layer_hash.of_string
+    ~enc:Layer_hash.to_string Jsont.string
 
 let package_jsont : package Jsont.t =
   let open Jsont in
@@ -61,10 +61,11 @@ let package_jsont : package Jsont.t =
 
 let overlay_jsont : overlay Jsont.t =
   let open Jsont in
-  Object.map ~kind:"overlay" (fun handle version : overlay -> { handle; version })
+  Object.map ~kind:"overlay" (fun handle version : overlay ->
+      { handle; version })
   |> Object.mem "handle" string ~enc:(fun (o : overlay) -> o.handle)
   |> Object.mem "version" string ~dec_absent:"" ~enc:(fun (o : overlay) ->
-         o.version)
+      o.version)
   |> Object.finish
 
 let archive_jsont : Archive.t Jsont.t =
@@ -73,8 +74,8 @@ let archive_jsont : Archive.t Jsont.t =
       { path; sha256; strip_components })
   |> Object.mem "path" string ~enc:(fun (a : Archive.t) -> a.path)
   |> Object.mem "sha256" string ~enc:(fun (a : Archive.t) -> a.sha256)
-  |> Object.mem "strip_components" int ~dec_absent:1 ~enc:(fun (a : Archive.t) ->
-         a.strip_components)
+  |> Object.mem "strip_components" int ~dec_absent:1
+       ~enc:(fun (a : Archive.t) -> a.strip_components)
   |> Object.finish
 
 type node_t = node
@@ -82,8 +83,22 @@ type node_t = node
 let node_jsont : node Jsont.t =
   let open Jsont in
   Object.map ~kind:"node"
-    (fun package layer_hash dep_layer_hashes archive script env depexts prefix
-         substs subst_vars overlay opam_file_sha256 : node_t ->
+    (fun
+      package
+      layer_hash
+      dep_layer_hashes
+      archive
+      script
+      env
+      depexts
+      prefix
+      substs
+      subst_vars
+      overlay
+      opam_file_sha256
+      :
+      node_t
+    ->
       {
         package;
         layer_hash;
@@ -100,18 +115,18 @@ let node_jsont : node Jsont.t =
       })
   |> Object.mem "package" package_jsont ~enc:(fun (n : node_t) -> n.package)
   |> Object.mem "layer_hash" layer_hash_jsont ~enc:(fun (n : node_t) ->
-         n.layer_hash)
+      n.layer_hash)
   |> Object.mem "dep_layer_hashes" (list layer_hash_jsont) ~dec_absent:[]
        ~enc:(fun (n : node_t) -> n.dep_layer_hashes)
   |> Object.mem "archive" archive_jsont ~enc:(fun (n : node_t) -> n.archive)
   |> Object.mem "script" string ~enc:(fun (n : node_t) -> n.script)
-  |> Object.mem "env" (list string) ~dec_absent:[]
-       ~enc:(fun (n : node_t) -> n.env)
+  |> Object.mem "env" (list string) ~dec_absent:[] ~enc:(fun (n : node_t) ->
+      n.env)
   |> Object.mem "depexts" (list string) ~dec_absent:[] ~enc:(fun (n : node_t) ->
-         n.depexts)
+      n.depexts)
   |> Object.mem "prefix" string ~enc:(fun (n : node_t) -> n.prefix)
-  |> Object.mem "substs" (list string) ~dec_absent:[]
-       ~enc:(fun (n : node_t) -> n.substs)
+  |> Object.mem "substs" (list string) ~dec_absent:[] ~enc:(fun (n : node_t) ->
+      n.substs)
   |> Object.mem "subst_vars" (list string) ~dec_absent:[]
        ~enc:(fun (n : node_t) -> n.subst_vars)
   |> Object.mem "overlay" (some overlay_jsont) ~dec_absent:None
@@ -122,11 +137,11 @@ let node_jsont : node Jsont.t =
 
 let toolchain_jsont : toolchain Jsont.t =
   let open Jsont in
-  Object.map ~kind:"toolchain"
-    (fun name base_layer : toolchain -> { name; base_layer })
+  Object.map ~kind:"toolchain" (fun name base_layer : toolchain ->
+      { name; base_layer })
   |> Object.mem "name" string ~enc:(fun (t : toolchain) -> t.name)
   |> Object.mem "base_layer" layer_hash_jsont ~enc:(fun (t : toolchain) ->
-         t.base_layer)
+      t.base_layer)
   |> Object.finish
 
 let mode_jsont : [ `Ro | `Rw ] Jsont.t =
@@ -140,16 +155,15 @@ let mode_jsont : [ `Ro | `Rw ] Jsont.t =
 
 let mount_jsont : mount Jsont.t =
   let open Jsont in
-  Object.map ~kind:"mount"
-    (fun name source target mode env : mount ->
+  Object.map ~kind:"mount" (fun name source target mode env : mount ->
       { name; source; target; mode; env })
   |> Object.mem "name" string ~enc:(fun (m : mount) -> m.name)
   |> Object.mem "source" string ~enc:(fun (m : mount) -> m.source)
   |> Object.mem "target" string ~enc:(fun (m : mount) -> m.target)
-  |> Object.mem "mode" mode_jsont ~dec_absent:`Rw
-       ~enc:(fun (m : mount) -> m.mode)
-  |> Object.mem "env" (list string) ~dec_absent:[]
-       ~enc:(fun (m : mount) -> m.env)
+  |> Object.mem "mode" mode_jsont ~dec_absent:`Rw ~enc:(fun (m : mount) ->
+      m.mode)
+  |> Object.mem "env" (list string) ~dec_absent:[] ~enc:(fun (m : mount) ->
+      m.env)
   |> Object.finish
 
 let metadata_jsont : metadata Jsont.t =
@@ -158,7 +172,7 @@ let metadata_jsont : metadata Jsont.t =
     (fun oi_version generated_at cli_invocation : metadata ->
       { oi_version; generated_at; cli_invocation })
   |> Object.mem "oi_version" string ~dec_absent:"" ~enc:(fun (m : metadata) ->
-         m.oi_version)
+      m.oi_version)
   |> Object.mem "generated_at" number ~dec_absent:0.0
        ~enc:(fun (m : metadata) -> m.generated_at)
   |> Object.mem "cli_invocation" (list string) ~dec_absent:[]
@@ -170,8 +184,18 @@ type plan = t
 let codec : t Jsont.t =
   let open Jsont in
   Object.map ~kind:"d10ir-plan"
-    (fun schema_version os_key toolchain archive_root nodes roots mounts
-         external_layers metadata : plan
+    (fun
+      schema_version
+      os_key
+      toolchain
+      archive_root
+      nodes
+      roots
+      mounts
+      external_layers
+      metadata
+      :
+      plan
     ->
       {
         schema_version;
@@ -196,8 +220,7 @@ let codec : t Jsont.t =
   |> Object.mem "external_layers" (list layer_hash_jsont) ~dec_absent:[]
        ~enc:(fun (p : plan) -> p.external_layers)
   |> Object.mem "metadata" metadata_jsont
-       ~dec_absent:
-         { oi_version = ""; generated_at = 0.0; cli_invocation = [] }
+       ~dec_absent:{ oi_version = ""; generated_at = 0.0; cli_invocation = [] }
        ~enc:(fun (p : plan) -> p.metadata)
   |> Object.finish
 
@@ -240,10 +263,7 @@ let load path =
 type validate_error =
   | Schema_mismatch of { found : int; expected : int }
   | Cycle of Layer_hash.t list list
-  | Unsatisfiable_dep of {
-      node : Layer_hash.t;
-      missing_dep : Layer_hash.t;
-    }
+  | Unsatisfiable_dep of { node : Layer_hash.t; missing_dep : Layer_hash.t }
   | Duplicate_layer of Layer_hash.t
   | Archive_missing of { node : Layer_hash.t; path : string }
   | Archive_sha_mismatch of {
@@ -272,9 +292,8 @@ let pp_validate_error ppf = function
       Fmt.pf ppf "node %a references archive %s but the file is missing"
         Layer_hash.pp node path
   | Archive_sha_mismatch { node; path; expected; actual } ->
-      Fmt.pf ppf
-        "node %a archive %s sha256 mismatch (expected %s, got %s)" Layer_hash.pp
-        node path expected actual
+      Fmt.pf ppf "node %a archive %s sha256 mismatch (expected %s, got %s)"
+        Layer_hash.pp node path expected actual
 
 let producers_table t =
   let h = Hashtbl.create (List.length t.nodes) in
@@ -283,7 +302,7 @@ let producers_table t =
 
 let merge = function
   | [] -> Error "merge: empty plan list"
-  | first :: rest ->
+  | first :: rest -> (
       let mismatch field =
         Fmt.str "merge: plans disagree on %s — cannot batch them" field
       in
@@ -330,14 +349,16 @@ let merge = function
           let plans = first :: rest in
           let lh x = Layer_hash.to_string x in
           let nodes =
-            dedupe_by ~size:256 ~key:(fun n -> lh n.layer_hash) plans
+            dedupe_by ~size:256
+              ~key:(fun n -> lh n.layer_hash)
+              plans
               (fun p -> p.nodes)
           in
-          let roots =
-            dedupe_by ~size:32 ~key:lh plans (fun p -> p.roots)
-          in
+          let roots = dedupe_by ~size:32 ~key:lh plans (fun p -> p.roots) in
           let mounts =
-            dedupe_by ~size:8 ~key:(fun (m : mount) -> m.name) plans
+            dedupe_by ~size:8
+              ~key:(fun (m : mount) -> m.name)
+              plans
               (fun p -> p.mounts)
           in
           let external_layers =
@@ -349,11 +370,9 @@ let merge = function
               generated_at =
                 List.fold_left
                   (fun acc p -> max acc p.metadata.generated_at)
-                  0. (first :: rest);
+                  0. plans;
               cli_invocation =
-                List.concat_map
-                  (fun p -> p.metadata.cli_invocation)
-                  (first :: rest);
+                List.concat_map (fun p -> p.metadata.cli_invocation) plans;
             }
           in
           Ok
@@ -367,7 +386,7 @@ let merge = function
               mounts;
               external_layers;
               metadata;
-            }
+            })
 
 (* Tarjan SCC over the nodes-by-layer-hash graph; returns SCCs of size > 1
    (true cycles) and self-loops. *)
@@ -375,9 +394,7 @@ let find_cycles (nodes : node list) : Layer_hash.t list list =
   let producers = Hashtbl.create (List.length nodes) in
   List.iter (fun n -> Hashtbl.replace producers n.layer_hash n) nodes;
   let succ n =
-    List.filter
-      (fun h -> Hashtbl.mem producers h)
-      n.dep_layer_hashes
+    List.filter (fun h -> Hashtbl.mem producers h) n.dep_layer_hashes
     |> List.map (fun h -> Hashtbl.find producers h)
   in
   let index = Hashtbl.create 64 in
@@ -418,7 +435,8 @@ let find_cycles (nodes : node list) : Layer_hash.t list list =
       let scc = !scc in
       let is_cycle =
         List.length scc > 1
-        || (* self-loop *)
+        ||
+        (* self-loop *)
         let v_succs = List.map (fun n -> n.layer_hash) (succ v) in
         List.exists (Layer_hash.equal v.layer_hash) v_succs
       in
@@ -469,8 +487,7 @@ let validate ?d10 ~fs ~plan_dir t =
                   List.find_map
                     (fun h ->
                       if Hashtbl.mem producers h then None
-                      else if
-                        Hashtbl.mem external_set (Layer_hash.to_string h)
+                      else if Hashtbl.mem external_set (Layer_hash.to_string h)
                       then None
                       else
                         let in_d10 =
@@ -509,8 +526,7 @@ let validate ?d10 ~fs ~plan_dir t =
                       in
                       if not (Sys.file_exists abs) then
                         Some
-                          (Archive_missing
-                             { node = n.layer_hash; path = abs })
+                          (Archive_missing { node = n.layer_hash; path = abs })
                       else
                         let actual = sha256_of_file ~fs abs in
                         if String.equal actual n.archive.sha256 then None
@@ -525,6 +541,4 @@ let validate ?d10 ~fs ~plan_dir t =
                                }))
                     t.nodes
                 in
-                match archive_err with
-                | Some err -> Error err
-                | None -> Ok ())))
+                match archive_err with Some err -> Error err | None -> Ok ())))

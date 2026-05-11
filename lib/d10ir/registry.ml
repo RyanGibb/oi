@@ -6,7 +6,6 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 type remote = [ `Http_remote of string ]
 
 let archives_dir ~cache_root = cache_root / "d10ir" / "archives"
-
 let archive_path ~cache_root ~sha = archives_dir ~cache_root / (sha ^ ".tar.zst")
 
 let trim_trailing_slash s =
@@ -17,8 +16,7 @@ let url_of ~remote ~sha =
   let (`Http_remote base) = remote in
   Fmt.str "%s/d10ir-archives/%s.tar.zst" (trim_trailing_slash base) sha
 
-let unique_tmp dst =
-  Fmt.str "%s.%d.tmp" dst (Unix.getpid ())
+let unique_tmp dst = Fmt.str "%s.%d.tmp" dst (Unix.getpid ())
 
 let sha256_of_file path =
   OpamHash.contents (OpamHash.compute ~kind:`SHA256 path)
@@ -68,8 +66,7 @@ let prefetch ~clock ~fs ~session ~cache_root ~remote ?(max_fibers = 16) shas =
   let do_one sha =
     let dst = archive_path ~cache_root ~sha in
     if Sys.file_exists dst then Atomic.incr cached
-    else if pull ~fs ~session ~cache_root ~remote ~sha then
-      Atomic.incr fetched
+    else if pull ~fs ~session ~cache_root ~remote ~sha then Atomic.incr fetched
     else begin
       Atomic.incr failed;
       Mutex.lock mutex;

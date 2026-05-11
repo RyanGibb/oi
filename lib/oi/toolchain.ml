@@ -250,7 +250,8 @@ let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
      now, not in oi's binary. *)
   let path = Source.Reporepo.env_path () in
   Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path
-    ~url:(Source.Reporepo.env_url ()) ();
+    ~url:(Source.Reporepo.env_url ())
+    ();
   let entry =
     match find_entry_by_toolchain_name ~name:handle with
     | Some e -> e

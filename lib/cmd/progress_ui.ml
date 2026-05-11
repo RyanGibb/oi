@@ -54,15 +54,16 @@ type agg_payload = string * string * int * string * string
    The four colours form a leading-edge gradient: bright "glow"
    tip, mid-tone, full body, dim background. The lengths are
    counted by-byte and folded into [bar_with_color_bytes]. *)
-let ansi_camel_full = "\027[38;2;239;125;0m"  (* #EF7D00 OCaml camel *)
+let ansi_camel_full = "\027[38;2;239;125;0m" (* #EF7D00 OCaml camel *)
 let ansi_camel_glow = "\027[38;2;255;176;71m" (* #FFB047 leading flame tip *)
-let ansi_camel_mid = "\027[38;2;229;141;38m"  (* #E58D26 transition shade *)
+let ansi_camel_mid = "\027[38;2;229;141;38m" (* #E58D26 transition shade *)
+
 (* Unfilled background. Brightened from the original #5C4632 (R=92,
    G=70, B=50) because that was so close to the dark-terminal
    background that the bar's idle/0% state read as a blank line —
    the user reported "│                      │" between the
    delimiters where they expected to see at least a faint trail. *)
-let ansi_camel_dim = "\027[38;2;139;107;71m"  (* #8B6B47 unfilled bg *)
+let ansi_camel_dim = "\027[38;2;139;107;71m" (* #8B6B47 unfilled bg *)
 let ansi_reset = "\027[0m"
 
 let _ansi_byte_overhead =
@@ -78,8 +79,7 @@ let _ansi_byte_overhead =
    lengths, and every interior cell is a 3-byte UTF-8 box-drawing
    char regardless of which "shade" is chosen — so the total stays
    stable across fill ratios. *)
-let bar_with_color_bytes ~inner =
-  3 + _ansi_byte_overhead + (inner * 3) + 3
+let bar_with_color_bytes ~inner = 3 + _ansi_byte_overhead + (inner * 3) + 3
 
 (* Render a fixed-width box-drawing bar in OCaml-camel shades for a
    [(current, total)] pair. We do this ourselves rather than via
@@ -100,10 +100,22 @@ let render_bar ~width (current : int) (total : int) =
         let f = current * inner / max 1 total in
         if f < 0 then 0 else if f > inner then inner else f
     in
-    let block = "\226\150\136" (* "█" U+2588 *) in
-    let dark = "\226\150\147" (* "▓" U+2593 *) in
-    let mid = "\226\150\146" (* "▒" U+2592 *) in
-    let shade = "\226\150\145" (* "░" U+2591 *) in
+    let block =
+      "\226\150\136"
+      (* "█" U+2588 *)
+    in
+    let dark =
+      "\226\150\147"
+      (* "▓" U+2593 *)
+    in
+    let mid =
+      "\226\150\146"
+      (* "▒" U+2592 *)
+    in
+    let shade =
+      "\226\150\145"
+      (* "░" U+2591 *)
+    in
     let n_solid, n_dark, n_mid, n_empty =
       if filled = 0 then (0, 0, 0, inner)
       else if filled = inner then (inner, 0, 0, 0)
@@ -113,13 +125,21 @@ let render_bar ~width (current : int) (total : int) =
     let buf = Buffer.create (bar_with_color_bytes ~inner) in
     Buffer.add_string buf "│";
     Buffer.add_string buf ansi_camel_full;
-    for _ = 1 to n_solid do Buffer.add_string buf block done;
+    for _ = 1 to n_solid do
+      Buffer.add_string buf block
+    done;
     Buffer.add_string buf ansi_camel_mid;
-    for _ = 1 to n_dark do Buffer.add_string buf dark done;
+    for _ = 1 to n_dark do
+      Buffer.add_string buf dark
+    done;
     Buffer.add_string buf ansi_camel_glow;
-    for _ = 1 to n_mid do Buffer.add_string buf mid done;
+    for _ = 1 to n_mid do
+      Buffer.add_string buf mid
+    done;
     Buffer.add_string buf ansi_camel_dim;
-    for _ = 1 to n_empty do Buffer.add_string buf shade done;
+    for _ = 1 to n_empty do
+      Buffer.add_string buf shade
+    done;
     Buffer.add_string buf ansi_reset;
     Buffer.add_string buf "│";
     Buffer.contents buf
@@ -134,8 +154,7 @@ let camel = Progress.Color.hex "#EF7D00"
 (* Spinner styles. Different visuals so the eye distinguishes the
    aggregate row's "overall pulse" from each per-build row's "this
    one is alive" tick. *)
-let row_spinner () =
-  Progress.Line.spinner ~color:camel ()
+let row_spinner () = Progress.Line.spinner ~color:camel ()
 
 (* The rendered string MUST have stable byte length and stable cell
    width across every report — [Progress.Printer.create] writes the
@@ -161,7 +180,7 @@ let row_spinner () =
    ~10s of recent activity in 20 cells. *)
 let agg_phase_w = 14
 let agg_spark_w = 20
-let agg_bar_w = 20  (* 18 inner + 2 │ delimiters *)
+let agg_bar_w = 20 (* 18 inner + 2 │ delimiters *)
 let agg_progress_w = 14
 let agg_pct_w = 6
 
@@ -177,8 +196,8 @@ let agg_total_cells =
    ANSI prefix is a constant 19 bytes regardless of the colour
    chosen — that stability lets us pin [agg_spark_bytes] without
    conditioning on which slot maps to which level. *)
-let _spark_ansi_per_cell = 19  (* "\x1b[38;2;XXX;YYY;ZZZm" *)
-let _spark_char_bytes = 3      (* every block-fill char is 3 bytes UTF-8 *)
+let _spark_ansi_per_cell = 19 (* "\x1b[38;2;XXX;YYY;ZZZm" *)
+let _spark_char_bytes = 3 (* every block-fill char is 3 bytes UTF-8 *)
 let _spark_reset_bytes = String.length ansi_reset
 
 let agg_spark_bytes =
@@ -187,10 +206,10 @@ let agg_spark_bytes =
 
 let agg_total_bytes =
   agg_phase_w + 1 + agg_spark_bytes + 1
-  + bar_with_color_bytes ~inner:(agg_bar_w - 2) + 1
-  + agg_progress_w + 1 + agg_pct_w
+  + bar_with_color_bytes ~inner:(agg_bar_w - 2)
+  + 1 + agg_progress_w + 1 + agg_pct_w
 
-let render_agg (lab, sparkline, bar_pct, progress, pct : agg_payload) =
+let render_agg ((lab, sparkline, bar_pct, progress, pct) : agg_payload) =
   let phase = Fmt.str "%-*s" agg_phase_w lab in
   let phase =
     if String.length phase > agg_phase_w then String.sub phase 0 agg_phase_w
@@ -215,17 +234,27 @@ let render_agg (lab, sparkline, bar_pct, progress, pct : agg_payload) =
    (RGB components zero-padded to 3 digits) so the total byte
    count of the sparkline is stable regardless of what mix of
    levels it contains. *)
-let spark_chars = [|
-  "\226\139\133"; (* ⋅ U+22C5 dot operator — faint idle dot *)
-  "\226\150\129"; (* ▁ *)
-  "\226\150\130"; (* ▂ *)
-  "\226\150\131"; (* ▃ *)
-  "\226\150\132"; (* ▄ *)
-  "\226\150\133"; (* ▅ *)
-  "\226\150\134"; (* ▆ *)
-  "\226\150\135"; (* ▇ *)
-  "\226\150\136"; (* █ *)
-|]
+let spark_chars =
+  [|
+    "\226\139\133";
+    (* ⋅ U+22C5 dot operator — faint idle dot *)
+    "\226\150\129";
+    (* ▁ *)
+    "\226\150\130";
+    (* ▂ *)
+    "\226\150\131";
+    (* ▃ *)
+    "\226\150\132";
+    (* ▄ *)
+    "\226\150\133";
+    (* ▅ *)
+    "\226\150\134";
+    (* ▆ *)
+    "\226\150\135";
+    (* ▇ *)
+    "\226\150\136";
+    (* █ *)
+  |]
 
 let spark_max_level = 8
 
@@ -234,25 +263,32 @@ let spark_max_level = 8
    mid load, dusty rose / muted brick for high. Saturation is well
    below the vivid blue/green/red used previously — the sparkline
    reads as a soft activity haze rather than a flashing alarm. *)
-let _ansi_rgb_padded r g b =
-  Fmt.str "\027[38;2;%03d;%03d;%03dm" r g b
+let _ansi_rgb_padded r g b = Fmt.str "\027[38;2;%03d;%03d;%03dm" r g b
 
-let spark_palette = [|
-  _ansi_rgb_padded 080 080 080; (* 0  idle grey *)
-  _ansi_rgb_padded 100 130 165; (* 1  dusty slate-blue *)
-  _ansi_rgb_padded 110 145 165; (* 2  muted blue *)
-  _ansi_rgb_padded 115 155 155; (* 3  muted teal *)
-  _ansi_rgb_padded 120 160 130; (* 4  sage green *)
-  _ansi_rgb_padded 150 160 110; (* 5  pale olive *)
-  _ansi_rgb_padded 175 155 105; (* 6  warm tan *)
-  _ansi_rgb_padded 175 130 130; (* 7  dusty rose *)
-  _ansi_rgb_padded 180 110 110; (* 8+ muted brick *)
-|]
+let spark_palette =
+  [|
+    _ansi_rgb_padded 080 080 080;
+    (* 0  idle grey *)
+    _ansi_rgb_padded 100 130 165;
+    (* 1  dusty slate-blue *)
+    _ansi_rgb_padded 110 145 165;
+    (* 2  muted blue *)
+    _ansi_rgb_padded 115 155 155;
+    (* 3  muted teal *)
+    _ansi_rgb_padded 120 160 130;
+    (* 4  sage green *)
+    _ansi_rgb_padded 150 160 110;
+    (* 5  pale olive *)
+    _ansi_rgb_padded 175 155 105;
+    (* 6  warm tan *)
+    _ansi_rgb_padded 175 130 130;
+    (* 7  dusty rose *)
+    _ansi_rgb_padded 180 110 110;
+    (* 8+ muted brick *)
+  |]
 
 let spark_level_of_count n =
-  if n <= 0 then 0
-  else if n >= spark_max_level then spark_max_level
-  else n
+  if n <= 0 then 0 else if n >= spark_max_level then spark_max_level else n
 
 let render_sparkline ~samples =
   (* Render newest-on-left: leftmost cell is the most recent sample,
@@ -270,8 +306,7 @@ let render_sparkline ~samples =
   Buffer.add_string buf ansi_reset;
   Buffer.contents buf
 
-let blank_sparkline () =
-  render_sparkline ~samples:(Array.make agg_spark_w 0)
+let blank_sparkline () = render_sparkline ~samples:(Array.make agg_spark_w 0)
 
 (* Use [of_printer] with an [~init] value so the FIRST render
    (triggered by [add_line]'s built-in initial-render) shows real
@@ -279,13 +314,11 @@ let blank_sparkline () =
 let agg_line ~target =
   let open Progress.Line in
   let printer =
-    Progress.Printer.create ~to_string:render_agg
-      ~string_len:agg_total_bytes ~width:agg_total_cells ()
+    Progress.Printer.create ~to_string:render_agg ~string_len:agg_total_bytes
+      ~width:agg_total_cells ()
   in
   let agg_spinner =
-    spinner ~color:camel
-      ~frames:[ "→"; "↘"; "↓"; "↙"; "←"; "↖"; "↑"; "↗" ]
-      ()
+    spinner ~color:camel ~frames:[ "→"; "↘"; "↓"; "↙"; "←"; "↖"; "↑"; "↗" ] ()
   in
   (* Initial label = the user's target so the very first paint says
      "doi2bib" rather than a generic "preparing". Once a phase
@@ -293,10 +326,12 @@ let agg_line ~target =
   let blank_progress = String.make agg_progress_w ' ' in
   let blank_pct = String.make agg_pct_w ' ' in
   list ~sep:(const " ")
-    [ agg_spinner;
+    [
+      agg_spinner;
       of_printer
         ~init:(target, blank_sparkline (), 0, blank_progress, blank_pct)
-        printer ]
+        printer;
+    ]
 
 (* Truncate-or-pad to a precise cell width. Long names get a [..]
    marker in the middle so both the package name and version tail
@@ -309,9 +344,7 @@ let fit_label ~width s =
   else
     let head = (width - 2) / 2 in
     let tail = width - 2 - head in
-    Fmt.str "%s..%s"
-      (String.sub s 0 head)
-      (String.sub s (n - tail) tail)
+    Fmt.str "%s..%s" (String.sub s 0 head) (String.sub s (n - tail) tail)
 
 (* Per-running-build row line. Layout matches the per-fetch row
    (column-for-column) so build and fetch rows nest beneath the
@@ -329,10 +362,9 @@ let row_pkg_w = 32
 let row_bar_w = 20
 let row_status_w = 21
 let row_cells = row_pkg_w + 1 + row_bar_w + 1 + row_status_w
+
 let row_bytes =
-  row_pkg_w + 1
-  + bar_with_color_bytes ~inner:(row_bar_w - 2)
-  + 1 + row_status_w
+  row_pkg_w + 1 + bar_with_color_bytes ~inner:(row_bar_w - 2) + 1 + row_status_w
 
 (* Map a d10ir-phase short tag to a 1..8 progress index so
    [render_bar] can fill the row's bar as the package advances.
@@ -350,6 +382,7 @@ let phase_idx_of_string = function
   | "store" -> 8
   | "solving" -> 1
   | _ -> 0
+
 let phase_total = 8
 
 let render_row_payload pkg ((elapsed, phase) : row_payload) =
@@ -359,14 +392,13 @@ let render_row_payload pkg ((elapsed, phase) : row_payload) =
     render_bar ~width:row_bar_w idx phase_total
   in
   let status_raw =
-    if phase = "" then ""  (* blank: pre-phase-event state *)
+    if phase = "" then "" (* blank: pre-phase-event state *)
     else Fmt.str "[%s] %.1fs" phase elapsed
   in
   let status =
     if String.length status_raw > row_status_w then
       String.sub status_raw 0 row_status_w
-    else
-      Fmt.str "%-*s" row_status_w status_raw
+    else Fmt.str "%-*s" row_status_w status_raw
   in
   let s = Fmt.str "%s %s %s" pkg_cell bar status in
   let n = String.length s in
@@ -383,8 +415,7 @@ let render_row_payload pkg ((elapsed, phase) : row_payload) =
 let row_line ?(init_phase = "") ~pkg () =
   let open Progress.Line in
   let printer =
-    Progress.Printer.create
-      ~to_string:(render_row_payload pkg)
+    Progress.Printer.create ~to_string:(render_row_payload pkg)
       ~string_len:row_bytes ~width:row_cells ()
   in
   list ~sep:(const " ")
@@ -400,8 +431,7 @@ let format_bytes_short (n : int64) =
   let f = Int64.to_float n in
   if f < 1024. then Fmt.str "%.0fB" f
   else if f < 1024. *. 1024. then Fmt.str "%.1fKB" (f /. 1024.)
-  else if f < 1024. *. 1024. *. 1024. then
-    Fmt.str "%.1fMB" (f /. 1024. /. 1024.)
+  else if f < 1024. *. 1024. *. 1024. then Fmt.str "%.1fMB" (f /. 1024. /. 1024.)
   else Fmt.str "%.2fGB" (f /. 1024. /. 1024. /. 1024.)
 
 (* Scale int64 byte count to int for [render_bar]'s width-and-total
@@ -443,6 +473,7 @@ let scale_int64 (b : int64) (t : int64) =
 let fetch_row_pkg_w = 32
 let fetch_row_bar_w = 20
 let fetch_row_bytes_w = 21
+
 let fetch_row_cells =
   fetch_row_pkg_w + 1 + fetch_row_bar_w + 1 + fetch_row_bytes_w
 
@@ -466,8 +497,7 @@ let render_fetch_row_payload pkg ((b, t) : fetch_row_payload) =
          length stays stable. *)
       if String.length raw > fetch_row_bytes_w then
         String.sub raw 0 fetch_row_bytes_w
-      else
-        Fmt.str "%-*s" fetch_row_bytes_w raw
+      else Fmt.str "%-*s" fetch_row_bytes_w raw
   in
   let s = Fmt.str "%s %s %s" pkg_cell bar bytes_str in
   (* Stable byte length: pad/truncate to [fetch_row_bytes] so
@@ -507,11 +537,11 @@ type state = {
   clock : [ `Clock of float ] Eio.Resource.t;
   agg : agg_payload Progress.Reporter.t;
   mutex : Mutex.t;
-  rows : (string, row) Hashtbl.t;  (* keyed by layer hash *)
-  solve_rows : (string, row) Hashtbl.t;  (* keyed by Solve_* label *)
-  fetches : (string, int64) Hashtbl.t;  (* keyed by Fetch_* key, value=bytes *)
-  fetch_sizes : (string, int64) Hashtbl.t;  (* declared total per Fetch_* key *)
-  fetch_rows : (string, fetch_row) Hashtbl.t;  (* keyed by Fetch_* key *)
+  rows : (string, row) Hashtbl.t; (* keyed by layer hash *)
+  solve_rows : (string, row) Hashtbl.t; (* keyed by Solve_* label *)
+  fetches : (string, int64) Hashtbl.t; (* keyed by Fetch_* key, value=bytes *)
+  fetch_sizes : (string, int64) Hashtbl.t; (* declared total per Fetch_* key *)
+  fetch_rows : (string, fetch_row) Hashtbl.t; (* keyed by Fetch_* key *)
   (* Per-phase counters for the in-progress group. The displayed
      [N/T] is the sum of these plus the [*_base] committed totals
      from any groups that already finished (committed at
@@ -537,9 +567,9 @@ type state = {
          group [Aggregate] events stop changing them. Per-task
          completion events ([Fetch_finished], [Node_built/...])
          drive the done counters instead. *)
-  mutable running : int;  (* in-flight fetches + in-flight builds *)
+  mutable running : int; (* in-flight fetches + in-flight builds *)
   mutable phase_label : string;
-  mutable phase_id : string;  (* short phase tag, used to detect transitions *)
+  mutable phase_id : string; (* short phase tag, used to detect transitions *)
   mutable status_msg : string;
   mutable phase_bytes_total : int64;
       (* sum of declared sizes for Fetch_starteds in this phase *)
@@ -552,7 +582,7 @@ type state = {
       (* ring buffer of recent in-flight counts. Width =
          [agg_spark_w]; element 0 is the oldest sample, last
          element is the newest. Updated by the tick fiber. *)
-  target_label : string;  (* user's target, set once at with_ui time *)
+  target_label : string; (* user's target, set once at with_ui time *)
 }
 
 (* Bar denominator semantics:
@@ -567,14 +597,11 @@ type state = {
    either phase. *)
 let total_of s =
   if s.phase_id = "solve" then s.solve_total + s.solve_total_base
-  else
-    s.fetch_total + s.fetch_total_base
-    + s.build_total + s.build_total_base
+  else s.fetch_total + s.fetch_total_base + s.build_total + s.build_total_base
+
 let current_of s =
   if s.phase_id = "solve" then s.solve_done + s.solve_done_base
-  else
-    s.fetch_done + s.fetch_done_base
-    + s.build_done + s.build_done_base
+  else s.fetch_done + s.fetch_done_base + s.build_done + s.build_done_base
 
 (* Commit the in-progress group's per-phase counts into the [*_base]
    accumulators and zero the working slots. Called at the end of a
@@ -616,9 +643,7 @@ let composed_label s =
 (* Pad/truncate a string to exactly [w] cells (assuming ASCII). *)
 let pad_exact ~w s =
   let n = String.length s in
-  if n = w then s
-  else if n > w then String.sub s 0 w
-  else Fmt.str "%-*s" w s
+  if n = w then s else if n > w then String.sub s 0 w else Fmt.str "%-*s" w s
 
 (* The agg bar's fill ratio in [0..100]. Combined task progress
    across the whole pipeline (fetch + build): the bar grows in
@@ -640,25 +665,21 @@ let bar_pct_of s =
    column does. *)
 let progress_text_of s =
   let raw =
-    if s.phase_id = "fetch"
-       && Int64.compare s.phase_bytes_total 0L > 0
-    then
+    if s.phase_id = "fetch" && Int64.compare s.phase_bytes_total 0L > 0 then
       Fmt.str "%s/%s"
         (format_bytes_short s.phase_bytes_done)
         (format_bytes_short s.phase_bytes_total)
-    else if total_of s > 0 then
-      Fmt.str "%d/%d" (current_of s) (total_of s)
+    else if total_of s > 0 then Fmt.str "%d/%d" (current_of s) (total_of s)
     else ""
   in
   pad_exact ~w:agg_progress_w raw
 
 let pct_text_of s =
   let pct =
-    if s.phase_id = "fetch"
-       && Int64.compare s.phase_bytes_total 0L > 0
-    then
+    if s.phase_id = "fetch" && Int64.compare s.phase_bytes_total 0L > 0 then
       let p =
-        Int64.to_float s.phase_bytes_done *. 100.
+        Int64.to_float s.phase_bytes_done
+        *. 100.
         /. Int64.to_float s.phase_bytes_total
       in
       let p = if p < 0. then 0. else if p > 100. then 100. else p in
@@ -689,8 +710,7 @@ let push_row r ~now phase =
 let pkg_label_of (n : D10ir.Plan.node) =
   Fmt.str "%s.%s" n.package.name n.package.version
 
-let key_of (n : D10ir.Plan.node) =
-  D10ir.Layer_hash.to_string n.layer_hash
+let key_of (n : D10ir.Plan.node) = D10ir.Layer_hash.to_string n.layer_hash
 
 let add_row s ~now node =
   let k = key_of node in
@@ -698,8 +718,7 @@ let add_row s ~now node =
     let pkg = pkg_label_of node in
     let phase = D10ir.Direct.phase_to_string Stage_deps in
     let r =
-      Progress.Display.add_line s.display
-        (row_line ~init_phase:phase ~pkg ())
+      Progress.Display.add_line s.display (row_line ~init_phase:phase ~pkg ())
     in
     let row = { started_at = now; phase; reporter = r } in
     Hashtbl.add s.rows k row;
@@ -725,16 +744,12 @@ let current_fetch_size s key fallback =
 
 let push_fetch_row s ~key r ~bytes =
   let size = current_fetch_size s key r.fetch_size in
-  try
-    Progress.Reporter.report r.fetch_reporter (bytes, size)
-  with _ -> ()
+  try Progress.Reporter.report r.fetch_reporter (bytes, size) with _ -> ()
 
 let add_fetch_row s ~now:_ ~key ~pkg ~size =
   if not (Hashtbl.mem s.fetch_rows key) then begin
     let label = if pkg = "" then key else pkg in
-    let r =
-      Progress.Display.add_line s.display (fetch_row_line ~pkg:label)
-    in
+    let r = Progress.Display.add_line s.display (fetch_row_line ~pkg:label) in
     let row = { fetch_size = size; fetch_reporter = r } in
     Hashtbl.add s.fetch_rows key row;
     push_fetch_row s ~key row ~bytes:0L
@@ -743,11 +758,10 @@ let add_fetch_row s ~now:_ ~key ~pkg ~size =
 let drop_fetch_row s ~key =
   match Hashtbl.find_opt s.fetch_rows key with
   | None -> ()
-  | Some r ->
+  | Some r -> (
       Hashtbl.remove s.fetch_rows key;
       (try Progress.Reporter.finalise r.fetch_reporter with _ -> ());
-      try Progress.Display.remove_line s.display r.fetch_reporter
-      with _ -> ()
+      try Progress.Display.remove_line s.display r.fetch_reporter with _ -> ())
 
 let update_fetch_row s ~key ~bytes =
   match Hashtbl.find_opt s.fetch_rows key with
@@ -794,8 +808,7 @@ let handle_build_event s (e : D10ir.Direct.event) =
          locked. With a [Total_estimate] in place the upfront value
          is authoritative; per-group [Plan_started] reflects only
          this group's count, which would shrink the denominator. *)
-      if (not s.totals_locked) && s.build_total = 0 then
-        s.build_total <- total;
+      if (not s.totals_locked) && s.build_total = 0 then s.build_total <- total;
       push_agg s
   | Plan_done _ ->
       (* End of this solve group's d10ir build. With locked totals
@@ -840,9 +853,7 @@ let recompute_phase_bytes_done s =
      used here: completed bytes accumulate into [phase_bytes_done]
      directly at finish-time, and in-flight bytes are added on top
      for live updates. *)
-  let in_flight =
-    Hashtbl.fold (fun _ b acc -> Int64.add acc b) s.fetches 0L
-  in
+  let in_flight = Hashtbl.fold (fun _ b acc -> Int64.add acc b) s.fetches 0L in
   s.phase_bytes_done <- Int64.add s.phase_bytes_done_base in_flight
 
 let handle_event s (e : Oi.Build_progress.event) =
@@ -869,20 +880,19 @@ let handle_event s (e : Oi.Build_progress.event) =
                phases inside one invocation, the user wants to see a
                cumulative byte total across all groups, not a fresh
                counter every time another group's fetch begins. *)
-            Hashtbl.iter
-              (fun _ r ->
-                (try Progress.Reporter.finalise r.fetch_reporter with _ -> ());
-                try Progress.Display.remove_line s.display r.fetch_reporter
-                with _ -> ())
+            let drop ~get_reporter tbl =
+              Hashtbl.iter
+                (fun _ r ->
+                  let rep = get_reporter r in
+                  (try Progress.Reporter.finalise rep with _ -> ());
+                  try Progress.Display.remove_line s.display rep with _ -> ())
+                tbl;
+              Hashtbl.clear tbl
+            in
+            drop
+              ~get_reporter:(fun (r : fetch_row) -> r.fetch_reporter)
               s.fetch_rows;
-            Hashtbl.clear s.fetch_rows;
-            Hashtbl.iter
-              (fun _ r ->
-                (try Progress.Reporter.finalise r.reporter with _ -> ());
-                try Progress.Display.remove_line s.display r.reporter
-                with _ -> ())
-              s.solve_rows;
-            Hashtbl.clear s.solve_rows
+            drop ~get_reporter:(fun (r : row) -> r.reporter) s.solve_rows
           end;
           s.status_msg <- "";
           push_agg s)
@@ -922,24 +932,24 @@ let handle_event s (e : Oi.Build_progress.event) =
   | Aggregate { phase; current; total } ->
       with_lock s (fun () ->
           (match phase with
-           | Solving ->
-               s.solve_total <- total;
-               s.solve_done <- current
-           | Fetching ->
-               (* Once totals are locked the agg denominator is
+          | Solving ->
+              s.solve_total <- total;
+              s.solve_done <- current
+          | Fetching ->
+              (* Once totals are locked the agg denominator is
                   authoritative; ignore per-group [total] updates,
                   but still let [current] drive the done count if no
                   upfront pre-pass produced finer per-task events. *)
-               if not s.totals_locked then begin
-                 s.fetch_total <- total;
-                 s.fetch_done <- current
-               end
-           | Building ->
-               if not s.totals_locked then begin
-                 s.build_total <- total;
-                 s.build_done <- current
-               end
-           | Baking | Assembling -> ());
+              if not s.totals_locked then begin
+                s.fetch_total <- total;
+                s.fetch_done <- current
+              end
+          | Building ->
+              if not s.totals_locked then begin
+                s.build_total <- total;
+                s.build_done <- current
+              end
+          | Baking | Assembling -> ());
           push_agg s)
   | Fetch_started { key; pkg; size; _ } ->
       with_lock s (fun () ->
@@ -953,8 +963,7 @@ let handle_event s (e : Oi.Build_progress.event) =
                accumulate into the per-row reporters but don't grow
                the agg denominator. *)
             if (not s.totals_locked) && Int64.compare size 0L > 0 then
-              s.phase_bytes_total <-
-                Int64.add s.phase_bytes_total size
+              s.phase_bytes_total <- Int64.add s.phase_bytes_total size
           end;
           if new_key then s.running <- s.running + 1;
           add_fetch_row s ~now ~key ~pkg ~size;
@@ -974,10 +983,9 @@ let handle_event s (e : Oi.Build_progress.event) =
                | _ ->
                    Hashtbl.replace s.fetch_sizes key total;
                    if not s.totals_locked then
-                     s.phase_bytes_total <-
-                       Int64.add s.phase_bytes_total total);
+                     s.phase_bytes_total <- Int64.add s.phase_bytes_total total);
             update_fetch_row s ~key ~bytes;
-              recompute_phase_bytes_done s;
+            recompute_phase_bytes_done s;
             push_agg s
           end)
   | Fetch_finished { key; _ } ->
@@ -987,9 +995,7 @@ let handle_event s (e : Oi.Build_progress.event) =
              the entry is dropped. If the declared size is known and
              larger, prefer that as the baseline contribution. *)
           let final_bytes =
-            match Hashtbl.find_opt s.fetches key with
-            | Some b -> b
-            | None -> 0L
+            match Hashtbl.find_opt s.fetches key with Some b -> b | None -> 0L
           in
           let declared =
             match Hashtbl.find_opt s.fetch_sizes key with
@@ -1002,8 +1008,7 @@ let handle_event s (e : Oi.Build_progress.event) =
           in
           s.phase_bytes_done_base <-
             Int64.add s.phase_bytes_done_base contribution;
-          if Hashtbl.mem s.fetches key then
-            s.running <- max 0 (s.running - 1);
+          if Hashtbl.mem s.fetches key then s.running <- max 0 (s.running - 1);
           Hashtbl.remove s.fetches key;
           drop_fetch_row s ~key;
           recompute_phase_bytes_done s;
@@ -1021,9 +1026,7 @@ let handle_event s (e : Oi.Build_progress.event) =
               Progress.Display.add_line s.display
                 (row_line ~init_phase:"solving" ~pkg:label ())
             in
-            let row =
-              { started_at = now; phase = "solving"; reporter = r }
-            in
+            let row = { started_at = now; phase = "solving"; reporter = r } in
             Hashtbl.add s.solve_rows label row;
             push_row row ~now "solving";
             s.running <- s.running + 1;
@@ -1047,8 +1050,7 @@ let handle_event s (e : Oi.Build_progress.event) =
              [Plan_started] arrives. With locked totals (upfront
              [Total_estimate]) the value is already authoritative,
              so don't override. *)
-          if not s.totals_locked then
-            s.build_total <- List.length plan.nodes;
+          if not s.totals_locked then s.build_total <- List.length plan.nodes;
           push_agg s)
   | Build e -> handle_build_event s e
   | Build_summary _ -> ()
@@ -1062,8 +1064,7 @@ let with_ui ?(target = "") ~clock ~enabled f =
       Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()
     in
     let display =
-      Logs_progress.start_display_compact ~ppf:Format.err_formatter
-        ~config:cfg
+      Logs_progress.start_display_compact ~ppf:Format.err_formatter ~config:cfg
     in
     Logs_progress.set_active display;
     Oi.Say.set_around_emit Logs_progress.interject;
@@ -1118,25 +1119,19 @@ let with_ui ?(target = "") ~clock ~enabled f =
              malformed [\x1b[-1A] escape that some terminals render
              literally as "[-1A". Letting [finalise] tear down the
              one remaining agg row keeps the count non-negative. *)
-          Hashtbl.iter
-            (fun _ r ->
-              (try Progress.Reporter.finalise r.reporter with _ -> ());
-              try Progress.Display.remove_line display r.reporter with _ -> ())
-            s.rows;
-          Hashtbl.clear s.rows;
-          Hashtbl.iter
-            (fun _ r ->
-              (try Progress.Reporter.finalise r.reporter with _ -> ());
-              try Progress.Display.remove_line display r.reporter with _ -> ())
-            s.solve_rows;
-          Hashtbl.clear s.solve_rows;
-          Hashtbl.iter
-            (fun _ r ->
-              (try Progress.Reporter.finalise r.fetch_reporter with _ -> ());
-              try Progress.Display.remove_line display r.fetch_reporter
-              with _ -> ())
+          let drop_reporter rep =
+            (try Progress.Reporter.finalise rep with _ -> ());
+            try Progress.Display.remove_line display rep with _ -> ()
+          in
+          let drop_table ~get_reporter tbl =
+            Hashtbl.iter (fun _ r -> drop_reporter (get_reporter r)) tbl;
+            Hashtbl.clear tbl
+          in
+          drop_table ~get_reporter:(fun (r : row) -> r.reporter) s.rows;
+          drop_table ~get_reporter:(fun (r : row) -> r.reporter) s.solve_rows;
+          drop_table
+            ~get_reporter:(fun (r : fetch_row) -> r.fetch_reporter)
             s.fetch_rows;
-          Hashtbl.clear s.fetch_rows;
           Hashtbl.clear s.fetches;
           Hashtbl.clear s.fetch_sizes;
           try Progress.Reporter.finalise s.agg with _ -> ());
@@ -1157,13 +1152,13 @@ let with_ui ?(target = "") ~clock ~enabled f =
             incr tick_count;
             (try
                with_lock s (fun () ->
-                 tick_rows s;
-                 (* Sample sparkline history every ~5 ticks (~500ms);
+                   tick_rows s;
+                   (* Sample sparkline history every ~5 ticks (~500ms);
                     push_agg so the new sparkline frame paints. *)
-                 if !tick_count mod 5 = 0 then begin
-                   sample_running s;
-                   push_agg s
-                 end)
+                   if !tick_count mod 5 = 0 then begin
+                     sample_running s;
+                     push_agg s
+                   end)
              with _ -> ());
             loop ()
           end
@@ -1175,7 +1170,5 @@ let with_ui ?(target = "") ~clock ~enabled f =
            Eio.Promise.resolve done_r ();
            raise exn);
         Eio.Promise.resolve done_r ());
-    match !result with
-    | Some r -> r
-    | None -> assert false
+    match !result with Some r -> r | None -> assert false
   end

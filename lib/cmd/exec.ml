@@ -81,12 +81,12 @@ let cmd =
           `S Manpage.s_description;
           `P
             "Run $(b,CMD) with $(b,_oi/tools/bin) and $(b,_oi/prefix/bin) \
-             prepended to $(b,PATH), and OCaml environment variables \
-             pointing at $(b,_oi/prefix/).";
+             prepended to $(b,PATH), and OCaml environment variables pointing \
+             at $(b,_oi/prefix/).";
           `P
             "Syncs first when $(b,_oi/prefix/) is missing or older than any \
-             $(b,*.opam). $(b,--with), $(b,--with-repo), $(b,--toolchain), \
-             and $(b,--skip-local) force a re-sync.";
+             $(b,*.opam). $(b,--with), $(b,--with-repo), $(b,--toolchain), and \
+             $(b,--skip-local) force a re-sync.";
           `S "TOOLCHAIN";
           `P "Active toolchain, in order:";
           `I ("1.", "$(b,--toolchain=NAME).");
@@ -95,9 +95,7 @@ let cmd =
               "$(b,x-oi-toolchain) on any in-scope $(b,@HANDLE) — from \
                $(b,--with-repo=@h), $(b,--with=@h/pkg), or the project's \
                $(b,x-repos:). Conflicting tags error out." );
-          `I
-            ( "3.",
-              "Reporepo entry flagged $(b,x-oi-default-toolchain: true)." );
+          `I ("3.", "Reporepo entry flagged $(b,x-oi-default-toolchain: true).");
           `Pre
             "  oi exec dune build\n\
             \  oi exec -- ocamlformat --check .\n\

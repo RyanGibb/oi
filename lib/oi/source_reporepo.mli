@@ -1,18 +1,17 @@
-(** Reporepo overlay-of-overlays metadata. Was [Source.Reporepo]
-    in [source.mli]. *)
+(** Reporepo overlay-of-overlays metadata. Was [Source.Reporepo] in
+    [source.mli]. *)
 
 type entry = {
   handle : string;
-      (** Opam package name for the overlay (must be opam-valid, so no dots).
-      *)
+      (** Opam package name for the overlay (must be opam-valid, so no dots). *)
   version : string;  (** Full opam version string, e.g. [20250418.0]. *)
   url : string;
-      (** Upstream git URL (without commit fragment). Empty for
-          definition-only entries that compose existing overlays via
-          [depends:] without their own clone. *)
+      (** Upstream git URL (without commit fragment). Empty for definition-only
+          entries that compose existing overlays via [depends:] without their
+          own clone. *)
   commit : string;
-      (** 40-char commit sha that [url] is pinned to. Empty when [url] is
-          empty. *)
+      (** 40-char commit sha that [url] is pinned to. Empty when [url] is empty.
+      *)
   ref_ : string option;
       (** Upstream git ref this entry tracks (typically a branch like
           [refs/heads/relocatable]). *)
@@ -25,8 +24,8 @@ type entry = {
           live in separate namespaces. *)
   toolchain_compiler : string option;
       (** [x-oi-toolchain-compiler]: the primary compiler package spec, e.g.
-          ["ocaml-variants.5.2.0+ox"]. Only meaningful when {!toolchain_name}
-          is set. *)
+          ["ocaml-variants.5.2.0+ox"]. Only meaningful when {!toolchain_name} is
+          set. *)
   relocatable : bool option;
       (** [x-oi-relocatable]: build mode for the toolchain this entry defines.
       *)
@@ -35,19 +34,19 @@ type entry = {
   toolchain_tools : string list;
       (** [x-oi-toolchain-tools]: package names that [oi build] should always
           install when this toolchain is active (typically dev tools like
-          [odoc], [merlin], [ocaml-lsp-server]). Empty for non-toolchain
-          entries and toolchains that don't ship a default tool set. *)
+          [odoc], [merlin], [ocaml-lsp-server]). Empty for non-toolchain entries
+          and toolchains that don't ship a default tool set. *)
   default_toolchain : bool;
-      (** [x-oi-default-toolchain]: when [true], this toolchain is selected
-          when no [--toolchain] is passed on the CLI. {!load} validates that
-          at most one toolchain handle in the reporepo carries this flag. *)
+      (** [x-oi-default-toolchain]: when [true], this toolchain is selected when
+          no [--toolchain] is passed on the CLI. {!load} validates that at most
+          one toolchain handle in the reporepo carries this flag. *)
   depends : (string * string option) list;
       (** Other overlay handles this one depends on, optionally with an exact
           version. *)
   root_packages : string list list;
       (** Package sets to pre-build when priming this overlay into a registry.
-          Each outer entry is a solve group: a list of package specs fed to
-          the solver together. *)
+          Each outer entry is a solve group: a list of package specs fed to the
+          solver together. *)
   opam_path : string;  (** Absolute path to the source opam file. *)
 }
 
@@ -71,12 +70,12 @@ val resolve : entry list -> roots:root list -> entry list
 
 (** {2 v1 overlay layout}
 
-    The reporepo's [v2/] subtree carries one fully-materialised opam
-    repository per handle. Each handle's [opam] files have had every [url{}]
-    block rewritten to be content-addressed (sha-pinned git URL or
-    tarball+checksum), turning the reporepo into a deterministic snapshot of
-    every overlay's package data. The [v1] prefix is a schema marker; a future
-    incompatible change becomes [v2]. *)
+    The reporepo's [v2/] subtree carries one fully-materialised opam repository
+    per handle. Each handle's [opam] files have had every [url{}] block
+    rewritten to be content-addressed (sha-pinned git URL or tarball+checksum),
+    turning the reporepo into a deterministic snapshot of every overlay's
+    package data. The [v1] prefix is a schema marker; a future incompatible
+    change becomes [v2]. *)
 
 val iter_opam_files :
   path:string ->
@@ -85,9 +84,9 @@ val iter_opam_files :
   (handle:string -> pkg:string -> version:string -> opam_path:string -> unit) ->
   unit
 (** Visit every [<path>/v2/<handle>/packages/<pkg>/<pkg.version>/opam] in the
-    reporepo. Empty [include_handles] means every overlay (including
-    [default]); [skip_handles] is applied last. The meta-overlay [reporepo] is
-    always skipped — it holds handle-registration entries, not archives. *)
+    reporepo. Empty [include_handles] means every overlay (including [default]);
+    [skip_handles] is applied last. The meta-overlay [reporepo] is always
+    skipped — it holds handle-registration entries, not archives. *)
 
 val overlay_packages_dir : path:string -> handle:string -> string
 (** [<reporepo>/v2/<handle>/packages] — directly consumable as a solver
@@ -141,8 +140,8 @@ val try_resolve_url :
     [url{}] block: applies host rewrites, returns [`Keep] when the URL is
     already pinned, [`Replace_url] for a sha-pinned/host-rewritten git URL,
     [`Add_checksum] for a tarball whose sha-256 we just computed, or [`Failed]
-    when the URL cannot be content-addressed. [where] is a free-form label
-    used in error messages. *)
+    when the URL cannot be content-addressed. [where] is a free-form label used
+    in error messages. *)
 
 (** {2 Base overlay resolution} *)
 
@@ -156,9 +155,9 @@ val ensure_base :
   string list
 (** Resolves the [relocatable] overlay (and its transitive deps) from the
     reporepo and returns the [packages/] directories under [v2/<handle>/] in
-    solver priority order. Auto-clones the reporepo itself if it doesn't
-    already exist on disk. Errors when any base handle's [v2/] tree is missing
-    — run [oi repo bump <handle>] to populate.
+    solver priority order. Auto-clones the reporepo itself if it doesn't already
+    exist on disk. Errors when any base handle's [v2/] tree is missing — run
+    [oi repo bump <handle>] to populate.
 
     When [refresh] is [false] (the default), the clone is auto-pulled if its
     last [git fetch]/[git pull] happened more than 1 hour ago — measured from
@@ -248,12 +247,12 @@ val bump :
   ?default:bool ->
   unit ->
   [ `Bumped of entry | `Unchanged of entry ]
-(** [?default] flips the [x-oi-default-toolchain] flag on the bumped entry.
-    Only valid for entries that already carry [x-oi-toolchain-name] (the
-    function errors otherwise). Callers that want to switch the default from
-    one toolchain to another are responsible for clearing the flag on the
-    previous default before setting it on the new one — {!load} otherwise
-    refuses to load a multi-default reporepo. *)
+(** [?default] flips the [x-oi-default-toolchain] flag on the bumped entry. Only
+    valid for entries that already carry [x-oi-toolchain-name] (the function
+    errors otherwise). Callers that want to switch the default from one
+    toolchain to another are responsible for clearing the flag on the previous
+    default before setting it on the new one — {!load} otherwise refuses to load
+    a multi-default reporepo. *)
 
 val remove :
   fs:Eio.Fs.dir_ty Eio.Path.t ->

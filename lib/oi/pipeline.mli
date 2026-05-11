@@ -44,9 +44,8 @@ val toolchain_names_of_handle :
 (** [toolchain_names_of_handle entries h] is the (possibly empty) list of
     toolchain names that the handle [h] points at: the value of its
     [x-oi-toolchain] field plus [h] itself if [h] is registered as a toolchain
-    definition. Used by callers that need to partition a target set by
-    toolchain (e.g. [oi build --all] across overlays with conflicting
-    toolchains). *)
+    definition. Used by callers that need to partition a target set by toolchain
+    (e.g. [oi build --all] across overlays with conflicting toolchains). *)
 
 val pick_toolchain :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -137,9 +136,9 @@ val fetch_layer_hashes :
   unit
 (** Fetch a deduplicated list of layer hashes directly. Used by [oi build]'s
     merged-plan flow, which collects layer hashes from the unified
-    {!D10ir.Plan.t} (post-{!D10ir.Plan.merge}) and fires one fetch round
-    against the registry instead of N per-group rounds. [pkg_of] maps a hash
-    to its display label. *)
+    {!D10ir.Plan.t} (post-{!D10ir.Plan.merge}) and fires one fetch round against
+    the registry instead of N per-group rounds. [pkg_of] maps a hash to its
+    display label. *)
 
 val assemble_prefix :
   sys:D10.Sysops.t ->

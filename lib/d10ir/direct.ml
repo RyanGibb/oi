@@ -25,21 +25,12 @@ let phase_to_string = function
 
 type event =
   | Plan_started of { total : int }
-  | Plan_done of {
-      built : int;
-      cached : int;
-      failed : int;
-      skipped : int;
-    }
+  | Plan_done of { built : int; cached : int; failed : int; skipped : int }
   | Node_queued of { node : Plan.node }
   | Node_started of { node : Plan.node }
   | Node_phase of { node : Plan.node; phase : phase }
   | Node_cached of { node : Plan.node }
-  | Node_built of {
-      node : Plan.node;
-      duration_s : float;
-      log_path : string;
-    }
+  | Node_built of { node : Plan.node; duration_s : float; log_path : string }
   | Node_failed of {
       node : Plan.node;
       phase : phase;
@@ -89,8 +80,8 @@ let tidy_error_string s =
   else trim_after_newline s
 
 let pp_failure ppf (f : failure) =
-  Fmt.pf ppf "%s.%s  phase=%s  log=%s@,    %s" f.package.name
-    f.package.version (phase_to_string f.phase) f.log_path f.error
+  Fmt.pf ppf "%s.%s  phase=%s  log=%s@,    %s" f.package.name f.package.version
+    (phase_to_string f.phase) f.log_path f.error
 
 let pp_failures ppf = function
   | [] -> ()
@@ -104,7 +95,8 @@ let pp_failures ppf = function
 let cache_root_native (d10 : D10.Config.t) = Eio.Path.native_exn d10.root
 
 let staging_dir_for d10 (n : Plan.node) =
-  cache_root_native d10 / "build" / "staging" / Layer_hash.to_string n.layer_hash
+  cache_root_native d10 / "build" / "staging"
+  / Layer_hash.to_string n.layer_hash
 
 let build_dir_for d10 (n : Plan.node) =
   cache_root_native d10 / "build" / "_build"
@@ -154,8 +146,7 @@ let make_skeleton ~fs staging =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / staging);
   List.iter
     (fun sub ->
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
-        Eio.Path.(fs / staging / sub))
+      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / staging / sub))
     [ "bin"; "lib"; "sbin"; "share"; "etc"; "doc"; "man" ]
 
 let transitive_dep_layers ~producers d10 (n : Plan.node) =
@@ -176,9 +167,11 @@ let transitive_dep_layers ~producers d10 (n : Plan.node) =
     let next_deps =
       match Hashtbl.find_opt producers (Layer_hash.to_string h) with
       | Some (m : Plan.node) -> m.dep_layer_hashes
-      | None ->
-          let json_path = D10.Layer.json_path d10 ~hash:(Layer_hash.to_string h) in
-          (match D10.Layer.load_meta json_path with
+      | None -> (
+          let json_path =
+            D10.Layer.json_path d10 ~hash:(Layer_hash.to_string h)
+          in
+          match D10.Layer.load_meta json_path with
           | Some meta -> List.map Layer_hash.of_string meta.hashes
           | None -> [])
     in
@@ -229,14 +222,10 @@ let parse_kv_entry s =
   match String.index_opt s '=' with
   | None -> None
   | Some i ->
-      Some
-        ( String.sub s 0 i,
-          String.sub s (i + 1) (String.length s - i - 1) )
+      Some (String.sub s 0 i, String.sub s (i + 1) (String.length s - i - 1))
 
 let apply_substs ~rebase (n : Plan.node) ~build_dir =
-  let assoc =
-    List.filter_map parse_kv_entry n.subst_vars
-  in
+  let assoc = List.filter_map parse_kv_entry n.subst_vars in
   let env (var : OpamVariable.Full.t) =
     let key = OpamVariable.Full.to_string var in
     match List.assoc_opt key assoc with
@@ -279,15 +268,15 @@ let strip_overridden ~overrides acc =
 let merge_env ~(config : Config.t) ~rebase ~(mount_env : string list)
     (n : Plan.node) =
   let rebased = List.map rebase n.env in
-  let after_mounts = strip_overridden ~overrides:mount_env rebased @ mount_env in
+  let after_mounts =
+    strip_overridden ~overrides:mount_env rebased @ mount_env
+  in
   let stripped =
     List.fold_left
       (fun acc (k, _) -> List.filter (fun e -> not (starts_with_key ~k e)) acc)
       after_mounts config.inject_env
   in
-  let extras =
-    List.map (fun (k, v) -> Fmt.str "%s=%s" k v) config.inject_env
-  in
+  let extras = List.map (fun (k, v) -> Fmt.str "%s=%s" k v) config.inject_env in
   Array.of_list (stripped @ extras)
 
 let run_script ~proc_mgr ~fs ~config ~d10 ~mount_env (n : Plan.node) ~staging
@@ -299,9 +288,7 @@ let run_script ~proc_mgr ~fs ~config ~d10 ~mount_env (n : Plan.node) ~staging
   let script = rebase n.script in
   let env = merge_env ~config ~rebase ~mount_env n in
   let cwd = Eio.Path.(fs / build_dir) in
-  Eio.Path.with_open_out
-    ~create:(`Or_truncate 0o644)
-    Eio.Path.(fs / log_path)
+  Eio.Path.with_open_out ~create:(`Or_truncate 0o644) Eio.Path.(fs / log_path)
   @@ fun log_sink ->
   let log_pre =
     let env_lines =
@@ -312,8 +299,11 @@ let run_script ~proc_mgr ~fs ~config ~d10 ~mount_env (n : Plan.node) ~staging
     Fmt.str
       "# d10ir.direct %s.%s\n\
        # layer_hash %s\n\
-       # env:\n%s\n\
-       # script:\n%s\n# end\n"
+       # env:\n\
+       %s\n\
+       # script:\n\
+       %s\n\
+       # end\n"
       n.package.name n.package.version
       (Layer_hash.to_string n.layer_hash)
       env_lines script
@@ -335,8 +325,7 @@ let maybe_apply_install_file ~fs (n : Plan.node) ~staging ~build_dir =
   let install_basename = n.package.name ^ ".install" in
   let install_path = build_dir / install_basename in
   if Sys.file_exists install_path then
-    Install_file.apply ~fs ~prefix:staging ~build_dir
-      ~install_file:install_path
+    Install_file.apply ~fs ~prefix:staging ~build_dir ~install_file:install_path
 
 let store_layer ~d10 (n : Plan.node) ~staging ~files =
   let dep_hashes_str =
@@ -347,19 +336,12 @@ let store_layer ~d10 (n : Plan.node) ~staging ~files =
   let recipe_json = Plan.encode_node n in
   D10.Layer.store d10
     ~hash:(Layer_hash.to_string n.layer_hash)
-    ~prefix:staging
-    ~files
-    ~package:pkg_str
-    ~deps:dep_hashes_str
-    ~parent_hashes:dep_hashes_str
-    ~exit_status:0
-    ~recipe_json
-    ()
+    ~prefix:staging ~files ~package:pkg_str ~deps:dep_hashes_str
+    ~parent_hashes:dep_hashes_str ~exit_status:0 ~recipe_json ()
 
 let cleanup_staging ~fs ~(config : Config.t) staging build_dir =
   if not config.keep_staging then begin
-    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / staging)
-     with _ -> ());
+    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / staging) with _ -> ());
     try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / build_dir)
     with _ -> ()
   end
@@ -373,8 +355,7 @@ exception Phase_failed of phase * exn
 
 let with_phase ~reporter (n : Plan.node) phase body =
   reporter.event (Node_phase { node = n; phase });
-  try body ()
-  with exn -> raise (Phase_failed (phase, exn))
+  try body () with exn -> raise (Phase_failed (phase, exn))
 
 let build_one ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir ~archive_root
     ~producers ~reporter ~mount_env (n : Plan.node) =
@@ -412,18 +393,17 @@ let build_one ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir ~archive_root
       cleanup_staging ~fs ~config staging build_dir;
       let dt = now_s ~clock -. t0 in
       `Built (log_path, dt)
-    with
-    | Phase_failed (phase, exn) ->
-        (* Build failures are NOT logged as warnings here — they're
+    with Phase_failed (phase, exn) ->
+      (* Build failures are NOT logged as warnings here — they're
            a normal part of any non-trivial build. The Failed event
            carries enough info, the per-node log file has the full
            output, and the run-level summary printed by the caller
            is where the user should see the failure. Logging here
            too would duplicate (during the run) and mid-bar the
            progress UI. *)
-        let log_path = log_path_for ~config ~d10 n in
-        cleanup_staging ~fs ~config staging build_dir;
-        `Failed (phase, log_path, tidy_error_string (Printexc.to_string exn))
+      let log_path = log_path_for ~config ~d10 n in
+      cleanup_staging ~fs ~config staging build_dir;
+      `Failed (phase, log_path, tidy_error_string (Printexc.to_string exn))
   end
 
 (* ---- Scheduler -------------------------------------------------------- *)
@@ -437,8 +417,7 @@ let build_one ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir ~archive_root
 let prepare_mounts ~fs (mounts : Plan.mount list) =
   List.iter
     (fun (m : Plan.mount) ->
-      try
-        Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / m.source)
+      try Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / m.source)
       with exn ->
         Log.warn (fun k ->
             k "mount %s: failed to create source %s: %s" m.name m.source
@@ -450,25 +429,20 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
     ?(reporter = null_reporter) ?(plan_dir = Sys.getcwd ()) (plan : Plan.t) =
   let mount_env = prepare_mounts ~fs plan.mounts in
   reporter.event (Plan_started { total = List.length plan.nodes });
+  let n_nodes = List.length plan.nodes in
   let promises : (string, [ `Ok | `Failed | `Skipped ] Eio.Promise.t) Hashtbl.t
       =
-    Hashtbl.create (List.length plan.nodes)
+    Hashtbl.create n_nodes
   in
-  let resolvers = Hashtbl.create (List.length plan.nodes) in
+  let resolvers = Hashtbl.create n_nodes in
+  let producer_keys = Hashtbl.create n_nodes in
+  let producers : (string, Plan.node) Hashtbl.t = Hashtbl.create n_nodes in
   List.iter
     (fun (n : Plan.node) ->
+      let key = Layer_hash.to_string n.layer_hash in
       let p, r = Eio.Promise.create () in
-      let key = Layer_hash.to_string n.layer_hash in
       Hashtbl.replace promises key p;
-      Hashtbl.replace resolvers key r)
-    plan.nodes;
-  let producer_keys = Hashtbl.create (List.length plan.nodes) in
-  let producers : (string, Plan.node) Hashtbl.t =
-    Hashtbl.create (List.length plan.nodes)
-  in
-  List.iter
-    (fun (n : Plan.node) ->
-      let key = Layer_hash.to_string n.layer_hash in
+      Hashtbl.replace resolvers key r;
       Hashtbl.replace producer_keys key ();
       Hashtbl.replace producers key n)
     plan.nodes;
@@ -490,17 +464,17 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
       val mutable failures : failure list = []
       method built () = built <- built + 1
       method cached () = cached <- cached + 1
+
       method failed (f : failure) =
         failed <- failed + 1;
         failures <- f :: failures
+
       method skipped () = skipped <- skipped + 1
       method snapshot = (built, cached, failed, skipped, List.rev failures)
     end
   in
   let mutex = Eio.Mutex.create () in
-  let bump f =
-    Eio.Mutex.use_rw ~protect:false mutex (fun () -> f ())
-  in
+  let bump f = Eio.Mutex.use_rw ~protect:false mutex (fun () -> f ()) in
 
   let build_sem = Eio.Semaphore.make config.build_parallelism in
   let with_slot f =
@@ -512,7 +486,7 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
       (fun acc h ->
         match acc with
         | `Failed -> `Failed
-        | `Ok -> (
+        | `Ok ->
             let key = Layer_hash.to_string h in
             if Hashtbl.mem producer_keys key then
               match Eio.Promise.await (Hashtbl.find promises key) with
@@ -520,7 +494,7 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
               | `Failed | `Skipped -> `Failed
             else if Hashtbl.mem external_keys key then `Ok
             else if succeeded d10 h then `Ok
-            else `Failed))
+            else `Failed)
       `Ok n.dep_layer_hashes
   in
   let resolve (n : Plan.node) v =
@@ -534,7 +508,7 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
         bump (fun () -> counts#skipped ());
         reporter.event (Node_skipped { node = n; reason = "dep failed" });
         resolve n `Skipped
-    | `Ok -> (
+    | `Ok ->
         if succeeded d10 n.layer_hash then begin
           bump (fun () -> counts#cached ());
           reporter.event (Node_cached { node = n });
@@ -558,19 +532,14 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
                 (Node_built { node = n; duration_s = dt; log_path });
               resolve n `Ok
           | `Failed (phase, log_path, error) ->
-              let f =
-                { package = n.package; phase; log_path; error }
-              in
+              let f = { package = n.package; phase; log_path; error } in
               bump (fun () -> counts#failed f);
-              reporter.event
-                (Node_failed { node = n; phase; log_path; error });
+              reporter.event (Node_failed { node = n; phase; log_path; error });
               resolve n `Failed
-        end)
+        end
   in
   Eio.Switch.run (fun sw ->
-      List.iter
-        (fun n -> Eio.Fiber.fork ~sw (fun () -> pkg_fiber n))
-        plan.nodes);
+      List.iter (fun n -> Eio.Fiber.fork ~sw (fun () -> pkg_fiber n)) plan.nodes);
   let built, cached, failed, skipped, failures = counts#snapshot in
   reporter.event (Plan_done { built; cached; failed; skipped });
   { built; cached; failed; skipped; failures }

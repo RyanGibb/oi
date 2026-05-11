@@ -44,21 +44,18 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
         Eio.Switch.run @@ fun sw ->
         let http_session = D10.Sysops.Http.with_session ~sw sys (fun s -> s) in
         let pipeline_env : Oi.Build_pipeline.env =
-          {
-            proc_mgr;
-            fs;
-            clock;
-            sys;
-            os_key;
-            cache;
-            data_dir;
-            http_session;
-          }
+          { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
         in
         let req : Oi.Build_pipeline.request =
           {
             targets =
-              [ Group { tokens = List.map OpamPackage.Name.to_string dep_names; handles = [] } ];
+              [
+                Group
+                  {
+                    tokens = List.map OpamPackage.Name.to_string dep_names;
+                    handles = [];
+                  };
+              ];
             with_repos = [];
             pins = [];
             extra_repos = [];
@@ -68,7 +65,7 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
             conf;
             local_packages_dir = None;
             project_root = None;
-        force_source = false;
+            force_source = false;
             refresh = false;
           }
         in

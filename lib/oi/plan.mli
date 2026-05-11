@@ -93,12 +93,11 @@ type subst = string
 type package_plan = {
   pkg : string;
   opam : OpamFile.OPAM.t;
-      (** Parsed opam metadata for this package. Carried so callers
-          that need [synopsis], [license], [homepage], [depends:],
-          etc. can read them without re-loading the opam file from
-          disk — and so {!Build_pipeline.group_result} can drop its
-          [build_plan] field once every consumer of {!node.opam}
-          moves to {!package_plan.opam}. *)
+      (** Parsed opam metadata for this package. Carried so callers that need
+          [synopsis], [license], [homepage], [depends:], etc. can read them
+          without re-loading the opam file from disk — and so
+          {!Build_pipeline.group_result} can drop its [build_plan] field once
+          every consumer of {!node.opam} moves to {!package_plan.opam}. *)
   layer_hash : string;
   method_ : Identity.method_;
   dep_layers : Identity.dep list;
@@ -141,14 +140,14 @@ type package_plan = {
           none. *)
   d10_archive : string option;
       (** Pre-baked d10ir source archive sha256, if the opam file declares
-          [x-d10-archive] (filter-evaluated for the current OS). When [Some sha],
-          the consolidated archive at
+          [x-d10-archive] (filter-evaluated for the current OS). When
+          [Some sha], the consolidated archive at
           [<cache>/d10ir/archives/<sha>.tar.zst] is the build input — fetch it
           instead of running the source/extras/patches/substs pipeline. The
-          archive contains pre-applied patches and substituted [.in] files
-          using the planning-prefix sentinel; d10ir's per-node rebase still
-          runs. [None] for packages without [x-d10-archive] (pre-bake
-          fallback to the regular fetch flow). *)
+          archive contains pre-applied patches and substituted [.in] files using
+          the planning-prefix sentinel; d10ir's per-node rebase still runs.
+          [None] for packages without [x-d10-archive] (pre-bake fallback to the
+          regular fetch flow). *)
 }
 
 type t = {
@@ -197,9 +196,9 @@ val elaborate :
     file. [?build_prefix] defaults to [{cache_root}/build/prefix]; pass a
     different path to build into a fixed location (e.g. a toolchain prefix).
 
-    [?reporter] receives a [Status "Elaborating plan"] event when work
-    begins. Plan elaboration is fast (in-memory walk), so no per-node
-    [Aggregate] events are emitted — the count fraction belongs to the
-    actual layer-build phase that follows. Defaults to {!Build_progress.null}. *)
+    [?reporter] receives a [Status "Elaborating plan"] event when work begins.
+    Plan elaboration is fast (in-memory walk), so no per-node [Aggregate] events
+    are emitted — the count fraction belongs to the actual layer-build phase
+    that follows. Defaults to {!Build_progress.null}. *)
 
 val pp : t Fmt.t

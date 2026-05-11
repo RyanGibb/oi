@@ -54,9 +54,7 @@ let opam_pkg_of_package_plan (p : Oi.Plan.package_plan) =
    meaningful and we return [None] for the status. *)
 let show_depexts ~conf ~packages_dirs ~(plan : Oi.Plan.t) ~os_override =
   let all_pkgs = List.map opam_pkg_of_package_plan plan.packages in
-  let entries =
-    Oi.Depexts.compute_for_conf ~conf ~packages_dirs all_pkgs
-  in
+  let entries = Oi.Depexts.compute_for_conf ~conf ~packages_dirs all_pkgs in
   let all =
     List.fold_left
       (fun acc e -> OpamSysPkg.Set.union acc e.Oi.Depexts.sys_pkgs)
@@ -466,27 +464,27 @@ let render_state =
    is dropped from the merge — partial output is more useful than no
    output for a 50-root overlay where one root has a conflict. *)
 let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
-  let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache;
-        data_dir; http_session; _ } = harness in
+  let {
+    Harness.proc_mgr;
+    fs;
+    clock;
+    sys;
+    platform;
+    os_key;
+    cache;
+    data_dir;
+    http_session;
+    _;
+  } =
+    harness
+  in
   let env : Oi.Build_pipeline.env =
-    {
-      proc_mgr;
-      fs;
-      clock;
-      sys;
-      os_key;
-      cache;
-      data_dir;
-      http_session;
-    }
+    { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
   in
   let conf_host =
-    Oi.Pipeline.make_conf ~platform
-      ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
-  let bar_label =
-    String.concat " " (List.map (fun h -> "@" ^ h) handles)
-  in
+  let bar_label = String.concat " " (List.map (fun h -> "@" ^ h) handles) in
   let req : Oi.Build_pipeline.request =
     {
       targets =
@@ -508,8 +506,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
     Progress_ui.with_ui ~target:bar_label
       ~clock:(clock :> _ Eio.Resource.t)
       ~enabled:(Tty.is_tty ())
-    @@ fun ui_reporter ->
-    Oi.Build_pipeline.solve env ~reporter:ui_reporter req
+    @@ fun ui_reporter -> Oi.Build_pipeline.solve env ~reporter:ui_reporter req
   in
   (* Log per-group failures from the unified pipeline. *)
   List.iter
@@ -530,9 +527,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
   let all_plans =
     List.concat_map
       (fun (gr : Oi.Build_pipeline.group_result) ->
-        match gr.exec_plan with
-        | Some p -> p.packages
-        | None -> [])
+        match gr.exec_plan with Some p -> p.packages | None -> [])
       solved.groups
   in
   let n_groups_solved =
@@ -567,15 +562,12 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
     by_hash;
   let roots =
     Hashtbl.fold
-      (fun h p acc ->
-        if Hashtbl.mem dep_set h then acc else p :: acc)
+      (fun h p acc -> if Hashtbl.mem dep_set h then acc else p :: acc)
       by_hash []
     |> List.sort (fun (a : Oi.Plan.package_plan) b ->
-           String.compare a.pkg b.pkg)
+        String.compare a.pkg b.pkg)
   in
-  let short_hash h =
-    if String.length h > 12 then String.sub h 0 12 else h
-  in
+  let short_hash h = if String.length h > 12 then String.sub h 0 12 else h in
   let label_first (p : Oi.Plan.package_plan) =
     let tag = match p.method_ with Source -> "" | Binary -> " [cached]" in
     Fmt.str "%s  %s%s" p.pkg (short_hash p.layer_hash) tag
@@ -599,9 +591,8 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
   in
   let n_binary = n_layers - n_source in
   Fmt.pr
-    "@.%d group(s) \u{2192} %d unique layer(s) (%d source, %d cached), \
-     %d root(s); \u{21B0} marks a back-reference to a layer expanded \
-     earlier@."
+    "@.%d group(s) \u{2192} %d unique layer(s) (%d source, %d cached), %d \
+     root(s); \u{21B0} marks a back-reference to a layer expanded earlier@."
     n_groups_solved n_layers n_source n_binary (List.length roots);
   (* Divergence summary: any [name.version] that resolved to more
      than one layer hash across the overlay's roots. The hash differs
@@ -613,8 +604,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
     Hashtbl.create 64
   in
   Hashtbl.iter
-    (fun _ (p : Oi.Plan.package_plan) ->
-      Hashtbl.add variants_by_pkg p.pkg p)
+    (fun _ (p : Oi.Plan.package_plan) -> Hashtbl.add variants_by_pkg p.pkg p)
     by_hash;
   let divergent =
     Hashtbl.fold
@@ -624,8 +614,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
           List.map (fun (p : Oi.Plan.package_plan) -> p.layer_hash) variants
           |> List.sort_uniq String.compare
         in
-        if List.length unique_hashes > 1 then (pkg, variants) :: acc
-        else acc)
+        if List.length unique_hashes > 1 then (pkg, variants) :: acc else acc)
       (let s = Hashtbl.create 64 in
        Hashtbl.iter
          (fun _ (p : Oi.Plan.package_plan) -> Hashtbl.replace s p.pkg ())
@@ -648,15 +637,17 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
         List.iter
           (fun (d : Oi.Identity.dep) ->
             let prev =
-              Hashtbl.find_opt consumers_of d.hash |> Stdlib.Option.value ~default:[]
+              Hashtbl.find_opt consumers_of d.hash
+              |> Stdlib.Option.value ~default:[]
             in
             Hashtbl.replace consumers_of d.hash (p :: prev))
           p.dep_layers)
       by_hash;
     let consumers_of_hash h =
-      Hashtbl.find_opt consumers_of h |> Stdlib.Option.value ~default:[]
+      Hashtbl.find_opt consumers_of h
+      |> Stdlib.Option.value ~default:[]
       |> List.sort (fun (a : Oi.Plan.package_plan) b ->
-             String.compare a.pkg b.pkg)
+          String.compare a.pkg b.pkg)
     in
     Fmt.pr "@.%a@.@." Oi.Style.header_string
       (Fmt.str "Divergent layers (%d package%s with multiple variants)"
@@ -699,8 +690,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
                       (String.concat ", " (List.rev head))
                       (List.length names - max_inline)
             in
-            Fmt.pr "  \u{25B8} %s [%s] used by %s@."
-              (short_hash v.layer_hash)
+            Fmt.pr "  \u{25B8} %s [%s] used by %s@." (short_hash v.layer_hash)
               (Oi.Identity.method_to_string v.method_)
               cons_label)
           variants;
@@ -748,11 +738,9 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
                         Fmt.pr "    %s: %s \u{2192} %s@." n (short_hash x)
                           (short_hash y)
                     | Some x, None ->
-                        Fmt.pr "    %s: %s \u{2192} (absent)@." n
-                          (short_hash x)
+                        Fmt.pr "    %s: %s \u{2192} (absent)@." n (short_hash x)
                     | None, Some y ->
-                        Fmt.pr "    %s: (absent) \u{2192} %s@." n
-                          (short_hash y)
+                        Fmt.pr "    %s: (absent) \u{2192} %s@." n (short_hash y)
                     | None, None -> ())
                   diffs
               end;
@@ -931,9 +919,9 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
   end
 
 let cmd =
-  let run (c : Terms.common) refresh skip_local toolchain_override
-      targets with_repos with_deps tree plan_view summary only_depexts
-      os_override show_all show_cache_listing =
+  let run (c : Terms.common) refresh skip_local toolchain_override targets
+      with_repos with_deps tree plan_view summary only_depexts os_override
+      show_all show_cache_listing =
     Harness.run @@ fun ~sw env ->
     let harness =
       Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
@@ -962,9 +950,7 @@ let cmd =
     let cache_root = Oi.Cache.root_s cache in
     (match (bare_handles, show_all, show_cache_listing) with
     | _, true, _ ->
-        let h =
-          match bare_handles with Some [ h ] -> Some h | _ -> None
-        in
+        let h = match bare_handles with Some [ h ] -> Some h | _ -> None in
         show_cache ~fs ~sys ~cache_root ~os_key ~handle:h;
         exit 0
     | Some [ h ], false, true ->
@@ -972,8 +958,7 @@ let cmd =
         exit 0
     | Some _, false, true ->
         Oi.Error.config_error
-          "oi show --cache: pass exactly one bare @HANDLE to filter \
-           the listing"
+          "oi show --cache: pass exactly one bare @HANDLE to filter the listing"
     | Some handles, false, false ->
         show_merged_plan ~harness ~handles ~refresh;
         exit 0
@@ -1182,19 +1167,18 @@ let cmd =
             if String.length lower < 4 then []
             else
               List.concat_map
-                (fun dir ->
-                  try Sys.readdir dir |> Array.to_list with _ -> [])
+                (fun dir -> try Sys.readdir dir |> Array.to_list with _ -> [])
                 group.pkgs_dir
               |> List.sort_uniq String.compare
               |> List.filter (fun name ->
-                     let ln = String.lowercase_ascii name in
-                     String.length ln >= 4
-                     && ln <> lower
-                     && (contains ~needle:lower ln
-                        || contains ~needle:ln lower))
+                  let ln = String.lowercase_ascii name in
+                  String.length ln >= 4
+                  && ln <> lower
+                  && (contains ~needle:lower ln || contains ~needle:ln lower))
           in
           let extras =
-            targets |> List.concat_map suggest_for
+            targets
+            |> List.concat_map suggest_for
             |> List.sort_uniq String.compare
           in
           let hint =
@@ -1212,9 +1196,8 @@ let cmd =
           in
           Oi.Error.no_solution (msg ^ hint)
       | Error (Cycle cycles) ->
-          Oi.Error.config_error
-            "dependency cycle in solved packages:@\n%a" Oi.Plan.pp_cycles
-            cycles
+          Oi.Error.config_error "dependency cycle in solved packages:@\n%a"
+            Oi.Plan.pp_cycles cycles
       | Error (Empty_after_strip | Elaborate_failed _ | Emit_failed _) ->
           Oi.Error.msg "oi show: solve produced no plan"
       | Ok () -> (
@@ -1231,9 +1214,7 @@ let cmd =
       in
       let method_ = Oi.Identity.method_to_string p.method_ in
       let deps =
-        List.map
-          (fun (d : Oi.Identity.dep) -> d.id.name)
-          p.dep_layers
+        List.map (fun (d : Oi.Identity.dep) -> d.id.name) p.dep_layers
       in
       (name, version, method_, p.layer_hash, deps)
     in
@@ -1340,11 +1321,11 @@ let cmd =
       else if summary then `Summary
       else `Tree
     in
-    if view = `Plan then begin
-      match group.exec_plan with
+    if view = `Plan then
+      begin match group.exec_plan with
       | Some plan -> Fmt.pr "%a@." Oi.Plan.pp plan
       | None -> Oi.Error.msg "oi show --plan: no exec plan available"
-    end
+      end
     else if view = `Tree then begin
       (* Render the elaborated plan as a Unicode dep tree. Each
          [package_plan] keys by its layer_hash (so two identical
@@ -1375,8 +1356,7 @@ let cmd =
       List.iter
         (fun (p : Oi.Plan.package_plan) ->
           List.iter
-            (fun (d : Oi.Identity.dep) ->
-              Hashtbl.replace consumed d.hash ())
+            (fun (d : Oi.Identity.dep) -> Hashtbl.replace consumed d.hash ())
             p.dep_layers)
         nodes;
       let by_name =
@@ -1406,7 +1386,8 @@ let cmd =
         let h = Hashtbl.create 64 in
         List.iteri
           (fun i (p : Oi.Plan.package_plan) ->
-            if not (Hashtbl.mem h p.layer_hash) then Hashtbl.add h p.layer_hash i)
+            if not (Hashtbl.mem h p.layer_hash) then
+              Hashtbl.add h p.layer_hash i)
           nodes;
         h
       in
@@ -1456,11 +1437,13 @@ let cmd =
       in
       Fmt.pr "%a@.@." Oi.Style.header_string "Dependency tree";
       Oi.Dep_tree.render ~label_first ~label_ref ~key_of ~children roots;
-      Fmt.pr "@.%d packages, %d root(s); \u{21B0} marks a \
-              back-reference to a layer expanded earlier in the tree@."
+      Fmt.pr
+        "@.%d packages, %d root(s); \u{21B0} marks a back-reference to a layer \
+         expanded earlier in the tree@."
         (List.length nodes) (List.length roots)
     end
-    else (* `Existing or `Summary — both fall through to the original
+    else
+      (* `Existing or `Summary — both fall through to the original
             metadata + depexts listing. *)
       let all_depexts, dep_status =
         show_depexts ~conf ~packages_dirs ~plan:exec_plan ~os_override
@@ -1511,8 +1494,8 @@ let cmd =
       & info ~docv:"TARGET"
           ~doc:
             "Opam package, binary name, $(b,pkg.VERSION), bare $(b,@HANDLE), \
-             or $(b,@HANDLE/PKG). Repeatable. Omitted: read $(b,*.opam) in \
-             the cwd."
+             or $(b,@HANDLE/PKG). Repeatable. Omitted: read $(b,*.opam) in the \
+             cwd."
           [])
   in
   let tree =
@@ -1546,8 +1529,7 @@ let cmd =
   let only_depexts =
     Arg.(
       value & flag
-      & info ~doc:"Print depexts only, one per line."
-          [ "only-depexts" ])
+      & info ~doc:"Print depexts only, one per line." [ "only-depexts" ])
   in
   let os_override =
     Arg.(
@@ -1556,8 +1538,8 @@ let cmd =
       & info ~docv:"OS"
           ~doc:
             "Evaluate depexts for $(b,OS) instead of the host. Any \
-             $(b,dockerfile-opam) tag ($(b,alpine-3.23), $(b,ubuntu-22.04)) \
-             or bare distro name. Skips the host-installed check."
+             $(b,dockerfile-opam) tag ($(b,alpine-3.23), $(b,ubuntu-22.04)) or \
+             bare distro name. Skips the host-installed check."
           [ "os" ])
   in
   let show_all =
@@ -1584,33 +1566,35 @@ let cmd =
         [
           `S Manpage.s_description;
           `P
-            "Solve for $(b,TARGET) and print its plan, metadata, and \
-             depexts. No sources fetched, no builds run.";
+            "Solve for $(b,TARGET) and print its plan, metadata, and depexts. \
+             No sources fetched, no builds run.";
           `P "With no $(b,TARGET), reads $(b,*.opam) in the cwd.";
           `P
             "Multiple $(b,TARGET)s are solved as a single group. Bare \
              $(b,@HANDLE) targets switch to the merged-overlay view: every \
              overlay root is solved and rendered as one deduped tree.";
           `S "MODES";
-          `I ("(default)",
-              "Dependency tree.");
+          `I ("(default)", "Dependency tree.");
           `I ("$(b,--tree)", "Same as the default.");
-          `I ("$(b,--summary)",
-              "Metadata, package counts, binaries, depexts, pinned \
-               overlays.");
-          `I ("$(b,--plan)",
+          `I
+            ( "$(b,--summary)",
+              "Metadata, package counts, binaries, depexts, pinned overlays." );
+          `I
+            ( "$(b,--plan)",
               "Full per-package plan: layer hashes, source URLs, build/install \
-               commands.");
-          `I ("$(b,--only-depexts)",
-              "Depexts only, one per line.");
-          `I ("bare $(b,@HANDLE)…",
-              "Merged build plan across every overlay root, deduped by \
-               layer hash.");
-          `I ("bare $(b,@HANDLE) $(b,--cache)",
-              "Per-overlay package listing (cache state, known binaries).");
-          `I ("$(b,--all)",
+               commands." );
+          `I ("$(b,--only-depexts)", "Depexts only, one per line.");
+          `I
+            ( "bare $(b,@HANDLE)…",
+              "Merged build plan across every overlay root, deduped by layer \
+               hash." );
+          `I
+            ( "bare $(b,@HANDLE) $(b,--cache)",
+              "Per-overlay package listing (cache state, known binaries)." );
+          `I
+            ( "$(b,--all)",
               "Cached layers across the whole cache. With bare $(b,@HANDLE), \
-               filter to that overlay.");
+               filter to that overlay." );
           `S Manpage.s_examples;
           `Pre
             "  oi show utop\n\
@@ -1624,6 +1608,6 @@ let cmd =
   Cmd.v info
     Term.(
       const run $ Terms.common $ Terms.refresh $ Terms.skip_local
-      $ Terms.toolchain $ targets $ Terms.with_repos
-      $ Terms.with_deps $ tree $ plan_view $ summary $ only_depexts
-      $ os_override $ show_all $ show_cache_listing)
+      $ Terms.toolchain $ targets $ Terms.with_repos $ Terms.with_deps $ tree
+      $ plan_view $ summary $ only_depexts $ os_override $ show_all
+      $ show_cache_listing)

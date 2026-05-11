@@ -118,8 +118,8 @@ module Url : sig
     ?refresh:bool ->
     string list ->
     t
-  (** [?reporter] receives [Status "Cloning <url>"] events as each [--with]
-      URL is fetched. *)
+  (** [?reporter] receives [Status "Cloning <url>"] events as each [--with] URL
+      is fetched. *)
 
   val classify_all : string list -> string list * Script.dep list
 end

@@ -1,8 +1,8 @@
-(** Opam repository clones — the low-level [git clone] / refresh
-    primitives behind every [packages/] tree the solver consumes.
+(** Opam repository clones — the low-level [git clone] / refresh primitives
+    behind every [packages/] tree the solver consumes.
 
-    Used via {!ensure_many} by every command that resolves
-    [--with-repo URL] entries. *)
+    Used via {!ensure_many} by every command that resolves [--with-repo URL]
+    entries. *)
 
 val ensure_many :
   ?reporter:Build_progress.reporter ->
@@ -12,7 +12,7 @@ val ensure_many :
   Project.extra_repo list ->
   string list
 (** [ensure_many ~fs ~data_dir extras] clones/updates each entry into
-    [data_dir/repos/<name>], refreshing when [?refresh = true] or the
-    clone is older than {!Cache.refresh_max_age}. Two entries with the
-    same name collide by design (callers should deduplicate). Returns
-    one [packages/] directory per entry in input order. *)
+    [data_dir/repos/<name>], refreshing when [?refresh = true] or the clone is
+    older than {!Cache.refresh_max_age}. Two entries with the same name collide
+    by design (callers should deduplicate). Returns one [packages/] directory
+    per entry in input order. *)

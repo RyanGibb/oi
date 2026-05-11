@@ -42,8 +42,7 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
     let s = D10.Index.stats db ~os_key in
     D10.Index.close db;
     if disk > s.layers then
-      rebuild
-        (Fmt.str "Refreshing (%d on-disk vs %d indexed)" disk s.layers)
+      rebuild (Fmt.str "Refreshing (%d on-disk vs %d indexed)" disk s.layers)
   end;
   index_path
 

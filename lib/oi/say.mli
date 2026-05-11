@@ -62,8 +62,7 @@ val newline : unit -> unit
 *)
 
 val set_around_emit : ((unit -> unit) -> unit) -> unit
-(** Install a hook that wraps every Say emission. Used by the
-    cmdliner layer to pause the active progress bar(s) while Say
-    writes (so log lines don't tear the bar) and resume after.
-    Default is identity ([fun f -> f ()]); calling it twice
-    replaces the previous hook. *)
+(** Install a hook that wraps every Say emission. Used by the cmdliner layer to
+    pause the active progress bar(s) while Say writes (so log lines don't tear
+    the bar) and resume after. Default is identity ([fun f -> f ()]); calling it
+    twice replaces the previous hook. *)

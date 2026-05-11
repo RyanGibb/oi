@@ -15,10 +15,7 @@
      [<base_url>/d10ir-archives/<sha>.tar.zst] *)
 
 let ( / ) = Filename.concat
-
-let local_dir ~cache =
-  Cache.root_s cache / "d10ir" / "archives"
-
+let local_dir ~cache = Cache.root_s cache / "d10ir" / "archives"
 let dst_dir ~output = output / "d10ir-archives"
 
 (* Single-file publish: hardlink, falling back to a streamed copy.
@@ -76,15 +73,15 @@ let publish_all ~cache ~output =
   if not (Sys.file_exists src) then 0
   else begin
     let dst = dst_dir ~output in
-    (try Unix.mkdir dst 0o755
-     with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+    (try Unix.mkdir dst 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     let entries =
       try Sys.readdir src |> Array.to_list with Sys_error _ -> []
     in
     List.fold_left
       (fun n name ->
-        if Filename.check_suffix name ".tar.zst"
-           && publish_one ~src:(src / name) ~dst:(dst / name)
+        if
+          Filename.check_suffix name ".tar.zst"
+          && publish_one ~src:(src / name) ~dst:(dst / name)
         then n + 1
         else n)
       0 entries
@@ -99,14 +96,13 @@ let publish_shas ~cache ~output shas =
   else begin
     let src = local_dir ~cache in
     let dst = dst_dir ~output in
-    (try Unix.mkdir dst 0o755
-     with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+    (try Unix.mkdir dst 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
     List.fold_left
       (fun n sha ->
         let name = sha ^ ".tar.zst" in
         let sp = src / name in
-        if Sys.file_exists sp && publish_one ~src:sp ~dst:(dst / name)
-        then n + 1
+        if Sys.file_exists sp && publish_one ~src:sp ~dst:(dst / name) then
+          n + 1
         else n)
       0 shas
   end

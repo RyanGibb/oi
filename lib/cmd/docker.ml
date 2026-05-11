@@ -124,7 +124,9 @@ let cmd =
   let test_mode =
     Arg.(
       value & flag
-      & info ~doc:"Emit a Dockerfile running $(b,oi test) instead of $(b,oi build)."
+      & info
+          ~doc:
+            "Emit a Dockerfile running $(b,oi test) instead of $(b,oi build)."
           [ "test" ])
   in
   let all =
@@ -164,8 +166,9 @@ let cmd =
       & opt (some string) None
       & info ~docv:"PATH"
           ~doc:
-            "Output path. Default file: $(b,Dockerfile.oi-{build,test}.<distro>) \
-             in cwd. With $(b,--all): directory for the project (default: cwd)."
+            "Output path. Default file: \
+             $(b,Dockerfile.oi-{build,test}.<distro>) in cwd. With $(b,--all): \
+             directory for the project (default: cwd)."
           [ "o"; "output" ])
   in
   let info =

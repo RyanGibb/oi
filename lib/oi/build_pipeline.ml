@@ -43,8 +43,7 @@ type group = {
   tokens : string list;
   names : OpamPackage.Name.t list;
   handles : string list;
-  group_constraints :
-    OpamFormula.version_constraint OpamPackage.Name.Map.t;
+  group_constraints : OpamFormula.version_constraint OpamPackage.Name.Map.t;
 }
 
 type group_error =
@@ -76,8 +75,8 @@ type solved = {
    overlay's [x-root-packages] (or, if empty, every package the overlay
    ships). Plain and [Overlay_pkg] targets become singleton groups; the
    overall token list mirrors what [oi build]'s loop sees today. *)
-let expand_targets ~fs ~sys ~reporepo_path ~reporepo_url
-    (targets : target list) : (string list * string list) list =
+let expand_targets ~fs ~sys ~reporepo_path ~reporepo_url (targets : target list)
+    : (string list * string list) list =
   let need_reporepo =
     List.exists
       (function
@@ -103,19 +102,17 @@ let expand_targets ~fs ~sys ~reporepo_path ~reporepo_url
       | Overlay_all handle -> begin
           let entries = Lazy.force entries_lazy in
           match Source.Reporepo.latest entries ~handle with
-          | None ->
-              Error.config_error "no overlay @%s in reporepo" handle
+          | None -> Error.config_error "no overlay @%s in reporepo" handle
           | Some (e : Source.Reporepo.entry) ->
               let groups =
                 if e.root_packages <> [] then e.root_packages
                 else
                   let pkgs_dir =
-                    Source.Reporepo.assert_overlay_dir
-                      ~path:reporepo_path ~handle
+                    Source.Reporepo.assert_overlay_dir ~path:reporepo_path
+                      ~handle
                   in
                   Sys.readdir pkgs_dir |> Array.to_list
-                  |> List.filter (fun n ->
-                         Sys.is_directory (pkgs_dir / n))
+                  |> List.filter (fun n -> Sys.is_directory (pkgs_dir / n))
                   |> List.sort String.compare
                   |> List.map (fun p -> [ p ])
               in
@@ -133,31 +130,26 @@ let expand_targets ~fs ~sys ~reporepo_path ~reporepo_url
    a caller actually needs it. *)
 let pick_batch_toolchain ~env ~conf ~override ~all_handles =
   let key = List.sort_uniq String.compare all_handles in
-  Pipeline.pick_toolchain ~fs:env.fs ~sys:env.sys
-    ~data_dir:env.data_dir ~conf ~install:false ~override ~handles:key ()
+  Pipeline.pick_toolchain ~fs:env.fs ~sys:env.sys ~data_dir:env.data_dir ~conf
+    ~install:false ~override ~handles:key ()
 
 let packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs ?pin_dir
     ?local_packages_dir ~global_handles ~toolchain handles =
   let global_handles =
-    Pipeline.filter_compatible_overlays ~reporepo_path ~toolchain
-      global_handles
+    Pipeline.filter_compatible_overlays ~reporepo_path ~toolchain global_handles
   in
-  let effective =
-    global_handles @ handles |> List.sort_uniq String.compare
-  in
-  let entries =
-    try Source.Reporepo.load ~path:reporepo_path with _ -> []
-  in
+  let effective = global_handles @ handles |> List.sort_uniq String.compare in
+  let entries = try Source.Reporepo.load ~path:reporepo_path with _ -> [] in
   let resolved =
     match (toolchain : Toolchain.info option) with
-    | None ->
+    | None -> (
         let roots =
           List.rev effective
           |> List.map (fun h : Source.Reporepo.root ->
-                 { handle = h; version = None })
+              { handle = h; version = None })
         in
-        (try Source.Reporepo.resolve entries ~roots |> List.rev
-         with Error.E _ -> [])
+        try Source.Reporepo.resolve entries ~roots |> List.rev
+        with Error.E _ -> [])
     | Some _ ->
         List.filter_map
           (fun h -> Source.Reporepo.latest entries ~handle:h)
@@ -166,8 +158,7 @@ let packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs ?pin_dir
   let overlay_dirs =
     List.map
       (fun (e : Source.Reporepo.entry) ->
-        Source.Reporepo.assert_overlay_dir ~path:reporepo_path
-          ~handle:e.handle)
+        Source.Reporepo.assert_overlay_dir ~path:reporepo_path ~handle:e.handle)
       resolved
   in
   let base =
@@ -194,16 +185,14 @@ let packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs ?pin_dir
 
 (* -- Per-group solve / elaborate / emit ----------------------------------- *)
 
-let solve_group ~env ~conf ~toolchain_override ~global_handles
-    ~base_pkgs_dirs ~pin_dir ?local_packages_dir ~reporepo_path
-    ~base_constraints ~build_prefix ~cache_root ~d10 ~force_source
-    (toolchain : Toolchain.info option)
+let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
+    ~pin_dir ?local_packages_dir ~reporepo_path ~base_constraints ~build_prefix
+    ~cache_root ~d10 ~force_source (toolchain : Toolchain.info option)
     ((tokens, group_handles) : string list * string list) : group_result =
   let label = String.concat ", " tokens in
   let pkgs_dir =
-    packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs
-      ?pin_dir ?local_packages_dir ~global_handles ~toolchain
-      group_handles
+    packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs ?pin_dir
+      ?local_packages_dir ~global_handles ~toolchain group_handles
   in
   let group_conf, tc_ctx = Pipeline.solver_inputs toolchain conf in
   (* Mirror [oi build]'s [--toolchain=NAME] behavior: strip
@@ -219,8 +208,8 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
           tokens
     | _ -> tokens
   in
-  let make_failure ?(toolchain = toolchain) ?(pkgs = [])
-      ?(exec_plan = None) ?(recipe = None) err =
+  let make_failure ?(toolchain = toolchain) ?(pkgs = []) ?(exec_plan = None)
+      ?(recipe = None) err =
     {
       group =
         {
@@ -268,13 +257,18 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
               (stripped_tokens @ List.map (fun h -> "@" ^ h) group_handles)
           in
           let hash = Digest.to_hex (Digest.string key) in
-          let first = match stripped_tokens with t :: _ -> t | [] -> "solve" in
-          let path = Cache.Logs.path ~cache_root ~kind:"solve" ~name:first ~hash in
+          let first =
+            match stripped_tokens with t :: _ -> t | [] -> "solve"
+          in
+          let path =
+            Cache.Logs.path ~cache_root ~kind:"solve" ~name:first ~hash
+          in
           let body =
             Fmt.str "targets: %s\nhandles: %s\n\n%s%s"
               (String.concat ", " stripped_tokens)
               (if group_handles = [] then "(base only)"
-               else String.concat ", " (List.map (fun h -> "@" ^ h) group_handles))
+               else
+                 String.concat ", " (List.map (fun h -> "@" ^ h) group_handles))
               msg
               (if msg = "" || msg.[String.length msg - 1] = '\n' then ""
                else "\n")
@@ -295,7 +289,8 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
         match
           try
             let plan_d10 = if force_source then None else Some d10 in
-            Ok (Plan.of_solution gctx ?d10:plan_d10 ~packages_dirs:pkgs_dir pkgs)
+            Ok
+              (Plan.of_solution gctx ?d10:plan_d10 ~packages_dirs:pkgs_dir pkgs)
           with Plan.Cycle cs -> Error cs
         with
         | Error cs ->
@@ -308,17 +303,15 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
               recipe = None;
               error = Error (Cycle cs);
             }
-        | Ok build_plan -> begin
-            try
+        | Ok build_plan ->
+            begin try
               let exec_plan =
                 Plan.elaborate gctx ~packages_dirs:pkgs_dir ~cache_root
-                  ~os_key:env.os_key
-                  ~ocaml_version:group_conf.ocaml_version build_plan
+                  ~os_key:env.os_key ~ocaml_version:group_conf.ocaml_version
+                  build_plan
               in
               let toolchain_name =
-                match toolchain with
-                | Some i -> i.handle
-                | None -> "system"
+                match toolchain with Some i -> i.handle | None -> "system"
               in
               let toolchain_layer =
                 match exec_plan.packages with
@@ -328,8 +321,8 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
               try
                 let recipe =
                   Recipe_emitter.emit ~d10
-                    ~cli_invocation:(Array.to_list Sys.argv)
-                    ~toolchain_name ~toolchain_layer exec_plan
+                    ~cli_invocation:(Array.to_list Sys.argv) ~toolchain_name
+                    ~toolchain_layer exec_plan
                 in
                 {
                   group;
@@ -350,8 +343,7 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
                     exec_plan = Some exec_plan;
                     recipe = None;
                     error =
-                      Error
-                        (Emit_failed { msg = Fmt.str "%a" Error.pp e });
+                      Error (Emit_failed { msg = Fmt.str "%a" Error.pp e });
                   }
               | Failure msg ->
                   {
@@ -373,8 +365,7 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
                   exec_plan = None;
                   recipe = None;
                   error =
-                    Error
-                      (Elaborate_failed { msg = Fmt.str "%a" Error.pp e });
+                    Error (Elaborate_failed { msg = Fmt.str "%a" Error.pp e });
                 }
             | Failure msg ->
                 {
@@ -386,7 +377,7 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
                   recipe = None;
                   error = Error (Elaborate_failed { msg });
                 }
-          end)
+            end)
 
 (* -- Persistent cache for the [solved] struct ----------------------------- *)
 
@@ -395,8 +386,8 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles
    the cache key so a stale entry produces a key miss rather than a
    crash on [Marshal.from_channel]. *)
 let cache_schema = "v1"
-
 let log_src = Logs.Src.create "oi.build_pipeline.cache"
+
 module Log = (val Logs.src_log log_src : Logs.LOG)
 
 (* Process-memo of [git -C <repo> rev-parse HEAD] so a multi-call
@@ -461,8 +452,7 @@ let cache_key ~reporepo_path (req : request) : string option =
               List.iter add tokens;
               add "|";
               List.iter add handles
-          | Overlay_pkg { handle; spec } ->
-              add ("Pkg:" ^ handle ^ "/" ^ spec)
+          | Overlay_pkg { handle; spec } -> add ("Pkg:" ^ handle ^ "/" ^ spec)
           | Overlay_all h -> add ("All:" ^ h))
         req.targets;
       add "WITH_REPOS:";
@@ -488,18 +478,19 @@ let cache_key ~reporepo_path (req : request) : string option =
           add (OpamPackage.Version.to_string v))
         req.constraints;
       add ("override:" ^ Stdlib.Option.value req.toolchain_override ~default:"");
-      add ("toolchain_hash:"
-          ^ (match req.toolchain with Some i -> i.hash | None -> ""));
+      add
+        ("toolchain_hash:"
+        ^ match req.toolchain with Some i -> i.hash | None -> "");
       add ("ocaml:" ^ req.conf.ocaml_version);
       add ("arch:" ^ req.conf.arch);
       add ("os:" ^ req.conf.os);
       add ("os_distribution:" ^ req.conf.os_distribution);
       add ("os_version:" ^ req.conf.os_version);
       add ("os_family:" ^ req.conf.os_family);
-      add ("local_pkg_dir:"
-          ^ Stdlib.Option.value req.local_packages_dir ~default:"");
-      add ("project_root:"
-          ^ Stdlib.Option.value req.project_root ~default:"");
+      add
+        ("local_pkg_dir:"
+        ^ Stdlib.Option.value req.local_packages_dir ~default:"");
+      add ("project_root:" ^ Stdlib.Option.value req.project_root ~default:"");
       add ("force_source:" ^ string_of_bool req.force_source);
       Some (Digest.to_hex (Digest.string (Buffer.contents buf)))
 
@@ -519,8 +510,7 @@ let cache_lookup ~cache_root ~key : solved option =
         (fun () -> Some (Marshal.from_channel ic : solved))
     with exn ->
       Log.info (fun m ->
-          m "solve cache: ignoring stale entry %s (%s)"
-            (String.sub key 0 12)
+          m "solve cache: ignoring stale entry %s (%s)" (String.sub key 0 12)
             (Printexc.to_string exn));
       (try Sys.remove path with _ -> ());
       None
@@ -532,18 +522,16 @@ let cache_store ~fs ~cache_root ~key (s : solved) : unit =
    with _ -> ());
   let tmp = path ^ ".tmp" in
   try
-    Out_channel.with_open_bin tmp (fun oc ->
-        Marshal.to_channel oc s []);
+    Out_channel.with_open_bin tmp (fun oc -> Marshal.to_channel oc s []);
     Sys.rename tmp path;
     Log.info (fun m ->
-        m "solve cache stored %s (%d groups)"
-          (String.sub key 0 12)
+        m "solve cache stored %s (%d groups)" (String.sub key 0 12)
           (List.length s.groups))
-  with exn ->
+  with exn -> (
     Log.info (fun m ->
         m "solve cache: failed to store %s (%s)" (String.sub key 0 12)
           (Printexc.to_string exn));
-    (try Sys.remove tmp with _ -> ())
+    try Sys.remove tmp with _ -> ())
 
 (* -- The top-level entry point -------------------------------------------- *)
 
@@ -553,8 +541,8 @@ let solve_uncached env ?(reporter = Build_progress.null) (req : request) :
   let reporepo_url = Source.Reporepo.env_url () in
   Pipeline.init_opam_root ~fs:env.fs ~data_dir:env.data_dir;
   let _ : string list =
-    Source.Reporepo.ensure_base ~fs:env.fs ~sys:env.sys
-      ~data_dir:env.data_dir ~refresh:req.refresh ()
+    Source.Reporepo.ensure_base ~fs:env.fs ~sys:env.sys ~data_dir:env.data_dir
+      ~refresh:req.refresh ()
   in
   (* Determine the union of every handle in scope across the request:
      [with_repos] (global), [extra_repos] handles, and per-target
@@ -620,8 +608,7 @@ let solve_uncached env ?(reporter = Build_progress.null) (req : request) :
   reporter.Build_progress.event
     (Phase_started
        { phase = Solving; label = Fmt.str "Solving %d group(s)" n_groups });
-  reporter.event
-    (Aggregate { phase = Solving; total = n_groups; current = 0 });
+  reporter.event (Aggregate { phase = Solving; total = n_groups; current = 0 });
   let solved_count = ref 0 in
   let groups =
     List.map
@@ -632,8 +619,8 @@ let solve_uncached env ?(reporter = Build_progress.null) (req : request) :
           solve_group ~env ~conf ~toolchain_override:req.toolchain_override
             ~global_handles ~base_pkgs_dirs ~pin_dir
             ?local_packages_dir:req.local_packages_dir ~reporepo_path
-            ~base_constraints:req.constraints ~build_prefix ~cache_root
-            ~d10 ~force_source:req.force_source toolchain g
+            ~base_constraints:req.constraints ~build_prefix ~cache_root ~d10
+            ~force_source:req.force_source toolchain g
         in
         reporter.event (Solve_finished { label });
         incr solved_count;
@@ -644,9 +631,7 @@ let solve_uncached env ?(reporter = Build_progress.null) (req : request) :
       token_groups
   in
   reporter.event (Phase_done Solving);
-  let recipes =
-    List.filter_map (fun (gr : group_result) -> gr.recipe) groups
-  in
+  let recipes = List.filter_map (fun (gr : group_result) -> gr.recipe) groups in
   let merged =
     match recipes with
     | [] -> None
@@ -685,9 +670,7 @@ let solve env ?(reporter = Build_progress.null) (req : request) : solved =
           m "solve cache hit %s (%d groups)" (String.sub key 0 12)
             (List.length s.groups));
       reporter.Build_progress.event
-        (Status
-           (Fmt.str "Solve cache hit (%d groups)"
-              (List.length s.groups)));
+        (Status (Fmt.str "Solve cache hit (%d groups)" (List.length s.groups)));
       s
   | None ->
       let s = solve_uncached env ~reporter req in
@@ -695,9 +678,7 @@ let solve env ?(reporter = Build_progress.null) (req : request) : solved =
          failed produces a [merged = None] struct that's not worth
          re-loading. *)
       let any_ok =
-        List.exists
-          (fun (gr : group_result) -> Result.is_ok gr.error)
-          s.groups
+        List.exists (fun (gr : group_result) -> Result.is_ok gr.error) s.groups
       in
       (match key_opt with
       | Some key when any_ok -> cache_store ~fs:env.fs ~cache_root ~key s
@@ -731,9 +712,7 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
         | None -> None
         | Some r ->
             Some
-              ( r,
-                D10.Remote_index.fetch d10 ~session:env.http_session
-                  ~remote:r )
+              (r, D10.Remote_index.fetch d10 ~session:env.http_session ~remote:r)
       in
       let needed_fetches, needed_fetch_bytes =
         match merged_layer_index with
@@ -772,9 +751,7 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
         {
           base with
           build_parallelism =
-            (match inp.jobs with
-            | Some j -> j
-            | None -> base.build_parallelism);
+            (match inp.jobs with Some j -> j | None -> base.build_parallelism);
         }
       in
       let plan_dir = Eio.Path.native_exn d10_cfg.root in
@@ -793,9 +770,7 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
             List.iter
               (fun (n : D10ir.Plan.node) ->
                 let h = D10ir.Layer_hash.to_string n.layer_hash in
-                let label =
-                  Fmt.str "%s.%s" n.package.name n.package.version
-                in
+                let label = Fmt.str "%s.%s" n.package.name n.package.version in
                 Hashtbl.replace pkg_of h label)
               merged.nodes;
             Pipeline.fetch_layer_hashes ~reporter ?jobs:inp.jobs
@@ -811,9 +786,7 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
          overlay so the [d10ir-archives/<sha>.tar.zst] entry exists. *)
       let archive_dir_for sha =
         Filename.concat
-          (Filename.concat
-             (Filename.concat cache_root "d10ir")
-             "archives")
+          (Filename.concat (Filename.concat cache_root "d10ir") "archives")
           (sha ^ ".tar.zst")
       in
       let needs_archive (n : D10ir.Plan.node) =
@@ -833,8 +806,8 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
             let _ : D10ir.Registry.prefetch_summary =
               D10ir.Registry.prefetch
                 ~clock:(env.clock :> _ Eio.Time.clock_ty Eio.Resource.t)
-                ~fs:env.fs ~session:env.http_session
-                ~cache_root ~remote:(`Http_remote registry) shas
+                ~fs:env.fs ~session:env.http_session ~cache_root
+                ~remote:(`Http_remote registry) shas
             in
             ()
         | None -> ());
@@ -850,12 +823,12 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
             |> String.concat ", "
           in
           Error.config_error
-            "%d source archive(s) missing locally and not on the \
-             registry: %s.\n\
-             Run [oi repo bump] on the offending overlay to bake the \
-             archives, or point [--registry] at a registry that \
-             publishes [d10ir-archives/<sha>.tar.zst] for these shas."
-            (List.length still_missing) pkg_summary
+            "%d source archive(s) missing locally and not on the registry: %s.\n\
+             Run [oi repo bump] on the offending overlay to bake the archives, \
+             or point [--registry] at a registry that publishes \
+             [d10ir-archives/<sha>.tar.zst] for these shas."
+            (List.length still_missing)
+            pkg_summary
       end;
       reporter.event (Plan_ready merged);
       reporter.event (Phase_started { phase = Building; label = "build" });
@@ -866,13 +839,10 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
          [external_layers] was added) as a clear error instead of
          letting [Direct.run] cascade-skip every node and bubble up as
          a misleading "solved but does not install bin/<X>". *)
-      (match
-         D10ir.Plan.validate ~d10:d10_cfg ~fs:env.fs ~plan_dir merged
-       with
+      (match D10ir.Plan.validate ~d10:d10_cfg ~fs:env.fs ~plan_dir merged with
       | Ok () -> ()
       | Error err ->
-          Error.config_error
-            "d10ir recipe failed validation before build: %a"
+          Error.config_error "d10ir recipe failed validation before build: %a"
             D10ir.Plan.pp_validate_error err);
       let result =
         D10ir.Direct.run ~config:direct_cfg ~d10:d10_cfg ~fs:env.fs
@@ -885,9 +855,7 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
 
 let layer_hashes (s : solved) : string list =
   match
-    List.find_opt
-      (fun (gr : group_result) -> Result.is_ok gr.error)
-      s.groups
+    List.find_opt (fun (gr : group_result) -> Result.is_ok gr.error) s.groups
   with
   | None -> []
   | Some gr -> (

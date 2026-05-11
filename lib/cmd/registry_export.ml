@@ -72,8 +72,7 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
   let n_layers = D10.Layer.export_all d10 ~dst in
   Oi.Say.step "Exported %d layer(s) to %s" n_layers output;
-  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
-    Eio.Path.(fs / output / os_key);
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / output / os_key);
   let index_path = output / os_key / "index.db" in
   (try Sys.remove index_path with Sys_error _ -> ());
   let db = D10.Index.open_ ~path:index_path in
@@ -99,8 +98,8 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
     end
     else
       Logs.info (fun m ->
-          m "No remote layer index at %s/%s/index.db (skipping merge)"
-            registry os_key)
+          m "No remote layer index at %s/%s/index.db (skipping merge)" registry
+            os_key)
   end;
   let s = D10.Index.stats db ~os_key in
   D10.Index.close db;

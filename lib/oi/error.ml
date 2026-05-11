@@ -74,8 +74,8 @@ let pp fmt = function
          Wrap in [@[<v>...@]] so [@,] becomes a real newline — without
          the vertical box [@,] is a no-op separator and the whole
          message collapses onto one line. *)
-      Fmt.pf fmt "@[<v>%a %s failed@,  command: %s@,@,%s@]"
-        Style.error_string "error:" pkg cmd output
+      Fmt.pf fmt "@[<v>%a %s failed@,  command: %s@,@,%s@]" Style.error_string
+        "error:" pkg cmd output
   | Fetch_failed { url; msg } ->
       Fmt.pf fmt "%a fetch %s: %s" Style.error_string "error:" url msg
   | Msg s -> Fmt.pf fmt "%a %s" Style.error_string "error:" s

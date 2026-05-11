@@ -122,19 +122,19 @@ type remote = [ `Http_remote of string ]
 
     Each os_key directory in the registry contains an [index.db] sqlite file
     listing every layer available remotely, plus its tarball sha256 and size
-    when one is published (a "layer-cache" registry). Bin-index registries
-    leave the tarball columns NULL — restore is impossible from those, but
-    the same database still answers "what package provides binary X" /
-    "what opam pkg installs ocamlfind library Y". Clients fetch [index.db]
-    once per command and read its [layers] rows. *)
+    when one is published (a "layer-cache" registry). Bin-index registries leave
+    the tarball columns NULL — restore is impossible from those, but the same
+    database still answers "what package provides binary X" / "what opam pkg
+    installs ocamlfind library Y". Clients fetch [index.db] once per command and
+    read its [layers] rows. *)
 
 type index_entry = { sha256 : string; size : int64 }
+
 type remote_index = (string, index_entry) Hashtbl.t
-(** [remote_index] is built from [<remote>/<os_key>/index.db]'s
-    [layers] rows whose [tarball_sha256] / [tarball_size] columns are
-    populated. The fetch helper itself lives in {!Remote_index}
-    (cycle break — [Index.rebuild] calls [Layer.load_meta], so
-    [Layer] can't import [Index] back). *)
+(** [remote_index] is built from [<remote>/<os_key>/index.db]'s [layers] rows
+    whose [tarball_sha256] / [tarball_size] columns are populated. The fetch
+    helper itself lives in {!Remote_index} (cycle break — [Index.rebuild] calls
+    [Layer.load_meta], so [Layer] can't import [Index] back). *)
 
 type fetch_phase =
   | Fetching
@@ -179,6 +179,6 @@ val export : Config.t -> hash:string -> dst:_ Eio.Path.t -> bool
 val export_all : Config.t -> dst:_ Eio.Path.t -> int
 (** [export_all c ~dst] exports all succeeded layers for all os_keys to [dst].
     The per-os_key [index.db] (built via {!Index.rebuild} +
-    {!Index.record_tarball}) is the source of truth for "what's
-    published"; this function only writes the [.tar.zst] files. Returns
-    the number of newly exported layers. *)
+    {!Index.record_tarball}) is the source of truth for "what's published"; this
+    function only writes the [.tar.zst] files. Returns the number of newly
+    exported layers. *)

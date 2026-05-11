@@ -104,9 +104,9 @@ let cmd =
       & pos 0 (some string) None
       & info ~docv:"PKG"
           ~doc:
-            "Opam package to add. Plain name ($(b,fmt)) lets the solver \
-             pick; dotted form ($(b,fmt.0.9.5)) or relop ($(b,fmt>=0.9)) \
-             pins a version."
+            "Opam package to add. Plain name ($(b,fmt)) lets the solver pick; \
+             dotted form ($(b,fmt.0.9.5)) or relop ($(b,fmt>=0.9)) pins a \
+             version."
           [])
   in
   let package =
@@ -115,8 +115,8 @@ let cmd =
       & opt (some string) None
       & info ~docv:"NAME"
           ~doc:
-            "Target $(b,\\(package …\\)) stanza in $(b,dune-project). \
-             Required when more than one package is declared."
+            "Target $(b,\\(package …\\)) stanza in $(b,dune-project). Required \
+             when more than one package is declared."
           [ "p"; "package" ])
   in
   let info =
@@ -129,9 +129,9 @@ let cmd =
              re-sync the prefix. Solve runs first; on failure, no files are \
              touched.";
           `P
-            "Requires $(b,\\(generate_opam_files\\)) in $(b,dune-project). \
-             Use $(b,-p NAME) to pick a stanza when the project declares \
-             several packages.";
+            "Requires $(b,\\(generate_opam_files\\)) in $(b,dune-project). Use \
+             $(b,-p NAME) to pick a stanza when the project declares several \
+             packages.";
         ]
   in
   Cmd.v info

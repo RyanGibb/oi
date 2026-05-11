@@ -2,11 +2,10 @@
     {!Archive_builder.build_no_solve}.
 
     Builds no longer happen here — every build path in oi flows through
-    {!Recipe_emitter.emit} → {!D10ir.Direct.run}. What's left in this
-    module is the trio of preparation steps {!Archive_builder} runs in
-    sequence to produce a consolidated source archive: fetch sources,
-    copy opam [extra-files:] into the build dir, apply patches via
-    [OpamFilename.patch]. *)
+    {!Recipe_emitter.emit} → {!D10ir.Direct.run}. What's left in this module is
+    the trio of preparation steps {!Archive_builder} runs in sequence to produce
+    a consolidated source archive: fetch sources, copy opam [extra-files:] into
+    the build dir, apply patches via [OpamFilename.patch]. *)
 
 val fetch_phase :
   ?cache_urls:OpamUrl.t list ->

@@ -21,12 +21,12 @@ let is_url_like s =
    commit of the same base repo into the solver scope. Without a
    toolchain, do full transitive resolution so [@avsm] alone still
    pulls in [default]/[relocatable]. *)
-let overlay_extras_of_handles ?toolchain ~fs ~sys ~reporepo_path
-    ~reporepo_url handles =
+let overlay_extras_of_handles ?toolchain ~fs ~sys ~reporepo_path ~reporepo_url
+    handles =
   if handles = [] then []
   else begin
-    Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false
-      ~path:reporepo_path ~url:reporepo_url ();
+    Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo_path
+      ~url:reporepo_url ();
     log_overlay "resolving handles %s against reporepo %s"
       (String.concat ", " handles)
       reporepo_path;
@@ -43,7 +43,7 @@ let overlay_extras_of_handles ?toolchain ~fs ~sys ~reporepo_path
           let roots =
             List.rev handles
             |> List.map (fun h : Source.Reporepo.root ->
-                   { handle = h; version = None })
+                { handle = h; version = None })
           in
           Source.Reporepo.resolve entries ~roots
     in
@@ -77,17 +77,13 @@ let overlay_extras_of_handles ?toolchain ~fs ~sys ~reporepo_path
 let cli_extra_repos ~fs ~sys ?reporepo_path ?reporepo_url ?toolchain tokens =
   let urls, handles = List.partition is_url_like tokens in
   let reporepo_path =
-    match reporepo_path with
-    | Some p -> p
-    | None -> Source.Reporepo.env_path ()
+    match reporepo_path with Some p -> p | None -> Source.Reporepo.env_path ()
   in
   let reporepo_url =
-    match reporepo_url with
-    | Some u -> u
-    | None -> Source.Reporepo.env_url ()
+    match reporepo_url with Some u -> u | None -> Source.Reporepo.env_url ()
   in
-  overlay_extras_of_handles ?toolchain ~fs ~sys ~reporepo_path
-    ~reporepo_url handles
+  overlay_extras_of_handles ?toolchain ~fs ~sys ~reporepo_path ~reporepo_url
+    handles
   @ List.map cli_extra_repo_of_url urls
 
 let handles_of_tokens tokens = List.filter (fun s -> not (is_url_like s)) tokens
@@ -184,11 +180,11 @@ let latest_version_in_dirs ~pkg dirs =
         else
           Sys.readdir subdir |> Array.to_list
           |> List.filter_map (fun entry ->
-                 if String.starts_with ~prefix entry then
-                   Some
-                     (String.sub entry (String.length prefix)
-                        (String.length entry - String.length prefix))
-                 else None))
+              if String.starts_with ~prefix entry then
+                Some
+                  (String.sub entry (String.length prefix)
+                     (String.length entry - String.length prefix))
+              else None))
       dirs
     |> List.sort_uniq String.compare
   in

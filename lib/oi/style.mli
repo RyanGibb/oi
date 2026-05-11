@@ -10,7 +10,6 @@ val info : Tty.Style.t
 val header : Tty.Style.t
 val dim : Tty.Style.t
 val accent : Tty.Style.t
-
 val error_string : string Fmt.t
 val warn_string : string Fmt.t
 val ok_string : string Fmt.t

@@ -126,8 +126,8 @@ let strip_compiler_roots_for_override ~override ~toolchain names =
 let classify_with_args ~fs ~sys ~cache ?refresh
     ?(reporter = Build_progress.null) with_deps =
   if with_deps <> [] then
-    reporter.event (Status (Fmt.str "Loading %d --with arg(s)"
-      (List.length with_deps)));
+    reporter.event
+      (Status (Fmt.str "Loading %d --with arg(s)" (List.length with_deps)));
   let urls, pkg_deps = Project.Url.classify_all with_deps in
   let url_project =
     Project.Url.materialize ~reporter ~fs ~sys ~cache ?refresh urls
@@ -195,8 +195,8 @@ let fetch_parallelism ?jobs () =
 (* Pull every layer in [available] from [remote]. UI is decoupled —
    we only emit typed events through [reporter]; the cmdliner layer
    renders them as a multi-line bar (or text, or nothing). *)
-let fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available
-    ~pkg_of () =
+let fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available ~pkg_of
+    () =
   let bytes_received = ref 0L in
   let done_count = ref 0 in
   let lock = Mutex.create () in
@@ -232,16 +232,13 @@ let fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available
             received_ref := received;
             bytes_received :=
               Int64.add !bytes_received (Int64.sub received prev));
-        let total_known =
-          match total with Some t -> t | None -> size
-        in
+        let total_known = match total with Some t -> t | None -> size in
         reporter.event
           (Fetch_progress
              { kind = Layer; key = hash; bytes = received; total = total_known })
       in
       let ok =
-        D10.Layer.pull_remote d10 ~remote ~hash ~session ~on_progress ?sha256
-          ()
+        D10.Layer.pull_remote d10 ~remote ~hash ~session ~on_progress ?sha256 ()
       in
       reporter.event (Fetch_finished { kind = Layer; key = hash });
       let now =
@@ -249,8 +246,7 @@ let fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available
             incr progressed;
             !progressed)
       in
-      reporter.event
-        (Aggregate { phase = Fetching; total; current = now });
+      reporter.event (Aggregate { phase = Fetching; total; current = now });
       if ok then begin
         with_lock (fun () -> incr done_count);
         Logs.info (fun m -> m "Fetched %s from registry" hash)
@@ -258,11 +254,11 @@ let fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available
     available;
   (!done_count, !bytes_received)
 
-let fetch_layer_hashes ?(reporter = Build_progress.null) ?jobs ~session
-    ~remote ~d10 ~index ~hashes ~pkg_of () =
+let fetch_layer_hashes ?(reporter = Build_progress.null) ?jobs ~session ~remote
+    ~d10 ~index ~hashes ~pkg_of () =
   ignore
-    (fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index
-       ~available:hashes ~pkg_of ())
+    (fetch_layers ?jobs ~reporter ~session ~remote ~d10 ~index ~available:hashes
+       ~pkg_of ())
 
 let assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes =
   let d10 = make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key in

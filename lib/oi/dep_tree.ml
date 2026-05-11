@@ -13,16 +13,13 @@ let render ~label_first ~label_ref ~key_of ~children roots =
         let key = key_of n in
         let repeated = Hashtbl.mem expanded key in
         let branch =
-          if is_root then ""
-          else if is_last then "└── "
-          else "├── "
+          if is_root then "" else if is_last then "└── " else "├── "
         in
         let label =
           if repeated then
             Fmt.str "%a"
               (fun ppf () ->
-                Style.dim_string ppf
-                  (Fmt.str "\u{21B0} %s" (label_ref n)))
+                Style.dim_string ppf (Fmt.str "\u{21B0} %s" (label_ref n)))
               ()
           else label_first n
         in
@@ -33,7 +30,7 @@ let render ~label_first ~label_ref ~key_of ~children roots =
           let n_kids = List.length kids in
           let child_indent =
             if is_root then ""
-            else parent_indent ^ (if is_last then "    " else "│   ")
+            else parent_indent ^ if is_last then "    " else "│   "
           in
           List.iteri
             (fun i child ->
