@@ -760,10 +760,15 @@ let archives_cmd =
     match to_dir with
     | Some output ->
         Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(h.fs / output);
-        let n = Oi.D10ir_archives.publish_all ~cache:h.cache ~output in
+        let { Oi.D10ir_archives.linked; present; missing = _ } =
+          Oi.D10ir_archives.publish_all ~cache:h.cache ~output
+        in
         let dst = Oi.D10ir_archives.dst_dir ~output in
-        Fmt.pr "%a %d archive(s) published to %s (%d total in cache)@."
-          Oi.Style.ok_string "✓" n dst (List.length entries)
+        Fmt.pr
+          "%a %d archive(s) at %s (%d new, %d already present; %d total in \
+           cache)@."
+          Oi.Style.ok_string "✓" (linked + present) dst linked present
+          (List.length entries)
     | None -> (
         match c.format with
         | Json -> (

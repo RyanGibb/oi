@@ -18,13 +18,22 @@ val list : cache:Cache.t -> (string * int) list
     archive itself; missing files (e.g. a stale entry without a [stat]) report
     [0]. *)
 
-val publish_all : cache:Cache.t -> output:string -> int
+type publish_counts = { linked : int; present : int; missing : int }
+(** [linked]: archives newly hardlinked/copied into the destination this
+    invocation. [present]: archives already there from a prior run. [missing]:
+    shas the caller named (e.g. via a reporepo opam's [x-d10-archive]) for which
+    no local cache entry exists — silently skipped during publish but surfaced
+    here so callers can warn. [linked + present] is the number of archives [DIR]
+    now contains. *)
+
+val publish_all : cache:Cache.t -> output:string -> publish_counts
 (** [publish_all ~cache ~output] hardlinks (or copies) every
     [<cache>/d10ir/archives/<sha>.tar.zst] into [<output>/d10ir-archives/].
-    Returns the count of newly-published archives; idempotent on repeat
-    invocations. *)
+    Idempotent on repeat invocations. *)
 
-val publish_shas : cache:Cache.t -> output:string -> string list -> int
+val publish_shas :
+  cache:Cache.t -> output:string -> string list -> publish_counts
 (** [publish_shas ~cache ~output shas] publishes only the named shas (filenames
-    are [<sha>.tar.zst]). Used by handle-scoped commands that bake a focused
-    subset and ship just those archives. *)
+    are [<sha>.tar.zst]). Used by handle-scoped commands that publish the
+    archives the reporepo overlays reference, leaving stale entries from older
+    bakes out of [DIR]. *)

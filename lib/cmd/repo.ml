@@ -1006,9 +1006,19 @@ module Bake = struct
           Fmt.pr "  Stripped patches+extra-files from %d baked package(s)@."
             stripped;
         let shas = collect_handle_shas ~reporepo ~handle in
-        let n = Oi.D10ir_archives.publish_shas ~cache ~output:to_dir shas in
-        Fmt.pr "  %a %d archive(s) published to %s/d10ir-archives/@."
-          Oi.Style.ok_string "✓" n to_dir
+        let { Oi.D10ir_archives.linked; present; missing } =
+          Oi.D10ir_archives.publish_shas ~cache ~output:to_dir shas
+        in
+        let total = linked + present in
+        Fmt.pr
+          "  %a %d archive(s) at %s/d10ir-archives/ (%d new, %d already \
+           present)@."
+          Oi.Style.ok_string "✓" total to_dir linked present;
+        if missing > 0 then
+          Fmt.pr
+            "  %a %d archive(s) referenced by %s opams but not in local cache; \
+             run [oi repo bump %s] to bake them@."
+            Oi.Style.warn_string "!" missing handle handle
       in
       Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / to_dir);
       (match handle_opt with

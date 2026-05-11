@@ -64,45 +64,58 @@ let list ~cache =
             Some (sha, size))
     |> List.sort (fun (a, _) (b, _) -> String.compare a b)
 
+(* Result of a publish pass. [linked]: archives newly hardlinked/copied
+   into the destination this invocation. [present]: archives already
+   there from a prior run. [missing]: shas the caller named (e.g. via a
+   reporepo opam's [x-d10-archive]) for which no local cache entry
+   exists — those are silently skipped during publish but surfaced here
+   so callers can warn. *)
+type publish_counts = { linked : int; present : int; missing : int }
+
+let zero_counts = { linked = 0; present = 0; missing = 0 }
+
+let ensure_dst output =
+  let dst = dst_dir ~output in
+  (try Unix.mkdir dst 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  dst
+
+(* Process [names] under [src]: hardlink-or-copy each existing
+   [.tar.zst] into [dst]. Counts linked / already-present / missing
+   (named but not in [src]). *)
+let publish_files ~src ~dst names =
+  List.fold_left
+    (fun acc name ->
+      let sp = src / name in
+      let dp = dst / name in
+      if not (Sys.file_exists sp) then { acc with missing = acc.missing + 1 }
+      else if Sys.file_exists dp then { acc with present = acc.present + 1 }
+      else if publish_one ~src:sp ~dst:dp then
+        { acc with linked = acc.linked + 1 }
+      else acc)
+    zero_counts names
+
 (* Publish every [<sha>.tar.zst] under [<cache>/d10ir/archives/] into
-   [<output>/d10ir-archives/]. Returns the count of newly-linked /
-   copied entries. Files that already exist at the destination are
-   left alone (idempotent on repeat invocations). *)
+   [<output>/d10ir-archives/]. Idempotent on repeat invocations. *)
 let publish_all ~cache ~output =
   let src = local_dir ~cache in
-  if not (Sys.file_exists src) then 0
-  else begin
-    let dst = dst_dir ~output in
-    (try Unix.mkdir dst 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  if not (Sys.file_exists src) then zero_counts
+  else
+    let dst = ensure_dst output in
     let entries =
-      try Sys.readdir src |> Array.to_list with Sys_error _ -> []
+      try
+        Sys.readdir src |> Array.to_list
+        |> List.filter (fun n -> Filename.check_suffix n ".tar.zst")
+      with Sys_error _ -> []
     in
-    List.fold_left
-      (fun n name ->
-        if
-          Filename.check_suffix name ".tar.zst"
-          && publish_one ~src:(src / name) ~dst:(dst / name)
-        then n + 1
-        else n)
-      0 entries
-  end
+    publish_files ~src ~dst entries
 
 (* Publish only the [<sha>.tar.zst]s named in [shas]. Used by
-   [oi repo bake HANDLE --to=DIR] which bakes a focused subset and
-   ships just those archives, leaving the rest of [<cache>/d10ir/
-   archives/] (perhaps from older runs) out of [DIR]. *)
+   [oi repo bake [HANDLE] --to=DIR] which publishes the archives the
+   reporepo overlays reference, leaving stale entries from older runs
+   out of [DIR]. *)
 let publish_shas ~cache ~output shas =
-  if shas = [] then 0
-  else begin
+  if shas = [] then zero_counts
+  else
     let src = local_dir ~cache in
-    let dst = dst_dir ~output in
-    (try Unix.mkdir dst 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-    List.fold_left
-      (fun n sha ->
-        let name = sha ^ ".tar.zst" in
-        let sp = src / name in
-        if Sys.file_exists sp && publish_one ~src:sp ~dst:(dst / name) then
-          n + 1
-        else n)
-      0 shas
-  end
+    let dst = ensure_dst output in
+    publish_files ~src ~dst (List.map (fun sha -> sha ^ ".tar.zst") shas)

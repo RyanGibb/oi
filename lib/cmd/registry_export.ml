@@ -106,10 +106,14 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   finalize_sqlite_for_publish index_path;
   Oi.Say.field "index" "%s: %d layers, %d binaries, %d tarball(s)" os_key
     s.layers s.binaries s.tarballs;
-  let n_d10ir = export_d10ir_archives ~cache ~output in
+  let { Oi.D10ir_archives.linked; present; missing = _ } =
+    export_d10ir_archives ~cache ~output
+  in
+  let n_d10ir = linked + present in
   if n_d10ir > 0 then
-    Oi.Say.field "d10ir-archives" "%d archive(s) at %s/d10ir-archives/" n_d10ir
-      output;
+    Oi.Say.field "d10ir-archives"
+      "%d archive(s) at %s/d10ir-archives/ (%d new, %d already present)" n_d10ir
+      output linked present;
   (* Manifest = Provenance ⨝ Audit. Provenance gives us one entry per
      successfully committed layer with its content fields; the audit log
      gives us a [callers[]] history per layer. Failed-build events that
