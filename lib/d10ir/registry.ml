@@ -82,6 +82,41 @@ let do_fetch ~fs ~session ~cache_root ~remote ~sha ~dst =
     false
   end
 
+(* Retry policy for archive fetches: the registry can return slow / wedged
+   connections (the previous HTTP request hit its 600s cap and was
+   cancelled), and a fresh attempt with a fresh socket often succeeds.
+   Defaults: 3 attempts with 2s / 4s backoff between them. Set
+   [OI_ARCHIVE_RETRIES=N] to override; [N=1] effectively disables retries. *)
+let default_max_attempts = 3
+
+let max_attempts () =
+  match Sys.getenv_opt "OI_ARCHIVE_RETRIES" with
+  | Some s -> (
+      match int_of_string_opt s with
+      | Some n when n >= 1 -> n
+      | _ -> default_max_attempts)
+  | None -> default_max_attempts
+
+let do_fetch_with_retries ~fs ~session ~cache_root ~remote ~sha ~dst =
+  let attempts = max_attempts () in
+  let rec loop attempt delay =
+    if do_fetch ~fs ~session ~cache_root ~remote ~sha ~dst then begin
+      if attempt > 1 then
+        Log.app (fun m ->
+            m "fetch %s succeeded on attempt %d/%d" sha attempt attempts);
+      true
+    end
+    else if attempt < attempts then begin
+      Log.warn (fun m ->
+          m "fetch %s failed (attempt %d/%d); retrying in %.0fs" sha attempt
+            attempts delay);
+      Unix.sleepf delay;
+      loop (attempt + 1) (delay *. 2.0)
+    end
+    else false
+  in
+  loop 1 2.0
+
 let pull ~fs ~session ~cache_root ~remote ~sha =
   let dst = archive_path ~cache_root ~sha in
   if Sys.file_exists dst then true
@@ -93,7 +128,9 @@ let pull ~fs ~session ~cache_root ~remote ~sha =
         Fun.protect
           ~finally:(fun () -> In_flight.release sha u !ok)
           (fun () ->
-            let r = do_fetch ~fs ~session ~cache_root ~remote ~sha ~dst in
+            let r =
+              do_fetch_with_retries ~fs ~session ~cache_root ~remote ~sha ~dst
+            in
             ok := r;
             r)
 
