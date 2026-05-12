@@ -223,22 +223,46 @@ let s3_access_key_secret = "s3-access-key"
 let s3_secret_key_secret = "s3-secret-key"
 
 (* The single shell command that drives [oi docker --all]'s real work
-   inside one distro container: synthesise [~/.s3cfg] from mounted
-   secrets, run the full registry build into [/registry], and push the
-   tree to S3. Used identically by the Dockerfile output (mounted via
-   BuildKit secrets) and the obuilder spec (mounted via [(secrets …)]).
+   inside one distro container: synthesise an [s3cmd] config from
+   mounted secrets, run the full registry build into [/registry], and
+   push the tree to S3. Used identically by the Dockerfile output
+   (mounted via BuildKit secrets) and the obuilder spec (mounted via
+   [(secrets …)]).
+
    Secrets are read fresh from their [target=…] mount path and never
-   land on the image filesystem: the [~/.s3cfg] write and the sync run
-   in the same shell, and a [trap] scrubs the file on exit. *)
+   land on the image filesystem: the config is written under [/tmp],
+   the build + sync both reference it via [-c PATH], and the final
+   step is an unconditional [rm -f] of that path. The cleanup runs
+   even when the build or sync fails — we collect each step's exit
+   code into [RC] and only [exit $RC] after the [rm], so a failed
+   sync still purges the config from this layer.
+
+   The config goes to a fixed [/tmp] path (not [$HOME/.s3cfg])
+   because obuilder typically runs the build as a non-root user
+   (e.g. [opam]) — relying on HOME would write under one user and
+   have s3cmd look under another. [-c PATH] is HOME-agnostic.
+
+   Setup uses [set -e]: if either secret file is missing or empty
+   (typical cause: forgot to pass [--secret s3-access-key=<file>]
+   to [obuilder build] / [docker build]), bail out immediately with
+   a clear message instead of writing a config with empty keys and
+   letting s3cmd fail later with the opaque [Configuration file not
+   available] error. [set -e] is disabled before [oi build] / [s3cmd]
+   so we can capture their exit codes and still run [rm]. *)
 let build_sync_shell () =
   Printf.sprintf
-    "set -eu; trap 'rm -f /root/.s3cfg' EXIT; printf '[default]\\naccess_key = \
-     %%s\\nsecret_key = %%s\\n' \"$(cat /run/secrets/%s)\" \"$(cat \
-     /run/secrets/%s)\" > /root/.s3cfg; chmod 600 /root/.s3cfg; \
+    "set -eu; S3CFG=/tmp/oi-s3cfg; ACCESS=$(cat /run/secrets/%s); SECRET=$(cat \
+     /run/secrets/%s); [ -n \"$ACCESS\" ] && [ -n \"$SECRET\" ] || { echo \
+     'oi docker: %s and %s secrets must be supplied and non-empty (pass via \
+     --secret to obuilder build / docker build)' >&2; exit 78; }; printf \
+     '[default]\\naccess_key = %%s\\nsecret_key = %%s\\n' \"$ACCESS\" \
+     \"$SECRET\" > \"$S3CFG\"; chmod 600 \"$S3CFG\"; set +e; \
      OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all \
-     --use-registry=archives --export /registry; s3cmd sync --skip-existing \
-     /registry/ %s"
-    s3_access_key_secret s3_secret_key_secret s3_bucket
+     --use-registry=archives --export /registry; RC=$?; [ $RC -eq 0 ] && { \
+     s3cmd -c \"$S3CFG\" sync --skip-existing /registry/ %s; RC=$?; }; rm -f \
+     \"$S3CFG\"; exit $RC"
+    s3_access_key_secret s3_secret_key_secret s3_access_key_secret
+    s3_secret_key_secret s3_bucket
 
 (* Single-distro Dockerfile: distro stage with oi + s3cmd, then one
    final RUN that uses BuildKit secret + cache mounts to bake the
@@ -363,8 +387,9 @@ let sexp_escape s =
 
 (* Per-distro obuilder spec: same multi-stage shape — install depexts,
    fetch the static [oi] binary, then a single [(run …)] that mounts
-   the S3 secrets and the d10ir caches, writes [~/.s3cfg], runs the
-   registry build, and pushes the tree to S3.
+   the S3 secrets and the d10ir caches, writes the s3cmd config to
+   [/tmp/oi-s3cfg], runs the registry build, and pushes the tree to S3
+   via [s3cmd -c /tmp/oi-s3cfg].
 
    [(secrets …)] mounts the two named keys at [/run/secrets/<id>]; the
    build shell reads them via [cat] (matching the Dockerfile path) and
