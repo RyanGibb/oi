@@ -1055,10 +1055,79 @@ let handle_event s (e : Oi.Build_progress.event) =
   | Build e -> handle_build_event s e
   | Build_summary _ -> ()
 
+(* -- Plain-text reporter for non-TTY / CI runs --------------------------
+
+   When the bar is disabled (no TTY, e.g. under [docker build] or a CI
+   runner) we'd otherwise emit nothing for the duration of the build.
+   This reporter narrates phase transitions and per-node outcomes via
+   the standard [Log.app] / [Log.info] sinks so the transcript shows
+   progress. *)
+
+let plain_reporter () : Oi.Build_progress.reporter =
+  let log_src = Logs.Src.create "oi.build" in
+  let module L = (val Logs.src_log log_src : Logs.LOG) in
+  let phase_label = function
+    | Oi.Build_progress.Solving -> "solving"
+    | Fetching -> "fetching"
+    | Baking -> "baking"
+    | Building -> "building"
+    | Assembling -> "assembling"
+  in
+  let event (e : Oi.Build_progress.event) =
+    match e with
+    | Phase_started { phase; label } ->
+        L.app (fun m -> m "▸ %s: %s" (phase_label phase) label)
+    | Phase_done phase -> L.info (fun m -> m "✓ %s done" (phase_label phase))
+    | Status msg when msg <> "" -> L.info (fun m -> m "  %s" msg)
+    | Status _ -> ()
+    | Total_estimate { fetches; builds; _ } ->
+        L.app (fun m -> m "▸ Plan: %d fetches, %d builds" fetches builds)
+    | Solve_started { label } -> L.info (fun m -> m "  solving %s" label)
+    | Solve_finished { label } -> L.info (fun m -> m "  solved %s" label)
+    | Fetch_started { key; pkg; _ } ->
+        L.info (fun m -> m "  fetch %s (%s)" pkg key)
+    | Fetch_finished { key; _ } -> L.info (fun m -> m "  fetched %s" key)
+    | Plan_ready _ -> ()
+    | Aggregate _ -> ()
+    | Fetch_progress _ -> ()
+    | Build de -> (
+        match de with
+        | Plan_started { total } ->
+            L.app (fun m -> m "▸ Building %d package(s)" total)
+        | Node_started { node } ->
+            L.info (fun m ->
+                m "  → %s.%s" node.package.name node.package.version)
+        | Node_phase _ -> ()
+        | Node_queued _ -> ()
+        | Node_cached { node } ->
+            L.info (fun m ->
+                m "  ✓ %s.%s cached" node.package.name node.package.version)
+        | Node_built { node; duration_s; _ } ->
+            L.app (fun m ->
+                m "  ✓ %s.%s built (%.1fs)" node.package.name
+                  node.package.version duration_s)
+        | Node_failed { node; phase; log_path; _ } ->
+            L.app (fun m ->
+                m "  ✗ %s.%s failed in phase %s — see %s" node.package.name
+                  node.package.version
+                  (D10ir.Direct.phase_to_string phase)
+                  log_path)
+        | Node_skipped { node; reason } ->
+            L.info (fun m ->
+                m "  ⊘ %s.%s skipped (%s)" node.package.name
+                  node.package.version reason)
+        | Plan_done { built; cached; failed; skipped } ->
+            L.app (fun m ->
+                m "▸ Built %d  Cached %d  Failed %d  Skipped %d" built cached
+                  failed skipped))
+    | Build_summary _ -> ()
+  in
+  { event }
+
 (* -- Lifecycle --------------------------------------------------------- *)
 
 let with_ui ?(target = "") ~clock ~enabled f =
-  if not enabled then f Oi.Build_progress.null
+  if not enabled then f (plain_reporter ())
   else begin
     let cfg =
       Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()

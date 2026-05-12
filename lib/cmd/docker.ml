@@ -88,9 +88,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
   Oi.Say.info "%s" oi_path;
   List.iter
     (fun (_, df_path, spec_path, n) ->
-      let suffix =
-        if n = 0 then "" else Fmt.str "  (%d overlay depexts)" n
-      in
+      let suffix = if n = 0 then "" else Fmt.str "  (%d overlay depexts)" n in
       Oi.Say.info "%s%a" df_path Oi.Style.dim_string suffix;
       Oi.Say.info "%s" spec_path)
     per_distro_paths;
@@ -100,8 +98,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
   Oi.Say.info "docker buildx build -f %s --output type=local,dest=./oi-bin ."
     oi_path;
   Oi.Say.step "Run the build + sync (Docker)";
-  Oi.Say.info
-    "S3_ACCESS_KEY=… S3_SECRET_KEY=… docker compose build   %a"
+  Oi.Say.info "S3_ACCESS_KEY=… S3_SECRET_KEY=… docker compose build   %a"
     Oi.Style.dim_string
     "# builds each image, runs oi build --all and s3cmd sync"
 

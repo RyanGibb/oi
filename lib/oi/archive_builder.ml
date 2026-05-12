@@ -110,8 +110,7 @@ let ensure_dune_project_version ~build_dir ~opam_version ~url_opt =
   if not (Sys.file_exists path) then ()
   else
     let content =
-      try In_channel.with_open_text path In_channel.input_all
-      with _ -> ""
+      try In_channel.with_open_text path In_channel.input_all with _ -> ""
     in
     let already_has_version =
       String.split_on_char '\n' content

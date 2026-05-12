@@ -4,19 +4,23 @@
     exit status, aligned with [opam] where the meaning matches:
 
     {table
-    {tr {th [oi]} {th opam} {th meaning}}
-    {tr {td [0]} {td [0]} {td success}}
-    {tr {td [1]} {td [1]} {td generic / unspecified failure ({!Msg})}}
-    {tr {td [5]} {td [5]} {td system error (out of disk, permission, …)}}
-    {tr {td [10]} {td [10]} {td configuration error ({!Config_error})}}
-    {tr {td [20]} {td [20]} {td no solver solution ({!No_solution})}}
-    {tr {td [30]} {td [30]} {td fetch / sync failure ({!Fetch_failed})}}
-    {tr {td [31]} {td [31]} {td package build failed ({!Build_failed})}}
-    {tr {td [50]} {td [50]} {td missing depext (system package absent)}}
-    {tr {td [65]} {td [65]} {td not-found ({!Not_found}: package, binary, layer)}}
-    {tr {td [99]} {td [99]} {td internal error}}
-    {tr {td [124]} {td [-]} {td cmdliner argument-parse error (built-in)}}
-    {tr {td [130]} {td [-]} {td interrupted (SIGINT/SIGTERM)}}
+      {tr {th [oi] } {th opam } {th meaning } }
+      {tr {td [0] } {td [0] } {td success } }
+      {tr {td [1] } {td [1] } {td generic / unspecified failure ({!Msg}) } }
+      {tr {td [5] } {td [5] } {td system error (out of disk, permission, …) } }
+      {tr {td [10] } {td [10] } {td configuration error ({!Config_error}) } }
+      {tr {td [20] } {td [20] } {td no solver solution ({!No_solution}) } }
+      {tr {td [30] } {td [30] } {td fetch / sync failure ({!Fetch_failed}) } }
+      {tr {td [31] } {td [31] } {td package build failed ({!Build_failed}) } }
+      {tr {td [50] } {td [50] } {td missing depext (system package absent) } }
+      {tr
+        {td [65] }
+        {td [65] }
+        {td not-found ({!Not_found}: package, binary, layer) }
+      }
+      {tr {td [99] } {td [99] } {td internal error } }
+      {tr {td [124] } {td [-] } {td cmdliner argument-parse error (built-in) } }
+      {tr {td [130] } {td [-] } {td interrupted (SIGINT/SIGTERM) } }
     } *)
 
 (** Stable categorisation of every error. The constructor is what callers raise

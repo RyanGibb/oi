@@ -1,20 +1,18 @@
-(** Produce a single tarball per package_plan that the d10ir Direct
-    executor can unpack and build from.
+(** Produce a single tarball per package_plan that the d10ir Direct executor can
+    unpack and build from.
 
     Pipeline:
-    + {!Execute.fetch_phase}: primary source + extra sources →
-      [p.build_dir].
+    + {!Execute.fetch_phase}: primary source + extra sources → [p.build_dir].
     + {!Execute.copy_extra_files}: opam [extra-files:] → [p.build_dir].
     + {!Execute.apply_patches}: [patch -p1] for each patch.
-    + {!Execute.apply_substs}: opam [%{var}%] substitutions written into
-      the source tree (using the planning-prefix sentinel for [%{prefix}%]
-      and friends).
-    + tar [p.build_dir] into a deterministic archive, sha256 it, move
-      to the cache.
+    + {!Execute.apply_substs}: opam [%{var}%] substitutions written into the
+      source tree (using the planning-prefix sentinel for [%{prefix}%] and
+      friends).
+    + tar [p.build_dir] into a deterministic archive, sha256 it, move to the
+      cache.
 
-    Archives are stored in [<cache_root>/d10ir/archives/<sha256>.tar].
-    The same archive is reused across packages whose contents hash to
-    the same sha256. *)
+    Archives are stored in [<cache_root>/d10ir/archives/<sha256>.tar]. The same
+    archive is reused across packages whose contents hash to the same sha256. *)
 
 type built = {
   path : string;  (** Absolute path to the archive file. *)

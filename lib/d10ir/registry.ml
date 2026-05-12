@@ -141,8 +141,28 @@ type prefetch_summary = {
   missing : string list;
 }
 
-let prefetch ~clock ~fs ~session ~cache_root ~remote ?(max_fibers = 16) shas =
+(* Per-host concurrency for archive pulls. Cloudflare-fronted hosts
+   start refusing extra streams / opening new TCP connections once a
+   single client crosses ~8 in-flight requests, and once those
+   connections wedge they hit [OI_HTTP_TIMEOUT=600s] before failing.
+   Two is enough to overlap latency without tripping the threshold;
+   override via [OI_HTTP_PARALLEL=N]. *)
+let default_max_fibers = 2
+
+let env_max_fibers () =
+  match Sys.getenv_opt "OI_HTTP_PARALLEL" with
+  | Some s -> (
+      match int_of_string_opt s with Some n when n >= 1 -> Some n | _ -> None)
+  | None -> None
+
+let prefetch ~clock ~fs ~session ~cache_root ~remote ?max_fibers shas =
   let _ = clock in
+  let max_fibers =
+    match max_fibers with
+    | Some n -> n
+    | None ->
+        Stdlib.Option.value (env_max_fibers ()) ~default:default_max_fibers
+  in
   let fetched = Atomic.make 0 in
   let cached = Atomic.make 0 in
   let failed = Atomic.make 0 in
