@@ -31,8 +31,8 @@ depends: [
   "parsexp"
   "sexplib0"
   "progress"
-  "dockerfile" {>= "8.3.0"}
-  "dockerfile-opam" {>= "8.3.0"}
+  "dockerfile" {>= "8.3.9"}
+  "dockerfile-opam" {>= "8.3.9"}
   "odoc" {with-doc}
 ]
 build: [

@@ -33,4 +33,4 @@
   (opam-client (>= 2.2.0)) (opam-repository (>= 2.2.0))
   (opam-0install (>= 0.4)) nox-tty nox-tty-eio nox-xdg
   cmdliner fmt logs jsont bytesrw sqlite3 parsexp sexplib0 progress
-  (dockerfile (>= 8.3.0)) (dockerfile-opam (>= 8.3.0))))
+  (dockerfile (>= 8.3.9)) (dockerfile-opam (>= 8.3.9))))
