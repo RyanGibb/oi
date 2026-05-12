@@ -25,7 +25,7 @@ let default_distros : Registry_docker.Distro.t list =
     `Alpine `Latest;
     `Debian `Stable;
     `Ubuntu `V24_04;
-    `Ubuntu `V25_10;
+    `Ubuntu `V26_10;
     `Fedora `Latest;
   ]
 
