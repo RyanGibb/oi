@@ -84,10 +84,7 @@ let tail_of_file ?(lines = n_tail_lines) ~path () =
   if not (Sys.file_exists path) then None
   else
     try
-      let ic = open_in path in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr ic)
-        (fun () ->
+      In_channel.with_open_text path (fun ic ->
           let len = in_channel_length ic in
           let buf_size = min len 64_000 in
           seek_in ic (len - buf_size);

@@ -65,39 +65,45 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
   let per_distro_paths =
     List.map
       (fun d ->
-        let fname = Registry_docker.one_distro_filename d in
-        let path = output / fname in
         let overlay_depexts =
           Stdlib.Option.value (List.assoc_opt d per_distro_depexts) ~default:[]
         in
+        let df_path = output / Registry_docker.one_distro_filename d in
         let df = Registry_docker.dockerfile_one_distro ~overlay_depexts d in
-        Registry_docker.write_dockerfile path df;
-        (d, path, List.length overlay_depexts))
+        Registry_docker.write_dockerfile df_path df;
+        let spec_path = output / Registry_docker.one_distro_spec_filename d in
+        let spec_body =
+          Registry_docker.obuilder_spec_one_distro ~overlay_depexts d
+        in
+        Registry_docker.write_file spec_path spec_body;
+        (d, df_path, spec_path, List.length overlay_depexts))
       default_distros
   in
   let compose_path = output / "docker-compose.yml" in
   let compose_yaml =
-    Registry_docker.docker_compose_yaml ~distros:default_distros
-      ~registry_host_path:"./registry" ()
+    Registry_docker.docker_compose_yaml ~distros:default_distros ()
   in
   Registry_docker.write_file compose_path compose_yaml;
   Oi.Say.step "Wrote";
   Oi.Say.info "%s" oi_path;
   List.iter
-    (fun (_, path, n) ->
-      if n = 0 then Oi.Say.info "%s" path
-      else
-        Oi.Say.info "%s  %a" path Oi.Style.dim_string
-          (Fmt.str "(%d overlay depexts)" n))
+    (fun (_, df_path, spec_path, n) ->
+      let suffix =
+        if n = 0 then "" else Fmt.str "  (%d overlay depexts)" n
+      in
+      Oi.Say.info "%s%a" df_path Oi.Style.dim_string suffix;
+      Oi.Say.info "%s" spec_path)
     per_distro_paths;
   Oi.Say.info "%s" compose_path;
   Oi.Say.newline ();
   Oi.Say.step "Static oi release binary";
   Oi.Say.info "docker buildx build -f %s --output type=local,dest=./oi-bin ."
     oi_path;
-  Oi.Say.step "Run the build + export";
-  Oi.Say.info "docker compose up --build   %a" Oi.Style.dim_string
-    "# writes ./registry/<os_key>/"
+  Oi.Say.step "Run the build + sync (Docker)";
+  Oi.Say.info
+    "S3_ACCESS_KEY=… S3_SECRET_KEY=… docker compose build   %a"
+    Oi.Style.dim_string
+    "# builds each image, runs oi build --all and s3cmd sync"
 
 let cmd =
   let run (c : Terms.common) refresh registry oi_version no_recipe
@@ -126,11 +132,14 @@ let cmd =
     if targets <> [] && test_mode then
       Oi.Error.config_error
         "oi docker: --test and positional TARGET(s) are mutually exclusive";
-    if obuilder && (all || test_mode || no_recipe || targets = []) then
+    if obuilder && (test_mode || no_recipe || (targets = [] && not all)) then
       Oi.Error.config_error
-        "oi docker --obuilder: only supported with positional TARGET(s) and \
-         without --no-recipe/--all/--test (project-mode obuilder isn't wired \
-         up yet).";
+        "oi docker --obuilder: supported with --all or positional TARGET(s); \
+         --no-recipe/--test/project-mode aren't wired up yet.";
+    if obuilder && all then
+      Oi.Say.info
+        "--obuilder is implied by --all (both Dockerfiles and obuilder specs \
+         are emitted unconditionally).";
     let cwd_s, _ = Workspace.resolved_cwd fs in
     if all then
       let dir = Stdlib.Option.value output ~default:cwd_s in

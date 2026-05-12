@@ -28,21 +28,17 @@ let publish_one ~src ~dst =
       true
     with Unix.Unix_error _ -> (
       try
-        let ic = open_in_bin src in
-        let oc = open_out_bin dst in
-        let buf = Bytes.create 65536 in
-        let rec loop () =
-          let n = input ic buf 0 (Bytes.length buf) in
-          if n > 0 then begin
-            Stdlib.output oc buf 0 n;
-            loop ()
-          end
-        in
-        Fun.protect
-          ~finally:(fun () ->
-            close_in_noerr ic;
-            close_out_noerr oc)
-          loop;
+        In_channel.with_open_bin src (fun ic ->
+            Out_channel.with_open_bin dst (fun oc ->
+                let buf = Bytes.create 65536 in
+                let rec loop () =
+                  let n = In_channel.input ic buf 0 (Bytes.length buf) in
+                  if n > 0 then begin
+                    Out_channel.output oc buf 0 n;
+                    loop ()
+                  end
+                in
+                loop ()));
         true
       with _ -> false)
 

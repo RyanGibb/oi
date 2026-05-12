@@ -104,13 +104,10 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
   | Some key -> (
       match
         try
-          let ic = open_in_bin (fast_cache_path key) in
-          Fun.protect
-            ~finally:(fun () -> close_in_noerr ic)
-            (fun () ->
-              Some
-                (Marshal.from_channel ic
-                  : string * string * (string * bool) option))
+          Some
+            (In_channel.with_open_bin (fast_cache_path key) (fun ic ->
+                 (Marshal.from_channel ic
+                   : string * string * (string * bool) option)))
         with _ -> None
       with
       | Some (bin_path, prefix, tc_info) when Sys.file_exists bin_path ->

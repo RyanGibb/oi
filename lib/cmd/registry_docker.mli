@@ -3,9 +3,11 @@
     Emits a standalone static musl build of [oi] on alpine (for CI / manual
     release builds) plus one runnable per-distro image that curls the latest
     [oi] binary from the GitHub releases page and ships the target's depexts.
-    The actual [oi build --all --export /out] invocation lives in
-    [docker-compose.yml] as a [command:] override, so the same image can run
-    against different reporepo pins without rebuilding. *)
+    Each per-distro image bakes the full [oi build --refresh --all
+    --export /registry] followed by [s3cmd sync --skip-existing /registry/
+    s3://oiu/] into its build, using BuildKit secrets to supply the S3
+    credentials. The parallel obuilder spec emitter ({!obuilder_spec_one_distro})
+    drives the same flow under [obuilder build --secret …]. *)
 
 module Distro = Dockerfile_opam.Distro
 
@@ -17,14 +19,30 @@ val dockerfile_oi : src_context:string -> Dockerfile.t
 val dockerfile_one_distro :
   ?overlay_depexts:string list -> Distro.t -> Dockerfile.t
 (** Per-distro build image. Installs the generic build toolchain (compilers,
-    headers, [curl]) together with [overlay_depexts] (the union of [depexts:]
-    declared across every reporepo handle: solved root closures for handles with
-    [x-root-packages] / [x-oi-toolchain-roots], and every package in the
-    overlay's clone for handles that declare neither — see
+    headers, [curl], [s3cmd]) together with [overlay_depexts] (the union of
+    [depexts:] declared across every reporepo handle: solved root closures for
+    handles with [x-root-packages] / [x-oi-toolchain-roots], and every package
+    in the overlay's clone for handles that declare neither — see
     {!Build.compute_overlay_depexts_per_distro}). It then fetches the latest
     statically linked [oi-linux-<arch>] and [oix-linux-<arch>] from the [oi]
-    GitHub releases page and sets [/work] as the working directory. No [CMD] is
-    set: the compose file drives the build+export steps. *)
+    GitHub releases page, and a final BuildKit-mounted RUN writes [~/.s3cfg]
+    from the supplied secrets, runs [oi build --refresh --all --export
+    /registry], and pushes the tree to [s3://oiu/]. The secrets
+    ([s3-access-key], [s3-secret-key]) must be supplied via
+    [docker build --secret] or compose's [secrets:] block. *)
+
+val obuilder_spec_one_distro :
+  ?overlay_depexts:string list -> Distro.t -> string
+(** Per-distro obuilder spec parallel to {!dockerfile_one_distro}. Returns the
+    spec body as an s-expression string; emit via {!write_file}. Same flow:
+    install depexts + s3cmd, fetch the static oi binary, then one [(run …)]
+    that mounts the cache + secrets and drives [oi build --export /registry] +
+    [s3cmd sync]. Secrets are mounted at [/run/secrets/<id>] matching the
+    Dockerfile path. *)
+
+val one_distro_spec_filename : Distro.t -> string
+(** Filename (without directory) for a per-distro obuilder spec, e.g.
+    [alpine-3.23.spec]. *)
 
 val dockerfile_project :
   ?overlay_depexts:string list ->
@@ -55,22 +73,14 @@ val one_distro_filename : Distro.t -> string
 (** Filename (without directory) for a per-distro Dockerfile, e.g.
     [Dockerfile.alpine-3.23]. *)
 
-val docker_compose_yaml :
-  distros:Distro.t list -> registry_host_path:string -> unit -> string
-(** [docker_compose_yaml ~distros ~registry_host_path ()] emits a compose file
-    whose services each bind-mount [registry_host_path] at [/out] and run
-    [oi build --refresh --all --export /out]. Every container owns its own oi
-    state — [oi] auto-clones the reporepo from its configured default URL
-    (overridable via [OI_REPOREPO_URL] in the service environment) on first use
-    — so containers are independent and safe to run in parallel. Layers are
-    tagged with their overlay handle and version in the per-distro sqlite index
-    so clients can scope queries to a specific overlay.
-
-    Each service is generated with [OI_BUILD_PARALLELISM=$(nproc)] in its
-    command and a high [nofile] ulimit so the in-container build uses every
-    available CPU rather than the [min cpu_count 8] default that
-    {!D10ir.Config.default} applies for macOS fd-limit safety. Suitable for
-    many-core hosts. *)
+val docker_compose_yaml : distros:Distro.t list -> unit -> string
+(** [docker_compose_yaml ~distros ()] emits a compose file whose per-distro
+    services drive the registry build entirely at image-build time. Each
+    service's [build:] block references the per-distro Dockerfile and lists
+    the [s3-access-key] / [s3-secret-key] BuildKit secrets; the top-level
+    [secrets:] section reads each from the corresponding host environment
+    variable ([S3_ACCESS_KEY] / [S3_SECRET_KEY]). Run with
+    [S3_ACCESS_KEY=… S3_SECRET_KEY=… docker compose build]. *)
 
 val write_dockerfile : string -> Dockerfile.t -> unit
 (** Serialise a {!Dockerfile.t} to [path] in Dockerfile syntax. *)

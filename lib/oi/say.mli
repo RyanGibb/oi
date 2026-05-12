@@ -31,11 +31,11 @@ val field_list : ?sep:string -> string -> string list -> unit
 
 val progress : string -> unit
 (** [progress msg] writes [msg] in dim style on the current line, replacing
-    whatever was there (via [\r\033[K]) without emitting a newline. Used for
-    in-place high-frequency status updates (e.g. "Fetching layers (12/47,
-    34MB)" during a registry pull). The next non-progress write — typically
-    a {!step} or {!progress_clear} — replaces or overwrites the line.
-    No-op on non-TTY. *)
+    whatever was there (via the ANSI CR + clear-to-eol escape) without emitting
+    a newline. Used for in-place high-frequency status updates (e.g. "Fetching
+    layers (12/47, 34MB)" during a registry pull). The next non-progress
+    write — typically a {!step} or {!progress_clear} — replaces or overwrites
+    the line. No-op on non-TTY. *)
 
 val progress_clear : unit -> unit
 (** Erase the current in-place [progress] line without emitting a newline. Use

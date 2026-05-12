@@ -584,10 +584,9 @@ let cache_lookup ~cache_root ~key : solved option =
   if not (Sys.file_exists path) then None
   else
     try
-      let ic = open_in_bin path in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr ic)
-        (fun () -> Some (Marshal.from_channel ic : solved))
+      Some
+        (In_channel.with_open_bin path (fun ic ->
+             (Marshal.from_channel ic : solved)))
     with exn ->
       Log.info (fun m ->
           m "solve cache: ignoring stale entry %s (%s)" (String.sub key 0 12)

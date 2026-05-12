@@ -110,28 +110,12 @@ let ensure_dune_project_version ~build_dir ~opam_version ~url_opt =
   if not (Sys.file_exists path) then ()
   else
     let content =
-      try
-        let ic = open_in path in
-        Fun.protect
-          ~finally:(fun () -> close_in_noerr ic)
-          (fun () -> really_input_string ic (in_channel_length ic))
+      try In_channel.with_open_text path In_channel.input_all
       with _ -> ""
     in
     let already_has_version =
-      let n = String.length content in
-      let rec at_start_of_line i =
-        if i + 9 > n then false
-        else if String.sub content i 9 = "(version " then true
-        else
-          (* find next newline *)
-          let rec find_nl j =
-            if j >= n then n
-            else if content.[j] = '\n' then j + 1
-            else find_nl (j + 1)
-          in
-          at_start_of_line (find_nl i)
-      in
-      at_start_of_line 0
+      String.split_on_char '\n' content
+      |> List.exists (String.starts_with ~prefix:"(version ")
     in
     if already_has_version then ()
     else
@@ -144,10 +128,8 @@ let ensure_dune_project_version ~build_dir ~opam_version ~url_opt =
       let injected = Fmt.str "\n(version \"%s\")\n" v in
       let new_content = content ^ injected in
       try
-        let oc = open_out path in
-        Fun.protect
-          ~finally:(fun () -> close_out_noerr oc)
-          (fun () -> output_string oc new_content)
+        Out_channel.with_open_text path (fun oc ->
+            Out_channel.output_string oc new_content)
       with _ -> ()
 
 (* Bake requires GNU tar. Reporepo bumps must run on Linux where GNU
@@ -172,30 +154,20 @@ let submodule_paths ~src_dir =
   let gm = Filename.concat src_dir ".gitmodules" in
   if not (Sys.file_exists gm) then []
   else
-    try
-      let ic = open_in gm in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr ic)
-        (fun () ->
-          let rec loop acc =
-            match input_line ic with
-            | exception End_of_file -> List.rev acc
-            | line ->
-                let line = String.trim line in
-                let acc =
-                  match String.index_opt line '=' with
-                  | None -> acc
-                  | Some i ->
-                      let k = String.trim (String.sub line 0 i) in
-                      let v =
-                        String.trim
-                          (String.sub line (i + 1) (String.length line - i - 1))
-                      in
-                      if k = "path" && v <> "" then v :: acc else acc
-                in
-                loop acc
+    let parse_path_line line =
+      let line = String.trim line in
+      match String.index_opt line '=' with
+      | None -> None
+      | Some i ->
+          let k = String.trim (String.sub line 0 i) in
+          let v =
+            String.trim (String.sub line (i + 1) (String.length line - i - 1))
           in
-          loop [])
+          if k = "path" && v <> "" then Some v else None
+    in
+    try
+      In_channel.with_open_text gm In_channel.input_lines
+      |> List.filter_map parse_path_line
     with Sys_error _ -> []
 
 let make_tar_zst ~proc_mgr ~src_dir ~dst_path =
@@ -249,11 +221,9 @@ let build ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10 ~cache_root
      side will overwrite [x-d10-archive] with the new value if it
      diverges. *)
   let archive_hit =
-    match p.d10_archive with
-    | None -> None
-    | Some sha ->
+    Stdlib.Option.bind p.d10_archive (fun sha ->
         let path = archives_dir ~d10 / Fmt.str "%s.tar.zst" sha in
-        if Sys.file_exists path then Some (sha, path) else None
+        if Sys.file_exists path then Some (sha, path) else None)
   in
   match archive_hit with
   | Some (sha, final_path) ->
@@ -307,27 +277,20 @@ let build ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10 ~cache_root
       | _ -> ());
       let final_path = archives_dir ~d10 / Fmt.str "%s.tar.zst" sha in
       (if not (Sys.file_exists final_path) then
-         begin try Sys.rename tmp_path final_path
+         try Sys.rename tmp_path final_path
          with Sys_error _ ->
            (* Cross-fs move? fall back to copy. *)
-           let ic = open_in_bin tmp_path in
-           Fun.protect
-             ~finally:(fun () -> close_in_noerr ic)
-             (fun () ->
-               let oc = open_out_bin final_path in
-               Fun.protect
-                 ~finally:(fun () -> close_out_noerr oc)
-                 (fun () ->
+           In_channel.with_open_bin tmp_path (fun ic ->
+               Out_channel.with_open_bin final_path (fun oc ->
                    let buf = Bytes.create 65536 in
                    let rec loop () =
-                     let n = input ic buf 0 (Bytes.length buf) in
+                     let n = In_channel.input ic buf 0 (Bytes.length buf) in
                      if n > 0 then begin
-                       output oc buf 0 n;
+                       Out_channel.output oc buf 0 n;
                        loop ()
                      end
                    in
                    loop ()))
-         end
        else try Sys.remove tmp_path with _ -> ());
       Log.debug (fun m -> m "archive %s -> %s" p.pkg final_path);
       {

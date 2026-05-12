@@ -6,7 +6,7 @@
       [p.build_dir].
     + {!Execute.copy_extra_files}: opam [extra-files:] → [p.build_dir].
     + {!Execute.apply_patches}: [patch -p1] for each patch.
-    + {!Execute.apply_substs}: opam %{var}% substitutions written into
+    + {!Execute.apply_substs}: opam [%{var}%] substitutions written into
       the source tree (using the planning-prefix sentinel for [%{prefix}%]
       and friends).
     + tar [p.build_dir] into a deterministic archive, sha256 it, move

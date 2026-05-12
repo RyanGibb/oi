@@ -15,8 +15,8 @@
     {tr {td [50]} {td [50]} {td missing depext (system package absent)}}
     {tr {td [65]} {td [65]} {td not-found ({!Not_found}: package, binary, layer)}}
     {tr {td [99]} {td [99]} {td internal error}}
-    {tr {td [124]} {td -} {td cmdliner argument-parse error (built-in)}}
-    {tr {td [130]} {td -} {td interrupted (SIGINT/SIGTERM)}}
+    {tr {td [124]} {td [-]} {td cmdliner argument-parse error (built-in)}}
+    {tr {td [130]} {td [-]} {td interrupted (SIGINT/SIGTERM)}}
     } *)
 
 (** Stable categorisation of every error. The constructor is what callers raise

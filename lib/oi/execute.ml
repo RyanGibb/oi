@@ -115,21 +115,13 @@ let copy_extra_files (p : Plan.package_plan) =
   List.iter
     (fun (basename, src) ->
       let dst = p.build_dir / basename in
-      if Sys.file_exists src && not (Sys.file_exists dst) then begin
+      if Sys.file_exists src && not (Sys.file_exists dst) then
         (* Use a portable read+write rather than [cp] so we don't
            depend on shell tools mid-build. Patches are small text
            files; [Eio.Path.load] / [Eio.Path.save] handle them. *)
-        let ic = open_in_bin src in
-        Fun.protect
-          ~finally:(fun () -> close_in_noerr ic)
-          (fun () ->
-            let len = in_channel_length ic in
-            let bytes = really_input_string ic len in
-            let oc = open_out_bin dst in
-            Fun.protect
-              ~finally:(fun () -> close_out_noerr oc)
-              (fun () -> output_string oc bytes))
-      end)
+        let bytes = In_channel.with_open_bin src In_channel.input_all in
+        Out_channel.with_open_bin dst (fun oc ->
+            Out_channel.output_string oc bytes))
     p.extra_files
 
 (* Apply patches via [OpamFilename.patch] — opam's pure-OCaml patch
