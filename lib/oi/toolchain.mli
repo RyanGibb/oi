@@ -155,3 +155,12 @@ val ensure_installed :
 
     [?reporter] receives a [Status "Installing toolchain <handle>"] event when
     the install actually runs. *)
+
+val is_ready : info -> bool
+(** [is_ready info] is the general predicate for "this toolchain is usable as
+    a fixed prefix on disk". Returns [true] for relocatable toolchains (no
+    fixed prefix to check) and for non-relocatable ones whose install completed
+    (the [.oi-toolchain-ready] marker exists under [install_prefix]). Callers
+    that stage [info.install_prefix] into a build env should gate on this to
+    fail fast with a clear error instead of letting downstream [+ox] builds
+    crash trying to find a compiler that isn't there. *)

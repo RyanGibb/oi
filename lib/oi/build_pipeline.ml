@@ -127,11 +127,34 @@ let expand_targets ~fs ~sys ~reporepo_path ~reporepo_url (targets : target list)
    override wins, then implicit pickup from the union of in-scope
    handles, then the reporepo default. Per-group toolchain selection
    is a corner case [oi build] supports today; we'll thread that in if
-   a caller actually needs it. *)
-let pick_batch_toolchain ~env ~conf ~override ~all_handles =
+   a caller actually needs it.
+
+   [~install:true] is load-bearing for non-relocatable toolchains
+   (oxcaml today): the build pipeline stages the toolchain's
+   [install_prefix] into every consumer's build env, so the prefix
+   has to actually exist on disk before any [+ox] package compiles.
+   Relocatable toolchains short-circuit inside [Toolchain.ensure_installed]
+   (the consumer solve builds the compiler into its own prefix). *)
+let pick_batch_toolchain ?reporter ~env ~conf ~override ~all_handles () =
   let key = List.sort_uniq String.compare all_handles in
-  Pipeline.pick_toolchain ~fs:env.fs ~sys:env.sys ~data_dir:env.data_dir ~conf
-    ~install:false ~override ~handles:key ()
+  let info =
+    Pipeline.pick_toolchain ?reporter ~fs:env.fs ~sys:env.sys
+      ~data_dir:env.data_dir ~conf ~install:true ~override ~handles:key ()
+  in
+  (* Belt-and-braces post-condition. [pick_toolchain ~install:true] calls
+     [Toolchain.ensure_installed], so by the time we get here either
+     the toolchain is relocatable (no fixed prefix needed) or
+     [is_ready] holds. If not, surface a clear error before the per-
+     package builds start spewing "compiler not found" failures. *)
+  (match info with
+  | Some i when not (Toolchain.is_ready i) ->
+      Error.config_error
+        "toolchain %s is not installed at %s — run [oi config] to inspect, \
+         then re-run [oi build] (the install step should have happened \
+         automatically and reporting a bug helps if it didn't)."
+        i.handle i.install_prefix
+  | _ -> ());
+  info
 
 let packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs ?pin_dir
     ?local_packages_dir ~global_handles ~toolchain handles =
@@ -642,8 +665,8 @@ let solve_uncached env ?(reporter = Build_progress.null) (req : request) :
     match req.toolchain with
     | Some i -> Some i
     | None ->
-        pick_batch_toolchain ~env ~conf:req.conf
-          ~override:req.toolchain_override ~all_handles
+        pick_batch_toolchain ~reporter ~env ~conf:req.conf
+          ~override:req.toolchain_override ~all_handles ()
   in
   let conf, _tc_ctx = Pipeline.solver_inputs toolchain req.conf in
   (* Materialise pin sources and CLI / project extras so the
