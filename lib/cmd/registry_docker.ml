@@ -22,10 +22,10 @@ let build_depexts = function
       (* coreutils: oxcaml-compiler's Makefile uses [cp -l -R] to set up
          [_build/runtime_stdlib_install]; busybox cp drops the file
          contents on directory hardlinks, leaving Makefile.config missing.
-         py3-s3cmd is Alpine's package for the [s3cmd] CLI used by the
+         s3cmd is Alpine's package for the [s3cmd] CLI used by the
          final sync step in [--all] builds. *)
       "build-base m4 perl pkgconf autoconf git curl bash patch tar xz zstd \
-       rsync sudo coreutils ca-certificates linux-headers py3-s3cmd"
+       rsync sudo coreutils ca-certificates linux-headers s3cmd"
   | `Apt ->
       "build-essential m4 perl pkg-config autoconf git curl bash patch tar \
        xz-utils zstd rsync sudo ca-certificates s3cmd"
