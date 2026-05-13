@@ -111,7 +111,7 @@ let impl (c : Terms.common) (flags : flags) registry use_registry
           Out_channel.with_open_bin tmp (fun oc ->
               Marshal.to_channel oc entry []);
           Sys.rename tmp path
-        with _ -> ())
+        with Sys_error _ -> ())
   in
   (match fast_key with
   | Some key -> (
@@ -121,7 +121,7 @@ let impl (c : Terms.common) (flags : flags) registry use_registry
             (In_channel.with_open_bin (fast_cache_path key) (fun ic ->
                  (Marshal.from_channel ic
                    : string * string * (string * bool) option)))
-        with _ -> None
+        with Sys_error _ -> None
       with
       | Some (bin_path, prefix, tc_info) when Sys.file_exists bin_path ->
           let tc_ctx =

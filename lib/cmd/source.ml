@@ -36,7 +36,7 @@ let main_source ~packages_dirs (pkg : OpamPackage.t) =
         match OpamFile.OPAM.url opam with
         | None -> None
         | Some u -> Some (OpamFile.URL.url u, OpamFile.URL.checksum u)
-      with _ -> None)
+      with Sys_error _ | Failure _ -> None)
 
 (* Identity key for dedup. Tarballs key on their first declared
    checksum (content-addressed); git URLs key on the URL string
@@ -419,7 +419,7 @@ let cmd =
             |> List.filter (fun n -> n <> "" && n.[0] <> '.')
           with Sys_error _ -> [])
       |> List.filter_map (fun n ->
-          try Some (OpamPackage.Name.of_string n) with _ -> None)
+          try Some (OpamPackage.Name.of_string n) with Failure _ -> None)
       |> OpamPackage.Name.Set.of_list
     in
     let pkgs =
@@ -491,7 +491,7 @@ let cmd =
           Some
             (D10.Sysops.Cmd.run_out sys
                [ "git"; "-C"; path; "rev-parse"; "HEAD" ])
-        with _ -> None
+        with Eio.Exn.Io _ | Failure _ -> None
     in
     write_workspace_files ~output
       ~target_label:(String.concat ", " targets)

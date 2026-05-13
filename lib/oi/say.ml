@@ -10,7 +10,7 @@ let label_width = 12
    (toolchain solve, opam-file parsing) where the next output won't come
    for hundreds of ms or more — without an explicit flush, line-buffered
    stdout silently swallows the marker. *)
-let flush_out () = try Stdlib.flush stdout with _ -> ()
+let flush_out () = try Stdlib.flush stdout with Sys_error _ -> ()
 
 (* Every Say function calls a "pause around emission" hook before
    writing. The default is identity (no-op); the cmdliner layer
@@ -103,7 +103,7 @@ let warn fmt =
     (fun s ->
       interject (fun () ->
           Fmt.epr "%a %s@." Style.pp_warn_string "warning:" s;
-          try Stdlib.flush stderr with _ -> ()))
+          try Stdlib.flush stderr with Sys_error _ -> ()))
     fmt
 
 let error fmt =
@@ -111,7 +111,7 @@ let error fmt =
     (fun s ->
       interject (fun () ->
           Fmt.epr "%a %s@." Style.pp_error_string "error:" s;
-          try Stdlib.flush stderr with _ -> ()))
+          try Stdlib.flush stderr with Sys_error _ -> ()))
     fmt
 
 let newline () =

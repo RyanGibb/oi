@@ -39,9 +39,10 @@ let copy_resolved ~src ~dst =
   let committed = ref false in
   Fun.protect
     ~finally:(fun () ->
-      (try Unix.close ic with _ -> ());
-      (try Unix.close oc with _ -> ());
-      if not !committed then try Unix.unlink tmp with _ -> ())
+      (try Unix.close ic with Unix.Unix_error _ -> ());
+      (try Unix.close oc with Unix.Unix_error _ -> ());
+      if not !committed then
+        try Unix.unlink tmp with Unix.Unix_error _ -> ())
     (fun () ->
       loop ();
       Unix.chmod tmp perm;

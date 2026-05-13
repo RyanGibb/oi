@@ -77,7 +77,9 @@ let pp_depexts ~conf ~packages_dirs ~(plan : Oi.Plan.t) ~os_override =
    contribute one entry each so the info page shows every package's
    synopsis/license/etc., not just the first file's. *)
 let read_local_opams ~cwd =
-  let entries = try Sys.readdir cwd |> Array.to_list with _ -> [] in
+  let entries =
+    try Sys.readdir cwd |> Array.to_list with Sys_error _ -> []
+  in
   entries
   |> List.filter (fun n ->
       Filename.check_suffix n ".opam" && Filename.chop_suffix n ".opam" <> "")
@@ -93,7 +95,7 @@ let read_local_opams ~cwd =
             (OpamPackage.Version.of_string "dev")
         in
         Some (pkg, opam)
-      with _ -> None)
+      with Failure _ | Sys_error _ -> None)
 
 (* Pick the package whose metadata we'll surface on the default info
    page. A CLI target resolves to its action-plan node. For the
@@ -175,7 +177,7 @@ let pp_package_binaries ~cache_root ~os_key ~layer_hash =
   let scan sub =
     let dir = layer_dir / sub in
     if not (Sys.file_exists dir) then []
-    else try Sys.readdir dir |> Array.to_list with _ -> []
+    else try Sys.readdir dir |> Array.to_list with Sys_error _ -> []
   in
   let bins = scan "bin" @ scan "sbin" in
   List.sort_uniq String.compare bins
@@ -394,7 +396,9 @@ let latest_version_of ~pkgs_dir ~name =
             Some (OpamPackage.version p)
           else None)
     in
-    let entries = try Sys.readdir dir |> Array.to_list with _ -> [] in
+    let entries =
+      try Sys.readdir dir |> Array.to_list with Sys_error _ -> []
+    in
     List.fold_left
       (fun acc s ->
         match (acc, parse s) with
@@ -776,7 +780,9 @@ let overlay_cmd ~fs ~cache_root ~os_key ~handle =
     exit 1
   end;
   let latest =
-    let names = try Sys.readdir pkgs_dir |> Array.to_list with _ -> [] in
+    let names =
+      try Sys.readdir pkgs_dir |> Array.to_list with Sys_error _ -> []
+    in
     List.filter_map
       (fun name ->
         Stdlib.Option.map
@@ -795,7 +801,8 @@ let overlay_cmd ~fs ~cache_root ~os_key ~handle =
   let index_path = cache_root / "layers" / "index.db" in
   let db =
     if Sys.file_exists index_path then
-      try Some (D10.Index.open_ ~fs ~path:index_path) with _ -> None
+      try Some (D10.Index.open_ ~fs ~path:index_path)
+      with Failure _ | Sys_error _ -> None
     else None
   in
   let rows, cached, declared =
@@ -848,7 +855,7 @@ let cache_cmd ~fs ~sys ~cache_root ~os_key ~handle =
     if not (Sys.file_exists layers_dir) then []
     else
       let entries =
-        try Sys.readdir layers_dir |> Array.to_list with _ -> []
+        try Sys.readdir layers_dir |> Array.to_list with Sys_error _ -> []
       in
       List.filter_map
         (fun hash ->
@@ -1183,7 +1190,9 @@ let cmd =
             if String.length lower < 4 then []
             else
               List.concat_map
-                (fun dir -> try Sys.readdir dir |> Array.to_list with _ -> [])
+                (fun dir ->
+                  try Sys.readdir dir |> Array.to_list
+                  with Sys_error _ -> [])
                 group.pkgs_dir
               |> List.sort_uniq String.compare
               |> List.filter (fun name ->

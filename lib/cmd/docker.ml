@@ -1,5 +1,9 @@
 open Cmdliner
 
+let log_src = Logs.Src.create "oi.cmd.docker" ~doc:"oi docker command"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 let err_msg fmt = Fmt.kstr (fun s -> Error (`Msg s)) fmt
 
@@ -61,7 +65,11 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~s3
     try
       Build.compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir
         ~refresh ~platform ~distros:default_distros
-    with _ -> List.map (fun d -> (d, [])) default_distros
+    with exn ->
+      Log.warn (fun m ->
+          m "overlay depext probe failed: %s; falling back to no depexts"
+            (Printexc.to_string exn));
+      List.map (fun d -> (d, [])) default_distros
   in
   let per_distro_paths =
     List.map

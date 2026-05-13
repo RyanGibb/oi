@@ -21,7 +21,7 @@ let default =
 let with_env_overrides t =
   let parallel =
     match Sys.getenv_opt "OI_BUILD_PARALLELISM" with
-    | Some s -> ( try max 1 (int_of_string s) with _ -> t.build_parallelism)
+    | Some s -> ( try max 1 (int_of_string s) with Failure _ -> t.build_parallelism)
     | None -> t.build_parallelism
   in
   let keep =

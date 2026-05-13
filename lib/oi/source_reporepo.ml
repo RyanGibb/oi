@@ -175,7 +175,7 @@ let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path ~url
         Retry.with_attempts ~label:(Fmt.str "git pull reporepo at %s" path)
           (fun () ->
             D10.Sysops.Cmd.run sys [ "git"; "-C"; path; "pull"; "--ff-only" ])
-      with _ ->
+      with Eio.Exn.Io _ | Failure _ ->
         Log.warn (fun m ->
             m
               "Failed to refresh reporepo at %s — continuing with existing \
@@ -201,7 +201,7 @@ let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path ~url
           Retry.with_attempts ~label (fun () ->
               D10.Sysops.Cmd.run sys [ "git"; "clone"; url; path ]))
         "git clone %s" url
-    with _ ->
+    with Eio.Exn.Io _ | Failure _ ->
       Error.fail_config_error "failed to clone reporepo from %s into %s" url
         path
   end
@@ -239,7 +239,7 @@ let commit_count ~sys ~path ~base ~head =
     try
       int_of_string
         (git_at_out ~sys ~path [ "rev-list"; "--count"; base ^ ".." ^ head ])
-    with _ -> 0
+    with Failure _ | Eio.Exn.Io _ -> 0
 
 let commit_dirty ~sys ~path ~msg () =
   assert_clone path;
@@ -296,7 +296,8 @@ let push ?(on_step_start = fun _ _ -> ()) ~sys ~path () =
   let push_step =
     let local = git_at_out ~sys ~path [ "rev-parse"; "@" ] in
     let remote =
-      try git_at_out ~sys ~path [ "rev-parse"; "@{u}" ] with _ -> ""
+      try git_at_out ~sys ~path [ "rev-parse"; "@{u}" ]
+      with Eio.Exn.Io _ -> ""
     in
     let ahead = commit_count ~sys ~path ~base:remote ~head:local in
     if ahead = 0 then Step_push { commits = 0 }
@@ -1128,7 +1129,7 @@ let process_one_opam ~fs ~sys ~src_opam_path ~dst_opam_path ~package =
       let reason = Fmt.str "rewrite error: %s" (Printexc.to_string exn) in
       let stub =
         try mark_unavailable (read_src ()) ~reason
-        with _ -> OpamFile.OPAM.empty
+        with Failure _ | Sys_error _ -> OpamFile.OPAM.empty
       in
       (stub, Pkg_unavailable reason)
   in
@@ -1144,7 +1145,8 @@ let scratch_clone ~fs ~sys ~url ~commit =
       [ "git"; "-C"; scratch; "checkout"; "--quiet"; commit ];
     scratch
   with exn ->
-    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch) with _ -> ());
+    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch)
+     with Eio.Exn.Io _ -> ());
     Error.fail_config_error "failed to clone %s at %s: %s" url commit
       (Printexc.to_string exn)
 
@@ -1183,7 +1185,7 @@ let materialise_handle ~fs ~sys ~path ~handle ~url ~commit =
   let scratch = scratch_clone ~fs ~sys ~url ~commit in
   Fun.protect ~finally:(fun () ->
       try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch)
-      with _ -> ())
+      with Eio.Exn.Io _ -> ())
   @@ fun () ->
   let scratch_packages = scratch / "packages" in
   let pkgs = walk_packages_dir scratch_packages in

@@ -566,7 +566,7 @@ module Bump = struct
         |> List.sort compare
       in
       Some ((url, extras), Oi.Keys.read_string_ext Oi.Keys.d10_archive opam)
-    with _ -> None
+    with Failure _ | Sys_error _ -> None
 
   let iter_handle_opams ~reporepo ~handle f =
     let pkgs_dir = reporepo / "v2" / handle / "packages" in
@@ -1019,7 +1019,7 @@ module Bake = struct
     try
       OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
       |> Oi.Keys.read_string_ext Oi.Keys.d10_archive
-    with _ -> None
+    with Failure _ | Sys_error _ -> None
 
   let collect_handle_shas ~reporepo ~handle =
     let acc = ref [] in

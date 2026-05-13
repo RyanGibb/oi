@@ -576,7 +576,7 @@ let all_tarballs db ~os_key =
     match row with
     | [| hash; sha; size_s |] -> (
         try results := (hash, sha, Int64.of_string size_s) :: !results
-        with _ -> ())
+        with Failure _ -> ())
     | _ -> ()
   in
   ignore

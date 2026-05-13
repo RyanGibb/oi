@@ -164,7 +164,10 @@ let packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs
       ~override:toolchain_override ~toolchain global_handles
   in
   let effective = global_handles @ handles |> List.sort_uniq String.compare in
-  let entries = try Source.Reporepo.load ~path:reporepo_path with _ -> [] in
+  let entries =
+    try Source.Reporepo.load ~path:reporepo_path
+    with Sys_error _ | Failure _ -> []
+  in
   let resolved =
     match (toolchain : Toolchain.info option) with
     | None -> (
@@ -616,14 +619,14 @@ let cache_lookup ~cache_root ~key : solved option =
       Log.info (fun m ->
           m "solve cache: ignoring stale entry %s (%s)" (String.sub key 0 12)
             (Printexc.to_string exn));
-      (try Sys.remove path with _ -> ());
+      (try Sys.remove path with Sys_error _ -> ());
       None
 
 let cache_store ~fs ~cache_root ~key (s : solved) : unit =
   let path = cache_path ~cache_root ~key in
   let dir = Filename.dirname path in
   (try Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dir)
-   with _ -> ());
+   with Eio.Exn.Io _ -> ());
   let tmp = path ^ ".tmp" in
   try
     Out_channel.with_open_bin tmp (fun oc -> Marshal.to_channel oc s []);
@@ -635,7 +638,7 @@ let cache_store ~fs ~cache_root ~key (s : solved) : unit =
     Log.info (fun m ->
         m "solve cache: failed to store %s (%s)" (String.sub key 0 12)
           (Printexc.to_string exn));
-    try Sys.remove tmp with _ -> ())
+    try Sys.remove tmp with Sys_error _ -> ())
 
 (* -- The top-level entry point -------------------------------------------- *)
 
@@ -821,7 +824,7 @@ let upload_one_layer ~sys ~(d10 : D10.Config.t) ~staging ~url_base hash =
   in
   let staged =
     try D10.Layer.export d10 ~hash ~dst:Eio.Path.(d10.fs / staging)
-    with _ -> false
+    with Eio.Exn.Io _ | Sys_error _ -> false
   in
   ignore (staged : bool);
   put ".tar.zst";

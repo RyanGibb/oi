@@ -51,7 +51,7 @@ let fetch (c : Config.t) ~session ~remote =
          with exn ->
            Log.info (fun m ->
                m "Could not read %s: %s" url (Printexc.to_string exn)));
-        try Eio.Path.unlink tmp with _ -> ()
+        try Eio.Path.unlink tmp with Eio.Exn.Io _ -> ()
       end;
       Hashtbl.replace cache url idx;
       idx

@@ -90,7 +90,7 @@ let link_or_copy ~fs ~src ~dst =
                     in
                     loop ()));
             true
-          with _ -> false
+          with Sys_error _ | Unix.Unix_error _ -> false
         in
         if copy_ok then begin
           (match Unix.link tmp dst with
@@ -206,7 +206,7 @@ let import_from_opam_cache ~fs ~cache_root checksums =
                  List.fold_left ( / ) mirror_dir (OpamHash.to_path sha256_hash)
                in
                put dst
-             with _ -> ());
+             with Sys_error _ | Failure _ -> ());
           !promoted)
 
 (* -- Bulk fetch into the mirror (used by [oi build --archives-only]) --- *)
@@ -222,7 +222,7 @@ type fetch_summary = {
 
 let read_opam path =
   try Some (OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)))
-  with _ -> None
+  with Sys_error _ | Failure _ -> None
 
 let archive_of_url ~pkg u =
   { url = OpamFile.URL.url u; checksums = OpamFile.URL.checksum u; pkg }

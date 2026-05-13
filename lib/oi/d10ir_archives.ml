@@ -40,7 +40,7 @@ let publish_one ~src ~dst =
                 in
                 loop ()));
         true
-      with _ -> false)
+      with Sys_error _ | Unix.Unix_error _ -> false)
 
 (* List every [<sha>.tar.zst] in [<cache>/d10ir/archives/] with its
    on-disk size. Returns [(sha, size_bytes)] pairs sorted by sha. *)

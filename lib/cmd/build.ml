@@ -21,159 +21,162 @@ type group_outcome =
       per_pkg_logs : (string * string) list;
     }
 
-let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
-    ~group_results =
-  let module R = struct
-    type t =
-      | Skipped of { msg : string; log_path : string }
-      | Ok of group_counts
-      | Failed of {
-          counts : group_counts;
-          msg : string;
-          per_pkg_logs : (string * string) list;
-        }
-  end in
-  let result_for t =
+module Summary = struct
+  type result =
+    | Skipped of { msg : string; log_path : string }
+    | Ok of group_counts
+    | Failed of {
+        counts : group_counts;
+        msg : string;
+        per_pkg_logs : (string * string) list;
+      }
+
+  let result_for ~solve_failures ~target_group ~group_results t =
     match Hashtbl.find_opt solve_failures t with
-    | Some (msg, log_path) -> R.Skipped { msg; log_path }
+    | Some (msg, log_path) -> Skipped { msg; log_path }
     | None -> (
         match Hashtbl.find_opt target_group t with
-        | None -> R.Skipped { msg = "unknown"; log_path = "" }
+        | None -> Skipped { msg = "unknown"; log_path = "" }
         | Some gi -> (
             match Hashtbl.find_opt group_results gi with
-            | None -> R.Skipped { msg = "group not built"; log_path = "" }
-            | Some (Group_ok counts) -> R.Ok counts
+            | None -> Skipped { msg = "group not built"; log_path = "" }
+            | Some (Group_ok counts) -> Ok counts
             | Some (Group_failed { counts; msg; per_pkg_logs }) ->
-                R.Failed { counts; msg; per_pkg_logs }))
-  in
-  let handle_for t =
-    match Hashtbl.find_opt target_handle t with Some h -> "@" ^ h | None -> ""
-  in
-  let rows = List.map (fun t -> (t, handle_for t, result_for t)) targets in
-  let n_ok, n_failed, n_skipped =
+                Failed { counts; msg; per_pkg_logs }))
+
+  let tally rows =
     List.fold_left
       (fun (o, f, s) (_, _, r) ->
         match r with
-        | R.Ok _ -> (o + 1, f, s)
-        | R.Failed _ -> (o, f + 1, s)
-        | R.Skipped _ -> (o, f, s + 1))
+        | Ok _ -> (o + 1, f, s)
+        | Failed _ -> (o, f + 1, s)
+        | Skipped _ -> (o, f, s + 1))
       (0, 0, 0) rows
-  in
-  let status_col r =
-    match r with
-    | R.Ok _ -> Fmt.str "%a" Oi.Style.pp_ok_string "ok"
-    | R.Failed _ -> Fmt.str "%a" Oi.Style.pp_error_string "fail"
-    | R.Skipped _ -> Fmt.str "%a" Oi.Style.pp_warn_string "skip"
-  in
+
+  let status_col = function
+    | Ok _ -> Fmt.str "%a" Oi.Style.pp_ok_string "ok"
+    | Failed _ -> Fmt.str "%a" Oi.Style.pp_error_string "fail"
+    | Skipped _ -> Fmt.str "%a" Oi.Style.pp_warn_string "skip"
+
   let first_line s =
     match String.split_on_char '\n' s with [] -> "" | h :: _ -> h
-  in
-  let detail_col r =
-    match r with
-    | R.Ok { n_pkgs; n_built; n_cached } ->
+
+  let detail_col = function
+    | Ok { n_pkgs; n_built; n_cached } ->
         Fmt.str "%d pkg (%d built, %d cached)" n_pkgs n_built n_cached
-    | R.Failed { counts = { n_pkgs; n_built; n_cached }; _ } ->
+    | Failed { counts = { n_pkgs; n_built; n_cached }; _ } ->
         Fmt.str "%d pkg (%d built, %d cached), build failed" n_pkgs n_built
           n_cached
-    | R.Skipped { msg; _ } -> Fmt.str "skipped (%s)" (first_line msg)
+    | Skipped { msg; _ } -> Fmt.str "skipped (%s)" (first_line msg)
+
+  let print_row ~target_width ~handle_width (target, handle, r) =
+    let styled_handle h =
+      if h = "" then String.make handle_width ' '
+      else
+        let padded = Fmt.str "%-*s" handle_width h in
+        Fmt.str "%a" Oi.Style.pp_info_string padded
+    in
+    if handle_width = 0 then
+      Fmt.pr "  %-6s %-*s  %s@." (status_col r) target_width target
+        (detail_col r)
+    else
+      Fmt.pr "  %-6s %s  %-*s  %s@." (status_col r) (styled_handle handle)
+        target_width target (detail_col r);
+    match r with
+    | Failed { per_pkg_logs; _ } ->
+        List.iter
+          (fun (pkg, log_path) ->
+            Fmt.pr "         %a %s: %s@." Oi.Style.pp_dim_string "↳ log" pkg
+              log_path)
+          per_pkg_logs
+    | Skipped { log_path; _ } when log_path <> "" ->
+        Fmt.pr "         %a %s@." Oi.Style.pp_dim_string "↳ solver log:"
+          log_path
+    | _ -> ()
+
+  (* Style each [label N] pair brightly only when N > 0, so the eye
+     skips past zeros and lands on whatever actually happened. *)
+  let print_tally ~n_ok ~n_failed ~n_skipped =
+    let pair styled_when_active label n =
+      if n = 0 then Fmt.str "%a %d" Oi.Style.pp_dim_string label n
+      else Fmt.str "%a %d" styled_when_active label n
+    in
+    Fmt.pr "  %s  %s  %s@."
+      (pair Oi.Style.pp_ok_string "ok" n_ok)
+      (pair Oi.Style.pp_error_string "failed" n_failed)
+      (pair Oi.Style.pp_warn_string "skipped" n_skipped)
+
+  let log_failures rows =
+    List.iter
+      (fun (target, _handle, r) ->
+        match r with
+        | Failed { msg; _ } -> Log.info (fun m -> m "%s: %s" target msg)
+        | Skipped { msg; _ } when String.contains msg '\n' ->
+            Log.info (fun m -> m "%s: %s" target msg)
+        | _ -> ())
+      rows
+
+  (* CI tail dump: any decent CI UI swallows the log files we point at, so
+     under [CI=…] we inline the last 100 lines of each failed package's log
+     right into the transcript. *)
+  let dump_ci_tails rows =
+    if not (Terms.in_ci ()) then ()
+    else
+      let seen : (string, unit) Hashtbl.t = Hashtbl.create 16 in
+      List.iter
+        (fun (_target, _handle, r) ->
+          match r with
+          | Failed { per_pkg_logs; _ } ->
+              List.iter
+                (fun (pkg, log_path) ->
+                  if
+                    log_path <> ""
+                    && (not (Hashtbl.mem seen log_path))
+                    && Sys.file_exists log_path
+                  then begin
+                    Hashtbl.replace seen log_path ();
+                    match Oi.Audit.tail_of_file ~lines:100 ~path:log_path ()
+                    with
+                    | None -> ()
+                    | Some tail ->
+                        Oi.Say.newline ();
+                        Fmt.kstr
+                          (Fmt.pr "%a %s %a@." Oi.Style.pp_error_string
+                             "── tail" pkg Oi.Style.pp_dim_string)
+                          "(%s)" log_path;
+                        Fmt.pr "%s@." tail
+                  end)
+                per_pkg_logs
+          | _ -> ())
+        rows
+end
+
+let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
+    ~group_results =
+  let handle_for t =
+    match Hashtbl.find_opt target_handle t with Some h -> "@" ^ h | None -> ""
   in
+  let rows =
+    List.map
+      (fun t ->
+        ( t,
+          handle_for t,
+          Summary.result_for ~solve_failures ~target_group ~group_results t ))
+      targets
+  in
+  let n_ok, n_failed, n_skipped = Summary.tally rows in
   let target_width =
     List.fold_left (fun w (t, _, _) -> max w (String.length t)) 12 rows
   in
   let handle_width =
     List.fold_left (fun w (_, h, _) -> max w (String.length h)) 0 rows
   in
-  let styled_handle h =
-    if h = "" then String.make handle_width ' '
-    else
-      (* [Fmt.str] with styling inflates the visible length with ANSI
-         codes; pad first, then colour. *)
-      let padded = Fmt.str "%-*s" handle_width h in
-      Fmt.str "%a" Oi.Style.pp_info_string padded
-  in
-  (* No leading [Say.newline] here: the progress bar's tear-down
-     ([Preflight_bar.run]'s finally) leaves the cursor on the blank row
-     where the bar was rendered. Adding another newline would
-     produce a double-blank gap between the bar's old position and
-     the header. *)
   Oi.Say.header "Build summary";
-  List.iter
-    (fun (target, handle, r) ->
-      if handle_width = 0 then
-        Fmt.pr "  %-6s %-*s  %s@." (status_col r) target_width target
-          (detail_col r)
-      else
-        Fmt.pr "  %-6s %s  %-*s  %s@." (status_col r) (styled_handle handle)
-          target_width target (detail_col r);
-      match r with
-      | R.Failed { per_pkg_logs; _ } ->
-          List.iter
-            (fun (pkg, log_path) ->
-              Fmt.pr "         %a %s: %s@." Oi.Style.pp_dim_string "↳ log" pkg
-                log_path)
-            per_pkg_logs
-      | R.Skipped { log_path; _ } when log_path <> "" ->
-          Fmt.pr "         %a %s@." Oi.Style.pp_dim_string "↳ solver log:"
-            log_path
-      | _ -> ())
-    rows;
+  List.iter (Summary.print_row ~target_width ~handle_width) rows;
   Oi.Say.newline ();
-  (* Style each [label N] pair brightly only when N > 0, so the eye
-     skips past zeros (no failures, no skips) and lands on whatever
-     actually happened. Otherwise even a clean run shows [failed 0]
-     in bright red, which reads as "something's wrong". *)
-  let pair styled_when_active label n =
-    if n = 0 then Fmt.str "%a %d" Oi.Style.pp_dim_string label n
-    else Fmt.str "%a %d" styled_when_active label n
-  in
-  Fmt.pr "  %s  %s  %s@."
-    (pair Oi.Style.pp_ok_string "ok" n_ok)
-    (pair Oi.Style.pp_error_string "failed" n_failed)
-    (pair Oi.Style.pp_warn_string "skipped" n_skipped);
-  (* Dump per-target build-failure output at debug level so `-v` still
-     shows the reason, without dumping a compiler transcript by
-     default. *)
-  List.iter
-    (fun (target, _handle, r) ->
-      match r with
-      | R.Failed { msg; _ } -> Log.info (fun m -> m "%s: %s" target msg)
-      | R.Skipped { msg; _ } when String.contains msg '\n' ->
-          Log.info (fun m -> m "%s: %s" target msg)
-      | _ -> ())
-    rows;
-  (* CI tail dump: any decent CI UI swallows the log files that
-     [print_build_summary] just pointed at, so under [CI=…] we inline
-     the last 100 lines of each failed package's log right into the
-     transcript. Same content [Oi.Audit] would surface in [oi audit
-     show], but with zero clicks. *)
-  if Terms.in_ci () then begin
-    let seen : (string, unit) Hashtbl.t = Hashtbl.create 16 in
-    List.iter
-      (fun (_target, _handle, r) ->
-        match r with
-        | R.Failed { per_pkg_logs; _ } ->
-            List.iter
-              (fun (pkg, log_path) ->
-                if
-                  log_path <> ""
-                  && (not (Hashtbl.mem seen log_path))
-                  && Sys.file_exists log_path
-                then begin
-                  Hashtbl.replace seen log_path ();
-                  match Oi.Audit.tail_of_file ~lines:100 ~path:log_path () with
-                  | None -> ()
-                  | Some tail ->
-                      Oi.Say.newline ();
-                      Fmt.kstr
-                        (Fmt.pr "%a %s %a@." Oi.Style.pp_error_string "── tail"
-                           pkg Oi.Style.pp_dim_string)
-                        "(%s)" log_path;
-                      Fmt.pr "%s@." tail
-                end)
-              per_pkg_logs
-        | _ -> ())
-      rows
-  end
+  Summary.print_tally ~n_ok ~n_failed ~n_skipped;
+  Summary.log_failures rows;
+  Summary.dump_ci_tails rows
 
 (* -- Overlay-wide depext helpers ---------------------------------------- *)
 
@@ -239,7 +242,7 @@ let all_packages_in_dir pkgs_dir =
           |> List.filter_map (fun pv ->
               let opam_path = name_dir / pv / "opam" in
               if not (Sys.file_exists opam_path) then None
-              else try Some (OpamPackage.of_string pv) with _ -> None))
+              else try Some (OpamPackage.of_string pv) with Failure _ -> None))
 
 (* Resolve the effective [packages_dirs] for a single overlay handle:
    its own materialised v2/ tree plus every overlay it depends on (via
@@ -298,7 +301,10 @@ let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
   let path = Terms.reporepo_path () in
   Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
     ~url:(Terms.reporepo_url ()) ();
-  let reporepo_entries = try Oi.Source.Reporepo.load ~path with _ -> [] in
+  let reporepo_entries =
+    try Oi.Source.Reporepo.load ~path
+    with Sys_error _ | Failure _ -> []
+  in
   let inputs =
     let all = overlay_inputs reporepo_entries in
     match handle_filter with
@@ -1203,7 +1209,7 @@ let cmd =
         let reporepo_entries =
           lazy
             (try Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ())
-             with _ -> [])
+             with Sys_error _ | Failure _ -> [])
         in
         let toolchain_of_handles handles =
           match handles with

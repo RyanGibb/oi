@@ -249,7 +249,7 @@ module Ctx = struct
                         in
                         let pkg = OpamPackage.of_string pkg_s in
                         opams := OpamPackage.Map.add pkg opam !opams
-                      with _ ->
+                      with Failure _ | Sys_error _ ->
                         Log.debug (fun m -> m "Could not parse %s" opam_path))
                   (Sys.readdir name_dir))
             (Sys.readdir dir);
@@ -896,14 +896,14 @@ module Memo = struct
           Fun.protect
             ~finally:(fun () -> close_in_noerr ic)
             (fun () -> Some (Marshal.from_channel ic))
-        with _ -> None
+        with Sys_error _ | Failure _ | End_of_file -> None
       with
       | Some _ as r ->
           Log.debug (fun m -> m "%s hit %s" label path);
           r
       | None ->
           Log.debug (fun m -> m "%s corrupt %s; unlinking" label path);
-          (try Sys.remove path with _ -> ());
+          (try Sys.remove path with Sys_error _ -> ());
           None
 
   let write_marshal ~fs ~label path v =
@@ -913,7 +913,8 @@ module Memo = struct
       let tmp = path ^ ".tmp" in
       Out_channel.with_open_bin tmp (fun oc -> Marshal.to_channel oc v []);
       Sys.rename tmp path
-    with _ -> Log.debug (fun m -> m "%s store failed for %s" label path)
+    with Sys_error _ | Eio.Exn.Io _ ->
+      Log.debug (fun m -> m "%s store failed for %s" label path)
 
   let lookup ~cache_root ~key =
     match

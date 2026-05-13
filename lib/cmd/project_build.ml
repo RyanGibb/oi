@@ -23,7 +23,7 @@ let collect_dist ~cwd ~os_key =
    alphabetically. Files we cannot parse are silently dropped — the
    solve-side load (Project.load) already warns about them. *)
 let read_opams ~cwd =
-  let files = try Sys.readdir cwd |> Array.to_list with _ -> [] in
+  let files = try Sys.readdir cwd |> Array.to_list with Sys_error _ -> [] in
   files
   |> List.filter (fun f ->
       Filename.check_suffix f ".opam" && Filename.chop_suffix f ".opam" <> "")
@@ -34,7 +34,7 @@ let read_opams ~cwd =
       try
         let opam = OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)) in
         Some (name, opam)
-      with _ -> None)
+      with Sys_error _ | Failure _ -> None)
 
 (* Topo-sort sibling [*.opam] packages by their inter-package
    [depends:] edges; ties broken alphabetically. Cycles fall through

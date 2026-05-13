@@ -110,7 +110,8 @@ let ensure_dune_project_version ~build_dir ~opam_version ~url_opt =
   if not (Sys.file_exists path) then ()
   else
     let content =
-      try In_channel.with_open_text path In_channel.input_all with _ -> ""
+      try In_channel.with_open_text path In_channel.input_all
+      with Sys_error _ -> ""
     in
     let already_has_version =
       String.split_on_char '\n' content
@@ -129,7 +130,7 @@ let ensure_dune_project_version ~build_dir ~opam_version ~url_opt =
       try
         Out_channel.with_open_text path (fun oc ->
             Out_channel.output_string oc new_content)
-      with _ -> ()
+      with Sys_error _ -> ()
 
 (* Bake requires GNU tar. Reporepo bumps must run on Linux where GNU
    tar is the default; macOS users with [gtar] from Homebrew can
@@ -264,7 +265,7 @@ let build ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10 ~cache_root
         else p.layer_hash
       in
       let tmp_path = tmp_dir ~d10 / Fmt.str "%s-%s.tar.zst" p.pkg layer_short in
-      (try Sys.remove tmp_path with _ -> ());
+      (try Sys.remove tmp_path with Sys_error _ -> ());
       tar_zst ~proc_mgr ~src_dir:p.build_dir ~dst_path:tmp_path;
       let sha = sha256_of_file tmp_path in
       (match p.d10_archive with
@@ -292,7 +293,7 @@ let build ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10 ~cache_root
                      end
                    in
                    loop ()))
-       else try Sys.remove tmp_path with _ -> ());
+       else try Sys.remove tmp_path with Sys_error _ -> ());
       Log.debug (fun m -> m "archive %s -> %s" p.pkg final_path);
       {
         path = final_path;
@@ -482,7 +483,7 @@ let build_no_solve ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10
   in
   ensure_dune_project_version ~build_dir ~opam_version:version ~url_opt;
   let tmp_path = tmp_dir ~d10 / Fmt.str "%s.%s-bake.tar.zst" name version in
-  (try Sys.remove tmp_path with _ -> ());
+  (try Sys.remove tmp_path with Sys_error _ -> ());
   tar_zst ~proc_mgr ~src_dir:build_dir ~dst_path:tmp_path;
   let sha = sha256_of_file tmp_path in
   let final_path = archives_dir ~d10 / Fmt.str "%s.tar.zst" sha in
@@ -507,7 +508,7 @@ let build_no_solve ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10
                in
                loop ()))
      end
-   else try Sys.remove tmp_path with _ -> ());
+   else try Sys.remove tmp_path with Sys_error _ -> ());
   Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / build_dir);
   Log.debug (fun m -> m "no-solve bake %s -> %s" b.pkg final_path);
   {

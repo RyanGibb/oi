@@ -11,7 +11,9 @@ let resolve (conf_host : Oi.Solver.Ctx.conf) os_str =
     | `Cygwin -> "cygwin"
     | `Windows -> "win32"
   in
-  match try Dockerfile_opam.Distro.distro_of_tag os_str with _ -> None with
+  match
+    try Dockerfile_opam.Distro.distro_of_tag os_str with Failure _ -> None
+  with
   | Some d ->
       let vars = Registry_docker.opam_vars_of_distro d in
       let os =

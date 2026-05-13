@@ -94,7 +94,8 @@ module Preflight = struct
       let stepped = ref false in
       let push ~advance =
         let delta = if advance then 1 else 0 in
-        try Progress.Reporter.report overall_h (delta, !msg) with _ -> ()
+        try Progress.Reporter.report overall_h (delta, !msg)
+        with Sys_error _ | Failure _ -> ()
       in
       push ~advance:false;
       Eio.Fiber.fork_daemon ~sw (fun () ->
@@ -102,7 +103,8 @@ module Preflight = struct
             Eio.Time.sleep clock 0.1;
             if !stopped then `Stop_daemon
             else begin
-              (try Progress.Display.tick display with _ -> ());
+              (try Progress.Display.tick display
+               with Sys_error _ | Failure _ -> ());
               loop ()
             end
           in
@@ -124,7 +126,8 @@ module Preflight = struct
         if not !stopped then begin
           stopped := true;
           Logs_progress.clear_active ();
-          try Progress.Display.finalise display with _ -> ()
+          try Progress.Display.finalise display
+          with Sys_error _ | Failure _ -> ()
         end
       in
       Fun.protect
@@ -132,7 +135,8 @@ module Preflight = struct
           if not !stopped then begin
             stopped := true;
             Logs_progress.clear_active ();
-            try Progress.Display.finalise display with _ -> ()
+            try Progress.Display.finalise display
+          with Sys_error _ | Failure _ -> ()
           end)
         (fun () ->
           f ~on_phase ~on_text ~preflight_done ~shared_display:(Some display))

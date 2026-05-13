@@ -96,7 +96,7 @@ let has_recipe c ~hash = Sysops.file_exists (recipe_path c ~hash)
 
 let load_recipe_json c ~hash =
   if has_recipe c ~hash then
-    try Some (Eio.Path.load (recipe_path c ~hash)) with _ -> None
+    try Some (Eio.Path.load (recipe_path c ~hash)) with Eio.Exn.Io _ -> None
   else None
 
 let succeeded c ~hash =
@@ -141,7 +141,7 @@ let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
     | Unix.Unix_error (Unix.EEXIST, _, _)
     | Eio.Io (Eio.Fs.E (Eio.Fs.Already_exists _), _)
     ->
-      (try Eio.Path.unlink dst_p with _ -> ());
+      (try Eio.Path.unlink dst_p with Eio.Exn.Io _ -> ());
       f ()
   in
   List.iter
@@ -228,15 +228,15 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
        Without this, the next [tar xf] would merge new files on top of
        stale ones, so a previously-corrupt layer would publish corrupt
        again. *)
-    (try Eio.Path.rmtree ~missing_ok:true staging_dir with _ -> ());
+    (try Eio.Path.rmtree ~missing_ok:true staging_dir with Eio.Exn.Io _ -> ());
     let phase p = match on_phase with Some f -> f p | None -> () in
     phase Fetching;
     let ok =
       Sysops.Http.fetch_session ?on_progress session ~url ~dst:tmp_file
     in
-    let cleanup_tmp () = try Eio.Path.unlink tmp_file with _ -> () in
+    let cleanup_tmp () = try Eio.Path.unlink tmp_file with Eio.Exn.Io _ -> () in
     let cleanup_staging () =
-      try Eio.Path.rmtree ~missing_ok:true staging_dir with _ -> ()
+      try Eio.Path.rmtree ~missing_ok:true staging_dir with Eio.Exn.Io _ -> ()
     in
     if ok then begin
       phase Verifying;
@@ -274,7 +274,7 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
              destination is a non-empty directory, so blow away any
              pre-existing [<hash>/] (which we already proved is not
              [succeeded] above) before publishing the staging dir. *)
-          (try Eio.Path.rmtree ~missing_ok:true layer_dir with _ -> ());
+          (try Eio.Path.rmtree ~missing_ok:true layer_dir with Eio.Exn.Io _ -> ());
           try
             Eio.Path.rename staging_dir layer_dir;
             succeeded c ~hash
@@ -334,7 +334,7 @@ let export (c : Config.t) ~hash ~dst =
          export sees no [dst_file] and retries rather than treating a
          truncated archive as authoritative. *)
       let tmp_file = Eio.Path.(os_dir / (hash ^ ".tar.zst.tmp")) in
-      (try Eio.Path.unlink tmp_file with _ -> ());
+      (try Eio.Path.unlink tmp_file with Eio.Exn.Io _ -> ());
       Sysops.Tar.create_zstd c.sys ~src:(dir c ~hash) ~dst:tmp_file;
       Eio.Path.rename tmp_file dst_file;
       (* Write compressed file listing relative to fs/ *)
@@ -353,7 +353,7 @@ let export (c : Config.t) ~hash ~dst =
             "-o";
             Eio.Path.native_exn Eio.Path.(os_dir / (hash ^ ".txt.zst"));
           ];
-        try Eio.Path.unlink txt_tmp with _ -> ()
+        try Eio.Path.unlink txt_tmp with Eio.Exn.Io _ -> ()
       end;
       true
     end

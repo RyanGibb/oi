@@ -26,7 +26,7 @@ let finalize_sqlite_for_publish path =
        Fun.protect
          ~finally:(fun () -> ignore (Sqlite3.db_close db))
          (fun () -> ignore (Sqlite3.exec db "PRAGMA journal_mode=DELETE"))
-     with _ -> ());
+     with Sys_error _ -> ());
     unlink_sqlite_sidecars path
   end
 
@@ -62,7 +62,7 @@ let record_tarballs db ~output ~os_key =
             in
             let size = (Unix.stat path).Unix.st_size |> Int64.of_int in
             D10.Index.record_tarball db ~hash ~sha256 ~size
-          with _ -> ())
+          with Unix.Unix_error _ | Sys_error _ -> ())
       files
 
 (* [Oi.D10ir_archives.publish_all] hardlinks (or copies) every

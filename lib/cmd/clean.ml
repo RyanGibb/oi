@@ -14,6 +14,41 @@ let parse_target s =
 
 let short h = String.sub h 0 (min 12 (String.length h))
 
+(* Walk the dep graph upward to find every layer that transitively depends on
+   the [frontier] set. Used by [pkg_clean] so dropping a leaf doesn't leave
+   dangling consumers in the cache. *)
+let close_dependents db ~os_key direct_hashes =
+  let rec walk acc frontier =
+    if frontier = [] then acc
+    else
+      let next = D10.Index.dependents db ~hashes:frontier ~os_key in
+      let fresh = List.filter (fun h -> not (List.mem h acc)) next in
+      walk (acc @ fresh) fresh
+  in
+  walk [] direct_hashes
+
+let direct_layers_for db ~os_key ~name ~version_opt =
+  match version_opt with
+  | Some v -> (
+      match D10.Index.find_layer db ~name ~version:v ~os_key with
+      | Some (h, _) -> [ (name, v, h) ]
+      | None -> [])
+  | None ->
+      D10.Index.search_package db ~pattern:name ~os_key
+      |> List.map (fun (n, v, h, _) -> (n, v, h))
+
+let print_pkg_clean_plan ~dry_run ~target ~direct ~dependents =
+  let verb = if dry_run then "Would remove" else "Removing" in
+  let dim s = Fmt.str "%a" Oi.Style.pp_dim_string s in
+  Oi.Say.step "%s %d layer(s) for %s" verb (List.length direct) target;
+  List.iter
+    (fun (n, v, h) -> Oi.Say.info "%s.%s  %s" n v (dim (short h)))
+    direct;
+  if dependents <> [] then begin
+    Oi.Say.step "%s %d dependent layer(s)" verb (List.length dependents);
+    List.iter (fun h -> Oi.Say.info "%s" (dim (short h))) dependents
+  end
+
 let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
   let name, version_opt = parse_target target in
   let layers_root = Oi.Cache.root_s cache / "layers" / os_key in
@@ -22,44 +57,19 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
     Oi.Say.info "no layer index for %s; nothing to do" os_key;
     0
   end
-  else begin
+  else
     let db = D10.Index.open_ ~fs ~path:index_path in
-    let direct =
-      match version_opt with
-      | Some v -> (
-          match D10.Index.find_layer db ~name ~version:v ~os_key with
-          | Some (h, _) -> [ (name, v, h) ]
-          | None -> [])
-      | None ->
-          D10.Index.search_package db ~pattern:name ~os_key
-          |> List.map (fun (n, v, h, _) -> (n, v, h))
-    in
+    let direct = direct_layers_for db ~os_key ~name ~version_opt in
     if direct = [] then begin
       Oi.Say.info "no cached layers found for %s" target;
       D10.Index.close db;
       0
     end
-    else begin
+    else
       let direct_hashes = List.map (fun (_, _, h) -> h) direct in
-      let rec close acc frontier =
-        if frontier = [] then acc
-        else
-          let next = D10.Index.dependents db ~hashes:frontier ~os_key in
-          let fresh = List.filter (fun h -> not (List.mem h acc)) next in
-          close (acc @ fresh) fresh
-      in
-      let dependents = close [] direct_hashes in
+      let dependents = close_dependents db ~os_key direct_hashes in
       let all_hashes = direct_hashes @ dependents in
-      let verb = if dry_run then "Would remove" else "Removing" in
-      let dim s = Fmt.str "%a" Oi.Style.pp_dim_string s in
-      Oi.Say.step "%s %d layer(s) for %s" verb (List.length direct) target;
-      List.iter
-        (fun (n, v, h) -> Oi.Say.info "%s.%s  %s" n v (dim (short h)))
-        direct;
-      if dependents <> [] then begin
-        Oi.Say.step "%s %d dependent layer(s)" verb (List.length dependents);
-        List.iter (fun h -> Oi.Say.info "%s" (dim (short h))) dependents
-      end;
+      print_pkg_clean_plan ~dry_run ~target ~direct ~dependents;
       if not dry_run then begin
         List.iter
           (fun h ->
@@ -71,8 +81,6 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
       end;
       D10.Index.close db;
       List.length all_hashes
-    end
-  end
 
 (* -- Bulk clean ---------------------------------------------------------- *)
 

@@ -2,7 +2,7 @@ let cmd ~proc_mgr argv =
   try
     Eio.Process.parse_out proc_mgr Eio.Buf_read.take_all argv
     |> String.trim |> Option.some
-  with _ -> None
+  with Eio.Exn.Io _ -> None
 
 (* Spawn with both streams into a throwaway buffer: Nix's [which] writes
    "no NAME in PATH" to stderr on miss, and [parse_out] only captures

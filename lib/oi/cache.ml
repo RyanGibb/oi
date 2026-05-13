@@ -65,7 +65,7 @@ module Logs = struct
     try
       Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
         Eio.Path.(fs / dir ~cache_root)
-    with _ -> ()
+    with Eio.Exn.Io _ -> ()
 
   let short_hash h = String.sub h 0 (min 12 (String.length h))
 
@@ -75,7 +75,7 @@ module Logs = struct
   let write ~fs ~cache_root path content =
     ensure ~fs ~cache_root;
     try Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) content
-    with _ -> ()
+    with Eio.Exn.Io _ -> ()
 end
 
 (* -- Cleanup ------------------------------------------------------------- *)
@@ -141,7 +141,7 @@ let purge_items items =
           List.iter
             (fun child ->
               try Eio.Path.rmtree ~missing_ok:true Eio.Path.(path / child)
-              with _ -> ())
+              with Eio.Exn.Io _ -> ())
             entries)
     items
 
@@ -154,7 +154,7 @@ let size ~sys path =
       |> Stdlib.Option.value ~default:0L
     in
     Int64.mul kb 1024L
-  with _ -> 0L
+  with Failure _ | Eio.Exn.Io _ -> 0L
 
 let pp_size fmt sz =
   if sz > 1_000_000_000L then Fmt.pf fmt "%.1fGB" (Int64.to_float sz /. 1e9)

@@ -36,7 +36,7 @@ let install ~sw =
     (* Take SIGINT away from opam's [Sys.catch_break true] — otherwise
        SIGINT raises [Sys.Break] inside [OpamProcess.Job.run] and our
        cancel path never sees it. *)
-    (try Sys.catch_break false with _ -> ());
+    (try Sys.catch_break false with Sys_error _ -> ());
     (try Sys.set_signal Sys.sigpipe Sys.Signal_ignore
      with Invalid_argument _ -> ());
     Sys.set_signal Sys.sigint (Sys.Signal_handle handler);
@@ -48,7 +48,7 @@ let install ~sw =
     Eio.Fiber.fork_daemon ~sw (fun () ->
         Eio.Condition.await_no_mutex cond;
         prerr_string "\n[oi] interrupted; cleaning up (Ctrl-C again to force)\n";
-        (try flush stderr with _ -> ());
+        (try flush stderr with Sys_error _ -> ());
         Eio.Switch.fail sw Interrupted;
         `Stop_daemon)
   end

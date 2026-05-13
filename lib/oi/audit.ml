@@ -75,7 +75,7 @@ let default_context () =
     toolchain = None;
     trigger = String.concat " " (Array.to_list Sys.argv);
     project = None;
-    host = (try Unix.gethostname () with _ -> "");
+    host = (try Unix.gethostname () with Unix.Unix_error _ -> "");
   }
 
 (* -- Tail extraction ------------------------------------------------------ *)
@@ -101,7 +101,7 @@ let tail_of_file ?(lines = n_tail_lines) ~path () =
           let drop = max 0 (n - lines) in
           let kept = tail |> List.to_seq |> Seq.drop drop |> List.of_seq in
           Some (String.concat "\n" kept))
-    with _ -> None
+    with Sys_error _ -> None
 
 (* -- Codec --------------------------------------------------------------- *)
 
@@ -205,7 +205,7 @@ let ensure_dir ~fs ~cache_root =
   try
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
       Eio.Path.(fs / cache_root / "build")
-  with _ -> ()
+  with Eio.Exn.Io _ -> ()
 
 (* Encode the event as a single line of JSON (no pretty-printing) plus a
    trailing newline, then append it to the audit file. POSIX guarantees
