@@ -6,6 +6,15 @@ let ( / ) = Filename.concat
    would carry the link out and break CI artifact uploads.
    [Unix.openfile] follows symlinks by default.
 
+   Atomic publish: write to [<dst>.<pid>.tmp] then [rename] over [dst].
+   Direct in-place [O_TRUNC] of [dst] fails with [ETXTBSY] ("Text file
+   busy") when [dst] is an executable currently running — typical case
+   is [oi install] overwriting [~/.local/bin/oi] from a build kicked
+   off by that same binary. [rename] swaps inodes, leaving the
+   running process attached to the old one until it exits. The pid
+   suffix on the tmp name keeps concurrent installs from clobbering
+   each other's staging files.
+
    Perms are normalised on write: dune / opam install trees are
    typically read-only ([555] for binaries, [444] for data), which makes
    the resulting [dist/] awkward for downstream consumers that want to
@@ -17,8 +26,9 @@ let copy_resolved ~src ~dst =
   let buf = Bytes.create buf_size in
   let src_perm = (Unix.stat src).st_perm in
   let perm = if src_perm land 0o111 <> 0 then 0o755 else 0o644 in
+  let tmp = Printf.sprintf "%s.%d.tmp" dst (Unix.getpid ()) in
   let ic = Unix.openfile src [ O_RDONLY ] 0 in
-  let oc = Unix.openfile dst [ O_WRONLY; O_CREAT; O_TRUNC ] perm in
+  let oc = Unix.openfile tmp [ O_WRONLY; O_CREAT; O_TRUNC ] perm in
   let rec loop () =
     let n = Unix.read ic buf 0 buf_size in
     if n > 0 then begin
@@ -26,12 +36,17 @@ let copy_resolved ~src ~dst =
       loop ()
     end
   in
+  let committed = ref false in
   Fun.protect
     ~finally:(fun () ->
       (try Unix.close ic with _ -> ());
-      try Unix.close oc with _ -> ())
-    loop;
-  Unix.chmod dst perm
+      (try Unix.close oc with _ -> ());
+      if not !committed then try Unix.unlink tmp with _ -> ())
+    (fun () ->
+      loop ();
+      Unix.chmod tmp perm;
+      Unix.rename tmp dst;
+      committed := true)
 
 (* List the regular files (or symlinks to regular files) under [dir],
    sorted by basename. Missing [dir] yields []. *)
