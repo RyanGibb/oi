@@ -132,18 +132,16 @@ let cleanable_items t ~data_dir =
    point (Docker BuildKit cache mounts, tmpfs, bind mounts), even when the
    tree underneath is wipeable. Walk children individually so we both
    tolerate mounts and still surface unexpected per-entry errors. *)
-let purge_items items =
-  List.iter
-    (fun { path; _ } ->
-      match Eio.Path.read_dir path with
-      | exception Eio.Exn.Io _ -> ()
-      | entries ->
-          List.iter
-            (fun child ->
-              try Eio.Path.rmtree ~missing_ok:true Eio.Path.(path / child)
-              with Eio.Exn.Io _ -> ())
-            entries)
-    items
+let remove_child path child =
+  try Eio.Path.rmtree ~missing_ok:true Eio.Path.(path / child)
+  with Eio.Exn.Io _ -> ()
+
+let purge_one { path; _ } =
+  match Eio.Path.read_dir path with
+  | exception Eio.Exn.Io _ -> ()
+  | entries -> List.iter (remove_child path) entries
+
+let purge_items items = List.iter purge_one items
 
 let size ~sys path =
   let path_s = Eio.Path.native_exn path in

@@ -14,19 +14,20 @@ let is_executable p =
     true
   with Unix.Unix_error _ -> false
 
+let find_in_path path exe =
+  String.split_on_char ':' path
+  |> List.find_map (function
+    | "" -> None
+    | d ->
+        let candidate = d / exe in
+        if is_executable candidate then Some candidate else None)
+
 let resolve_in_env ~env exe =
   if String.contains exe '/' then exe
   else
     match path_of_env env with
     | None -> exe
-    | Some path ->
-        String.split_on_char ':' path
-        |> List.find_map (function
-          | "" -> None
-          | d ->
-              let candidate = d / exe in
-              if is_executable candidate then Some candidate else None)
-        |> Stdlib.Option.value ~default:exe
+    | Some path -> Stdlib.Option.value (find_in_path path exe) ~default:exe
 
 let run proc_mgr ~env cmd =
   let cmd =

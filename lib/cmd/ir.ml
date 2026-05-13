@@ -74,42 +74,25 @@ let opam_strip_patches_extras ~fs ~opam_path =
 
 (* ---- ir emit ---------------------------------------------------------- *)
 
-(* Mirrors the prep [oi run @handle/pkg] does before [Build_pipeline.build]: no
-   project mode, just resolve toolchain, materialise overlays, and call
-   the pipeline with [emit_recipe] set. *)
-let emit_run (c : Terms.common) refresh registry use_registry with_repos
-    with_deps toolchain_override out_dir target =
-  Harness.run @@ fun ~sw env ->
-  let {
-    Harness.proc_mgr;
-    fs;
-    clock;
-    sys;
-    platform;
-    os_key;
-    cache;
-    http_session;
-    _;
-  } =
-    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env c.cache_dir
-  in
-  let data_dir = c.data_dir in
-  Oi.Pipeline.init_opam_root ~fs ~data_dir;
-  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-  let conf =
-    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
-  in
-  (* [oi ir emit] is solver-only — no fetch / build phases run, so
-     the [Terms.layer_remote] / [source_remote] selection is unused
-     here. *)
-  let _ = registry in
-  let _ = use_registry in
+(* Inputs to [build_request] grouped into a record because we extract them
+   incrementally and pass the result to multiple helpers. *)
+type emit_inputs = {
+  names : OpamPackage.Name.t list;
+  with_repos : string list;
+  all_extras : Oi.Project.extra_repo list;
+  extra_constraints : OpamFormula.version_constraint OpamPackage.Name.Map.t;
+  toolchain : Oi.Toolchain.info option;
+}
+
+(* Extract target/with-deps inputs that the solver needs. Handles all pin
+   extraction, constraint merging, and toolchain selection. *)
+let prepare_emit_inputs ~fs ~sys ~cache ~data_dir ~refresh ~conf
+    ~toolchain_override ~with_repos ~with_deps ~target =
   let extra_deps, url_project =
     Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
   let extra_constraints = Oi.Project.Script.constraints extra_deps in
   let with_repos = url_project.overlays @ with_repos in
-  (* Single-target form: extract @handle/pkg pins from target + with-deps. *)
   let targets, with_repos, target_pins =
     Target.extract_handle_pins ~with_repos [ target ]
   in
@@ -143,38 +126,37 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
     |> Oi.Pipeline.strip_compiler_roots_for_override
          ~override:toolchain_override ~toolchain
   in
-  if names = [] then
-    Oi.Error.fail_config_error "oi ir emit: no target after pin extraction.";
-  let pipeline_env : Oi.Build_pipeline.env =
-    { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
-  in
-  let req : Oi.Build_pipeline.request =
-    {
-      targets =
-        [
-          Group
-            { tokens = List.map OpamPackage.Name.to_string names; handles = [] };
-        ];
-      (* Handles extracted from [@H/PKG] tokens must flow to the
-         per-group solve via [with_repos]; [extra_repos] alone doesn't
-         add their [packages/] trees. *)
-      with_repos;
-      pins = [];
-      extra_repos = all_extras;
-      constraints = extra_constraints;
-      toolchain_override;
-      toolchain;
-      conf;
-      local_packages_dir = None;
-      project_root = None;
-      force_source = true;
-      refresh;
-    }
-  in
-  let solved = Oi.Build_pipeline.solve pipeline_env req in
-  (* Save each successful group's recipe. [oi ir emit] today only
-     takes one TARGET, so [solved.groups] has a single entry and the
-     loop writes one [recipe.json]. *)
+  { names; with_repos; all_extras; extra_constraints; toolchain }
+
+(* Build the solver request record from [emit_inputs]. *)
+let build_request ~conf ~toolchain_override ~refresh
+    { names; with_repos; all_extras; extra_constraints; toolchain } :
+    Oi.Build_pipeline.request =
+  {
+    targets =
+      [
+        Group
+          { tokens = List.map OpamPackage.Name.to_string names; handles = [] };
+      ];
+    (* Handles extracted from [@H/PKG] tokens must flow to the per-group
+       solve via [with_repos]; [extra_repos] alone doesn't add their
+       [packages/] trees. *)
+    with_repos;
+    pins = [];
+    extra_repos = all_extras;
+    constraints = extra_constraints;
+    toolchain_override;
+    toolchain;
+    conf;
+    local_packages_dir = None;
+    project_root = None;
+    force_source = true;
+    refresh;
+  }
+
+(* Write each solved group's recipe to [out_dir/recipe.json]. [oi ir emit]
+   takes a single TARGET today so the loop typically runs once. *)
+let write_recipes ~fs ~out_dir (solved : Oi.Build_pipeline.solved) =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / out_dir);
   List.iter
     (fun (gr : Oi.Build_pipeline.group_result) ->
@@ -184,62 +166,98 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
           let dst = Filename.concat out_dir "recipe.json" in
           D10ir.Plan.save Eio.Path.(fs / dst) recipe;
           Oi.Say.ok "emitted recipe to %s" dst)
-    solved.groups;
+    solved.groups
+
+(* Mirrors the prep [oi run @handle/pkg] does before [Build_pipeline.build]: no
+   project mode, just resolve toolchain, materialise overlays, and call
+   the pipeline with [emit_recipe] set. *)
+let emit_run (c : Terms.common) refresh registry use_registry with_repos
+    with_deps toolchain_override out_dir target =
+  Harness.run @@ fun ~sw env ->
+  let {
+    Harness.proc_mgr;
+    fs;
+    clock;
+    sys;
+    platform;
+    os_key;
+    cache;
+    http_session;
+    _;
+  } =
+    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env c.cache_dir
+  in
+  let data_dir = c.data_dir in
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+  let conf =
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
+  (* [oi ir emit] is solver-only — no fetch / build phases run, so
+     the [Terms.layer_remote] / [source_remote] selection is unused
+     here. *)
+  let _ = registry in
+  let _ = use_registry in
+  let inputs =
+    prepare_emit_inputs ~fs ~sys ~cache ~data_dir ~refresh ~conf
+      ~toolchain_override ~with_repos ~with_deps ~target
+  in
+  if inputs.names = [] then
+    Oi.Error.fail_config_error "oi ir emit: no target after pin extraction.";
+  let pipeline_env : Oi.Build_pipeline.env =
+    { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
+  in
+  let req = build_request ~conf ~toolchain_override ~refresh inputs in
+  let solved = Oi.Build_pipeline.solve pipeline_env req in
+  write_recipes ~fs ~out_dir solved;
   0
 
+let emit_target_term =
+  Arg.(
+    required
+    & pos 0 (some string) None
+    & info ~docv:"TARGET"
+        ~doc:"Build target: package name, $(b,@HANDLE/PKG), or $(b,@HANDLE)"
+        [])
+
+let emit_out_dir_term =
+  Arg.(
+    required
+    & opt (some string) None
+    & info ~docv:"DIR"
+        ~doc:"Write $(b,recipe.json) into $(i,DIR), creating it if absent"
+        [ "o"; "out" ])
+
+let emit_info =
+  Cmd.info "emit" ~doc:"Solve, plan, and write a d10ir recipe"
+    ~man:
+      [
+        `S Cmdliner.Manpage.s_description;
+        `P
+          "Solve for $(b,TARGET), fetch and patch every package's source, and \
+           write $(b,recipe.json) into $(i,DIR). No compilation happens. \
+           Replay with $(b,oi ir run DIR).";
+        `P
+          "$(b,TARGET) takes the same shapes as $(b,oi run): bare package, \
+           $(b,@HANDLE/PKG), or URL-pinned via $(b,--with).";
+      ]
+
 let emit_cmd =
-  let target =
-    Arg.(
-      required
-      & pos 0 (some string) None
-      & info ~docv:"TARGET"
-          ~doc:"Build target: package name, $(b,@HANDLE/PKG), or $(b,@HANDLE)"
-          [])
-  in
-  let out_dir =
-    Arg.(
-      required
-      & opt (some string) None
-      & info ~docv:"DIR"
-          ~doc:"Write $(b,recipe.json) into $(i,DIR), creating it if absent"
-          [ "o"; "out" ])
-  in
   let term =
     Term.(
       const
-        (fun
-          c
-          refresh
-          registry
-          use_registry
-          with_repos
-          with_deps
-          toolchain_override
-          target
-          out
-        ->
+        (fun c refresh registry use_registry with_repos with_deps
+             toolchain_override target out ->
           let code =
             emit_run c refresh registry use_registry with_repos with_deps
               toolchain_override out target
           in
           if code <> 0 then exit code)
       $ Terms.common $ Terms.refresh $ Terms.registry $ Terms.use_registry
-      $ Terms.with_repos $ Terms.with_deps $ Terms.toolchain $ target $ out_dir)
+      $ Terms.with_repos $ Terms.with_deps $ Terms.toolchain $ emit_target_term
+      $ emit_out_dir_term)
   in
-  Cmd.v
-    (Cmd.info "emit" ~doc:"Solve, plan, and write a d10ir recipe"
-       ~man:
-         [
-           `S Cmdliner.Manpage.s_description;
-           `P
-             "Solve for $(b,TARGET), fetch and patch every package's source, \
-              and write $(b,recipe.json) into $(i,DIR). No compilation \
-              happens. Replay with $(b,oi ir run DIR).";
-           `P
-             "$(b,TARGET) takes the same shapes as $(b,oi run): bare package, \
-              $(b,@HANDLE/PKG), or URL-pinned via $(b,--with).";
-         ])
-    term
+  Cmd.v emit_info term
 
 (* ---- ir run ----------------------------------------------------------- *)
 

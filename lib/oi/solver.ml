@@ -132,6 +132,34 @@ module Dir_context = struct
     | true, false -> 1
     | false, true -> -1
 
+  let version_dir_exists t ~name dir =
+    List.exists
+      (fun packages_dir ->
+        Sys.file_exists
+          (packages_dir / OpamPackage.Name.to_string name / dir / "opam"))
+      t.packages_dirs
+
+  let version_of_dir t ~name dir =
+    match OpamPackage.of_string_opt dir with
+    | Some pkg when version_dir_exists t ~name dir -> Some (OpamPackage.version pkg)
+    | _ -> None
+
+  let load_candidate t name v =
+    let pkg = OpamPackage.create name v in
+    let opam = load t pkg in
+    let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam in
+    let available = OpamFile.OPAM.available opam in
+    if OpamFilter.eval_to_bool ~default:false (env t pkg) available then
+      Some (v, avoid, opam)
+    else None
+
+  let apply_user_constraint name user_constraints (v, _, opam) =
+    match user_constraints with
+    | Some test
+      when not (OpamFormula.check_version_formula (OpamFormula.Atom test) v) ->
+        (v, Error (User_constraint (name, Some test)))
+    | _ -> (v, Ok opam)
+
   let candidates t name =
     match OpamPackage.Name.Map.find_opt name t.pins with
     | Some (version, opam) -> [ (version, Ok opam) ]
@@ -145,40 +173,17 @@ module Dir_context = struct
           |> List.sort_uniq compare
         in
         let user_constraints = user_restrictions t name in
-        versions
-        |> List.filter_map (fun dir ->
-            match OpamPackage.of_string_opt dir with
-            | Some pkg ->
-                List.find_opt
-                  (fun packages_dir ->
-                    Sys.file_exists
-                      (packages_dir
-                      / OpamPackage.Name.to_string name
-                      / dir / "opam"))
-                  t.packages_dirs
-                |> Option.map (fun _ -> OpamPackage.version pkg)
-            | _ -> None)
-        |> List.filter_map (fun v ->
-            let pkg = OpamPackage.create name v in
-            let opam = load t pkg in
-            let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam in
-            let available = OpamFile.OPAM.available opam in
-            match
-              OpamFilter.eval_to_bool ~default:false (env t pkg) available
-            with
-            | true -> Some (v, avoid, opam)
-            | false -> None)
-        |> (fun l ->
-        if List.for_all (fun (_, avoid, _) -> avoid) l then [] else l)
+        let raw =
+          versions
+          |> List.filter_map (version_of_dir t ~name)
+          |> List.filter_map (load_candidate t name)
+        in
+        let filtered =
+          if List.for_all (fun (_, avoid, _) -> avoid) raw then [] else raw
+        in
+        filtered
         |> List.sort (version_compare t)
-        |> List.map (fun (v, _, opam) ->
-            match user_constraints with
-            | Some test
-              when not
-                     (OpamFormula.check_version_formula (OpamFormula.Atom test)
-                        v) ->
-                (v, Error (User_constraint (name, Some test)))
-            | _ -> (v, Ok opam))
+        |> List.map (apply_user_constraint name user_constraints)
 
   let pp_rejection f = function
     | User_constraint x ->
@@ -474,45 +479,44 @@ module Ctx = struct
         overwrote_opams = OpamPackage.Map.empty;
       }
     in
+    let ocaml_conf_config name =
+      match OpamPackage.Name.to_string name with
+      | "ocaml" ->
+          let var s = OpamVariable.of_string s in
+          let b v = OpamTypes.B v in
+          let s v = OpamTypes.S v in
+          Some
+            (OpamFile.Dot_config.create
+               [
+                 (var "native", b true);
+                 (var "native-tools", b true);
+                 (var "native-dynlink", b true);
+                 (var "preinstalled", b false);
+                 (var "compiler", s "");
+               ])
+      | _ -> None
+    in
+    let install_toolchain_pkg st pkg =
+      match OpamPackage.Map.find_opt pkg all_opams with
+      | None -> st
+      | Some opam ->
+          let name = OpamPackage.name pkg in
+          let config = ocaml_conf_config name in
+          let open OpamStateTypes in
+          {
+            st with
+            installed = OpamPackage.Set.add pkg st.installed;
+            installed_opams = OpamPackage.Map.add pkg opam st.installed_opams;
+            conf_files =
+              (match config with
+              | Some c -> OpamPackage.Name.Map.add name c st.conf_files
+              | None -> st.conf_files);
+          }
+    in
     let st =
       match toolchain with
       | None | Some { relocatable = true; _ } -> st
-      | Some tc ->
-          OpamPackage.Set.fold
-            (fun pkg st ->
-              match OpamPackage.Map.find_opt pkg all_opams with
-              | None -> st
-              | Some opam ->
-                  let name = OpamPackage.name pkg in
-                  let config =
-                    match OpamPackage.Name.to_string name with
-                    | "ocaml" ->
-                        let var s = OpamVariable.of_string s in
-                        let b v = OpamTypes.B v in
-                        let s v = OpamTypes.S v in
-                        Some
-                          (OpamFile.Dot_config.create
-                             [
-                               (var "native", b true);
-                               (var "native-tools", b true);
-                               (var "native-dynlink", b true);
-                               (var "preinstalled", b false);
-                               (var "compiler", s "");
-                             ])
-                    | _ -> None
-                  in
-                  let open OpamStateTypes in
-                  {
-                    st with
-                    installed = OpamPackage.Set.add pkg st.installed;
-                    installed_opams =
-                      OpamPackage.Map.add pkg opam st.installed_opams;
-                    conf_files =
-                      (match config with
-                      | Some c -> OpamPackage.Name.Map.add name c st.conf_files
-                      | None -> st.conf_files);
-                  })
-            tc.packages st
+      | Some tc -> OpamPackage.Set.fold (fun p s -> install_toolchain_pkg s p) tc.packages st
     in
     { st; conf; prefix; toolchain }
 
@@ -811,6 +815,66 @@ module Memo = struct
         Hashtbl.add signature_memo packages_dir r;
         r
 
+  let log_missing_signatures signatures =
+    List.iter
+      (fun (d, s) ->
+        if s = None then
+          Log.info (fun m ->
+              m "solve cache disabled: %s has no usable signature" d))
+      signatures
+
+  let constraints_to_strings constraints =
+    OpamPackage.Name.Map.bindings constraints
+    |> List.map (fun (name, (relop, version)) ->
+        OpamPackage.Name.to_string name
+        ^ " "
+        ^ OpamFormula.string_of_relop relop
+        ^ " "
+        ^ OpamPackage.Version.to_string version)
+    |> List.sort String.compare
+
+  let render_name_set s =
+    OpamPackage.Name.Set.elements s
+    |> List.map OpamPackage.Name.to_string
+    |> List.sort String.compare
+
+  let build_key_buffer ~(conf : Ctx.conf) ~signatures ~constraints ~names ~test
+      ~doc ~toolchain =
+    let buf = Buffer.create 1024 in
+    let add k v =
+      Buffer.add_string buf k;
+      Buffer.add_char buf '=';
+      Buffer.add_string buf v;
+      Buffer.add_char buf '\n'
+    in
+    add "schema" schema_version;
+    add "arch" conf.arch;
+    add "os" conf.os;
+    add "os_distribution" conf.os_distribution;
+    add "os_version" conf.os_version;
+    add "os_family" conf.os_family;
+    add "ocaml_version" conf.ocaml_version;
+    List.iteri
+      (fun i (d, sig_) ->
+        add (Fmt.str "dir%d_path" i) d;
+        add (Fmt.str "dir%d_sig" i)
+          (match sig_ with Some s -> s | None -> assert false))
+      signatures;
+    List.iter (add "constraint") (constraints_to_strings constraints);
+    let ns =
+      List.map OpamPackage.Name.to_string names |> List.sort String.compare
+    in
+    List.iter (add "name") ns;
+    (* Test / doc roots that opt into [{with-test}] / [{with-doc}] dep
+       filters change the closure, so they must enter the cache key.
+       Sorted so iteration order doesn't perturb the digest. *)
+    List.iter (add "test") (render_name_set test);
+    List.iter (add "doc") (render_name_set doc);
+    (match toolchain with
+    | None -> ()
+    | Some (tc : Ctx.toolchain) -> add "toolchain_hash" tc.hash);
+    buf
+
   let key ?(test = OpamPackage.Name.Set.empty)
       ?(doc = OpamPackage.Name.Set.empty) ~sys ~(conf : Ctx.conf) ~packages_dirs
       ~constraints ~names ?toolchain () =
@@ -818,63 +882,14 @@ module Memo = struct
       List.map (fun d -> (d, signature_for_packages_dir ~sys d)) packages_dirs
     in
     if List.exists (fun (_, s) -> s = None) signatures then begin
-      List.iter
-        (fun (d, s) ->
-          if s = None then
-            Log.info (fun m ->
-                m "solve cache disabled: %s has no usable signature" d))
-        signatures;
+      log_missing_signatures signatures;
       None
     end
     else
-      let buf = Buffer.create 1024 in
-      let add k v =
-        Buffer.add_string buf k;
-        Buffer.add_char buf '=';
-        Buffer.add_string buf v;
-        Buffer.add_char buf '\n'
+      let buf =
+        build_key_buffer ~conf ~signatures ~constraints ~names ~test ~doc
+          ~toolchain
       in
-      add "schema" schema_version;
-      add "arch" conf.arch;
-      add "os" conf.os;
-      add "os_distribution" conf.os_distribution;
-      add "os_version" conf.os_version;
-      add "os_family" conf.os_family;
-      add "ocaml_version" conf.ocaml_version;
-      List.iteri
-        (fun i (d, sig_) ->
-          add (Fmt.str "dir%d_path" i) d;
-          add (Fmt.str "dir%d_sig" i)
-            (match sig_ with Some s -> s | None -> assert false))
-        signatures;
-      let cs =
-        OpamPackage.Name.Map.bindings constraints
-        |> List.map (fun (name, (relop, version)) ->
-            OpamPackage.Name.to_string name
-            ^ " "
-            ^ OpamFormula.string_of_relop relop
-            ^ " "
-            ^ OpamPackage.Version.to_string version)
-        |> List.sort String.compare
-      in
-      List.iter (add "constraint") cs;
-      let ns =
-        List.map OpamPackage.Name.to_string names |> List.sort String.compare
-      in
-      List.iter (add "name") ns;
-      (* Test / doc roots that opt into [{with-test}] / [{with-doc}]
-         dep filters change the closure, so they must enter the cache
-         key. Sorted so iteration order doesn't perturb the digest. *)
-      let render_set s =
-        OpamPackage.Name.Set.elements s
-        |> List.map OpamPackage.Name.to_string
-        |> List.sort String.compare
-      in
-      List.iter (add "test") (render_set test);
-      List.iter (add "doc") (render_set doc);
-      (match toolchain with
-      | None -> ()
-      | Some (tc : Ctx.toolchain) -> add "toolchain_hash" tc.hash);
       Some (Digest.to_hex (Digest.string (Buffer.contents buf)))
 
   let cache_dir ~cache_root = cache_root / "solve-cache"
@@ -979,46 +994,50 @@ let ctx_env ctx = std_env (Ctx.conf ctx)
 let filter_env (conf : Ctx.conf) v =
   std_env conf (OpamVariable.Full.to_string v)
 
-let direct_deps_within ~packages_dirs ~(conf : Ctx.conf) pkg in_solution =
-  let env v =
-    if List.mem v OpamPackageVar.predefined_depends_variables then None
-    else
-      match OpamVariable.Full.to_string v with
-      | "version" ->
-          Some
-            (OpamTypes.S
-               (OpamPackage.Version.to_string (OpamPackage.version pkg)))
-      | x -> std_env conf x
+let direct_deps_env ~conf pkg v =
+  if List.mem v OpamPackageVar.predefined_depends_variables then None
+  else
+    match OpamVariable.Full.to_string v with
+    | "version" ->
+        Some
+          (OpamTypes.S
+             (OpamPackage.Version.to_string (OpamPackage.version pkg)))
+    | x -> std_env conf x
+
+let names_in_solution ~in_solution atoms =
+  List.fold_left
+    (fun s (name, _) ->
+      if OpamPackage.Name.Set.mem name in_solution then
+        OpamPackage.Name.Set.add name s
+      else s)
+    OpamPackage.Name.Set.empty atoms
+
+let direct_deps_of_opam ~env ~in_solution opam =
+  let deps =
+    OpamFile.OPAM.depends opam
+    |> OpamFilter.partial_filter_formula env
+    |> OpamFilter.filter_deps ~build:true ~post:false ~test:false ~doc:false
+         ~dev_setup:false ~dev:false ~default:false
+    |> OpamFormula.atoms
+    |> names_in_solution ~in_solution
   in
+  let depopts =
+    OpamFormula.fold_left
+      (fun s (name, _) ->
+        if OpamPackage.Name.Set.mem name in_solution then
+          OpamPackage.Name.Set.add name s
+        else s)
+      OpamPackage.Name.Set.empty
+      (OpamFile.OPAM.depopts opam)
+  in
+  OpamPackage.Name.Set.union deps depopts
+
+let direct_deps_within ~packages_dirs ~(conf : Ctx.conf) pkg in_solution =
   match find_opam_file packages_dirs pkg with
   | None -> OpamPackage.Name.Set.empty
   | Some opam ->
-      let names_from_formula f =
-        let atoms = OpamFormula.atoms f in
-        List.fold_left
-          (fun s (name, _) ->
-            if OpamPackage.Name.Set.mem name in_solution then
-              OpamPackage.Name.Set.add name s
-            else s)
-          OpamPackage.Name.Set.empty atoms
-      in
-      let deps =
-        OpamFile.OPAM.depends opam
-        |> OpamFilter.partial_filter_formula env
-        |> OpamFilter.filter_deps ~build:true ~post:false ~test:false ~doc:false
-             ~dev_setup:false ~dev:false ~default:false
-        |> names_from_formula
-      in
-      let depopts =
-        OpamFormula.fold_left
-          (fun s (name, _) ->
-            if OpamPackage.Name.Set.mem name in_solution then
-              OpamPackage.Name.Set.add name s
-            else s)
-          OpamPackage.Name.Set.empty
-          (OpamFile.OPAM.depopts opam)
-      in
-      OpamPackage.Name.Set.union deps depopts
+      let env = direct_deps_env ~conf pkg in
+      direct_deps_of_opam ~env ~in_solution opam
 
 let topo_sort ~packages_dirs ~conf pkgs =
   let in_solution =
@@ -1109,33 +1128,33 @@ let solve_with_dir_context ?test ?doc ctx ~packages_dirs ~constraints names =
       Log.debug (fun m -> m "No solution: %s" msg);
       Error msg
 
+let record_pkg_source ~packages_dirs by_dir pkg =
+  let name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
+  let full = OpamPackage.to_string pkg in
+  let src =
+    List.find_opt
+      (fun d -> Sys.file_exists (d / name / full / "opam"))
+      packages_dirs
+  in
+  let src_s = Stdlib.Option.value src ~default:"<not found>" in
+  Log.debug (fun m -> m "  %s <- %s" full src_s);
+  let n = Stdlib.Option.value (Hashtbl.find_opt by_dir src_s) ~default:0 in
+  Hashtbl.replace by_dir src_s (n + 1)
+
+let log_dir_contribution ~by_dir seen d =
+  if not (Hashtbl.mem seen d) then begin
+    Hashtbl.add seen d ();
+    match Hashtbl.find_opt by_dir d with
+    | Some n -> Log.debug (fun m -> m "  %d <- %s" n d)
+    | None -> ()
+  end
+
 let log_package_sources ~packages_dirs pkgs =
   let by_dir = Hashtbl.create 8 in
-  List.iter
-    (fun pkg ->
-      let name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
-      let full = OpamPackage.to_string pkg in
-      let src =
-        List.find_opt
-          (fun d -> Sys.file_exists (d / name / full / "opam"))
-          packages_dirs
-      in
-      let src_s = Stdlib.Option.value src ~default:"<not found>" in
-      Log.debug (fun m -> m "  %s <- %s" full src_s);
-      let n = Stdlib.Option.value (Hashtbl.find_opt by_dir src_s) ~default:0 in
-      Hashtbl.replace by_dir src_s (n + 1))
-    pkgs;
+  List.iter (record_pkg_source ~packages_dirs by_dir) pkgs;
   Log.debug (fun m -> m "packages_dirs contribution to solution:");
   let seen = Hashtbl.create 8 in
-  List.iter
-    (fun d ->
-      if not (Hashtbl.mem seen d) then begin
-        Hashtbl.add seen d ();
-        match Hashtbl.find_opt by_dir d with
-        | Some n -> Log.debug (fun m -> m "  %d <- %s" n d)
-        | None -> ()
-      end)
-    packages_dirs
+  List.iter (log_dir_contribution ~by_dir seen) packages_dirs
 
 (* Extend [names] with the active toolchain's root packages so the solve
    includes them. *)

@@ -232,6 +232,14 @@ let append ~fs ~cache_root e =
 let split_lines s =
   String.split_on_char '\n' s |> List.filter (fun l -> l <> "")
 
+let decode_event_for ~os_key ~file line =
+  match Jsont_bytesrw.decode_string ~locs:false ~file event_codec line with
+  | Ok e when e.os_key = os_key -> Some e
+  | Ok _ -> None
+  | Error msg ->
+      Log.debug (fun m -> m "audit bad line: %s" msg);
+      None
+
 let read_all ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root ~os_key =
   let p = local_log_path ~cache_root in
   match
@@ -239,16 +247,7 @@ let read_all ~(fs : Eio.Fs.dir_ty Eio.Path.t) ~cache_root ~os_key =
   with
   | None -> []
   | Some content ->
-      split_lines content
-      |> List.filter_map (fun line ->
-          match
-            Jsont_bytesrw.decode_string ~locs:false ~file:p event_codec line
-          with
-          | Ok e when e.os_key = os_key -> Some e
-          | Ok _ -> None
-          | Error msg ->
-              Log.debug (fun m -> m "audit bad line: %s" msg);
-              None)
+      split_lines content |> List.filter_map (decode_event_for ~os_key ~file:p)
 
 (* -- Per-os export ------------------------------------------------------- *)
 

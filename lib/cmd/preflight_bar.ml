@@ -60,84 +60,91 @@ module Preflight = struct
     in
     list ~sep:(const " ") [ spin; phase_seg; bar_seg; count_seg; pct_seg ]
 
-  let with_bar ~clock ?total_steps f =
-    let enabled = Tty.is_tty () in
-    let stopped = ref false in
-    if not enabled then begin
-      let on_phase _ = () in
-      let on_text _ = () in
-      let preflight_done () = stopped := true in
-      Fun.protect
-        ~finally:(fun () -> stopped := true)
-        (fun () -> f ~on_phase ~on_text ~preflight_done ~shared_display:None)
+  let with_bar_noop ~stopped f =
+    let on_phase _ = () in
+    let on_text _ = () in
+    let preflight_done () = stopped := true in
+    Fun.protect
+      ~finally:(fun () -> stopped := true)
+      (fun () -> f ~on_phase ~on_text ~preflight_done ~shared_display:None)
+
+  let make_display () =
+    let cfg = Progress.Config.v ~ppf:Format.err_formatter ~persistent:false () in
+    (* Open with [Multi.blank] (no built-in reporters) and attach the
+       overall bar via [add_line]. Keeping the [Display.t] typed as
+       [(unit, unit) Display.t] regardless of what's added later lets
+       subsystems receive the same display via
+       [?shared_display:(unit, unit) Display.t] without OCaml's
+       inference unifying the parameter to whatever the
+       OWNED-display path uses. *)
+    let display : (unit, unit) Progress.Display.t =
+      Logs_progress.start_display_compact ~ppf:Format.err_formatter ~config:cfg
+    in
+    Logs_progress.set_active display;
+    display
+
+  let finalise_quietly display =
+    try Progress.Display.finalise display with Sys_error _ | Failure _ -> ()
+
+  let stop_display ~stopped display =
+    if not !stopped then begin
+      stopped := true;
+      Logs_progress.clear_active ();
+      finalise_quietly display
     end
-    else
-      let total = match total_steps with Some n when n > 0 -> n | _ -> 12 in
-      Eio.Switch.run @@ fun sw ->
-      let cfg =
-        Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()
-      in
-      (* Open with [Multi.blank] (no built-in reporters) and attach the
-         overall bar via [add_line]. Keeping the [Display.t] typed as
-         [(unit, unit) Display.t] regardless of what's added later lets
-         subsystems receive the same display via
-         [?shared_display:(unit, unit) Display.t] without OCaml's
-         inference unifying the parameter to whatever the
-         OWNED-display path uses. *)
-      let display : (unit, unit) Progress.Display.t =
-        Logs_progress.start_display_compact ~ppf:Format.err_formatter
-          ~config:cfg
-      in
-      Logs_progress.set_active display;
-      let overall_h = Progress.Display.add_line display (overall_line ~total) in
-      let msg = ref "Preparing" in
-      let stepped = ref false in
-      let push ~advance =
+
+  let tick_quietly display =
+    try Progress.Display.tick display with Sys_error _ | Failure _ -> ()
+
+  let rec tick_loop ~clock ~stopped display =
+    Eio.Time.sleep clock 0.1;
+    if !stopped then `Stop_daemon
+    else begin
+      tick_quietly display;
+      tick_loop ~clock ~stopped display
+    end
+
+  let spawn_tick_daemon ~sw ~stopped ~clock display =
+    Eio.Fiber.fork_daemon ~sw (fun () -> tick_loop ~clock ~stopped display)
+
+  let make_push ~stopped overall_h msg =
+    fun ~advance ->
+      if not !stopped then
         let delta = if advance then 1 else 0 in
         try Progress.Reporter.report overall_h (delta, !msg)
         with Sys_error _ | Failure _ -> ()
-      in
-      push ~advance:false;
-      Eio.Fiber.fork_daemon ~sw (fun () ->
-          let rec loop () =
-            Eio.Time.sleep clock 0.1;
-            if !stopped then `Stop_daemon
-            else begin
-              (try Progress.Display.tick display
-               with Sys_error _ | Failure _ -> ());
-              loop ()
-            end
-          in
-          loop ());
-      let on_phase m =
-        if not !stopped then begin
-          msg := m;
-          push ~advance:!stepped;
-          stepped := true
-        end
-      in
-      let on_text m =
-        if not !stopped then begin
-          msg := m;
-          push ~advance:false
-        end
-      in
-      let preflight_done () =
-        if not !stopped then begin
-          stopped := true;
-          Logs_progress.clear_active ();
-          try Progress.Display.finalise display
-          with Sys_error _ | Failure _ -> ()
-        end
-      in
-      Fun.protect
-        ~finally:(fun () ->
-          if not !stopped then begin
-            stopped := true;
-            Logs_progress.clear_active ();
-            try Progress.Display.finalise display
-            with Sys_error _ | Failure _ -> ()
-          end)
-        (fun () ->
-          f ~on_phase ~on_text ~preflight_done ~shared_display:(Some display))
+
+  let with_bar_tty ~sw ~clock ~total f =
+    let stopped = ref false in
+    let display = make_display () in
+    let overall_h = Progress.Display.add_line display (overall_line ~total) in
+    let msg = ref "Preparing" in
+    let stepped = ref false in
+    let push = make_push ~stopped overall_h msg in
+    push ~advance:false;
+    spawn_tick_daemon ~sw ~stopped ~clock display;
+    let on_phase m =
+      if not !stopped then begin
+        msg := m;
+        push ~advance:!stepped;
+        stepped := true
+      end
+    in
+    let on_text m =
+      if not !stopped then begin
+        msg := m;
+        push ~advance:false
+      end
+    in
+    let preflight_done () = stop_display ~stopped display in
+    Fun.protect
+      ~finally:(fun () -> stop_display ~stopped display)
+      (fun () ->
+        f ~on_phase ~on_text ~preflight_done ~shared_display:(Some display))
+
+  let with_bar ~clock ?total_steps f =
+    if not (Tty.is_tty ()) then with_bar_noop ~stopped:(ref false) f
+    else
+      let total = match total_steps with Some n when n > 0 -> n | _ -> 12 in
+      Eio.Switch.run @@ fun sw -> with_bar_tty ~sw ~clock ~total f
 end

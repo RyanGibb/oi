@@ -39,20 +39,23 @@ type snapshot = (string, float) Hashtbl.t
 let snapshot ~fs prefix =
   let tbl = Hashtbl.create 4096 in
   let base = Eio.Path.(fs / prefix) in
+  let record_entry ~rel ~(st : Eio.File.Stat.t) ~scan =
+    match st.kind with
+    | `Regular_file | `Symbolic_link -> Hashtbl.replace tbl rel st.mtime
+    | `Directory -> scan rel
+    | _ -> ()
+  in
+  let process_name ~rel_dir ~dir ~scan name =
+    let rel = if rel_dir = "" then name else rel_dir / name in
+    try
+      let st = Eio.Path.stat ~follow:false Eio.Path.(dir / name) in
+      record_entry ~rel ~st ~scan
+    with Eio.Exn.Io _ -> ()
+  in
   let rec scan rel_dir =
     let dir = if rel_dir = "" then base else Eio.Path.(base / rel_dir) in
     if Sysops.file_exists dir then
-      List.iter
-        (fun name ->
-          let rel = if rel_dir = "" then name else rel_dir / name in
-          try
-            let st = Eio.Path.stat ~follow:false Eio.Path.(dir / name) in
-            match st.kind with
-            | `Regular_file | `Symbolic_link -> Hashtbl.replace tbl rel st.mtime
-            | `Directory -> scan rel
-            | _ -> ()
-          with Eio.Exn.Io _ -> ())
-        (Eio.Path.read_dir dir)
+      List.iter (process_name ~rel_dir ~dir ~scan) (Eio.Path.read_dir dir)
   in
   scan "";
   tbl
@@ -60,27 +63,30 @@ let snapshot ~fs prefix =
 let diff ~fs ~prefix ~(before : snapshot) =
   let results = ref [] in
   let base = Eio.Path.(fs / prefix) in
+  let regular_is_new rel (st : Eio.File.Stat.t) =
+    match Hashtbl.find_opt before rel with
+    | None -> true
+    | Some old_mtime -> st.mtime > old_mtime
+  in
+  let record_entry ~rel ~abs ~(st : Eio.File.Stat.t) ~scan =
+    match st.kind with
+    | `Regular_file | `Symbolic_link ->
+        if regular_is_new rel st then results := (rel, abs) :: !results
+    | `Directory -> scan rel
+    | _ -> ()
+  in
+  let process_name ~rel_dir ~dir ~scan name =
+    let rel = if rel_dir = "" then name else rel_dir / name in
+    let abs = prefix / if rel_dir = "" then name else rel_dir / name in
+    try
+      let st = Eio.Path.stat ~follow:false Eio.Path.(dir / name) in
+      record_entry ~rel ~abs ~st ~scan
+    with Eio.Exn.Io _ -> ()
+  in
   let rec scan rel_dir =
     let dir = if rel_dir = "" then base else Eio.Path.(base / rel_dir) in
     if Sysops.file_exists dir then
-      List.iter
-        (fun name ->
-          let rel = if rel_dir = "" then name else rel_dir / name in
-          let abs = prefix / if rel_dir = "" then name else rel_dir / name in
-          try
-            let st = Eio.Path.stat ~follow:false Eio.Path.(dir / name) in
-            match st.kind with
-            | `Regular_file | `Symbolic_link ->
-                let is_new =
-                  match Hashtbl.find_opt before rel with
-                  | None -> true
-                  | Some old_mtime -> st.mtime > old_mtime
-                in
-                if is_new then results := (rel, abs) :: !results
-            | `Directory -> scan rel
-            | _ -> ()
-          with Eio.Exn.Io _ -> ())
-        (Eio.Path.read_dir dir)
+      List.iter (process_name ~rel_dir ~dir ~scan) (Eio.Path.read_dir dir)
   in
   scan "";
   !results

@@ -64,19 +64,39 @@ let meta_packages_dir ~path = meta_root ~path / "packages"
 let overlay_dir ~path ~handle = v1_root ~path / handle
 let overlay_packages_dir ~path ~handle = overlay_dir ~path ~handle / "packages"
 
+let sorted_subdirs root =
+  if not (Sys.file_exists root) then []
+  else
+    Sys.readdir root |> Array.to_list
+    |> List.filter (fun n ->
+        (not (String.starts_with ~prefix:"." n))
+        && Sys.is_directory (root / n))
+    |> List.sort String.compare
+
+let strip_pkg_prefix pkg pkg_ver_dir =
+  let prefix = pkg ^ "." in
+  if String.starts_with ~prefix pkg_ver_dir then
+    String.sub pkg_ver_dir (String.length prefix)
+      (String.length pkg_ver_dir - String.length prefix)
+  else pkg_ver_dir
+
+let iter_pkg_versions ~handle f pkg_dir pkg =
+  let pv_dir = pkg_dir / pkg in
+  sorted_subdirs pv_dir
+  |> List.filter (fun pv -> Sys.file_exists (pv_dir / pv / "opam"))
+  |> List.iter (fun pkg_ver_dir ->
+      let opam_path = pv_dir / pkg_ver_dir / "opam" in
+      let version = strip_pkg_prefix pkg pkg_ver_dir in
+      f ~handle ~pkg ~version ~opam_path)
+
+let iter_handle_packages ~path ~handle f =
+  let pkgs_dir = overlay_packages_dir ~path ~handle in
+  sorted_subdirs pkgs_dir |> List.iter (iter_pkg_versions ~handle f pkgs_dir)
+
 let iter_opam_files ~path ?(include_handles = []) ?(skip_handles = []) f =
   let v1 = v1_root ~path in
   if not (Sys.file_exists v1) then ()
   else
-    let sorted_subdirs root =
-      if not (Sys.file_exists root) then []
-      else
-        Sys.readdir root |> Array.to_list
-        |> List.filter (fun n ->
-            (not (String.starts_with ~prefix:"." n))
-            && Sys.is_directory (root / n))
-        |> List.sort String.compare
-    in
     let handle_ok h =
       (* [v2/reporepo/] is the meta-overlay holding handle-registration
          entries, not an archive-bearing overlay. *)
@@ -84,25 +104,8 @@ let iter_opam_files ~path ?(include_handles = []) ?(skip_handles = []) f =
       && (include_handles = [] || List.mem h include_handles)
       && not (List.mem h skip_handles)
     in
-    let strip_pkg_prefix pkg pkg_ver_dir =
-      let prefix = pkg ^ "." in
-      if String.starts_with ~prefix pkg_ver_dir then
-        String.sub pkg_ver_dir (String.length prefix)
-          (String.length pkg_ver_dir - String.length prefix)
-      else pkg_ver_dir
-    in
     sorted_subdirs v1 |> List.filter handle_ok
-    |> List.iter (fun handle ->
-        let pkgs_dir = overlay_packages_dir ~path ~handle in
-        sorted_subdirs pkgs_dir
-        |> List.iter (fun pkg ->
-            let pkg_dir = pkgs_dir / pkg in
-            sorted_subdirs pkg_dir
-            |> List.filter (fun pv -> Sys.file_exists (pkg_dir / pv / "opam"))
-            |> List.iter (fun pkg_ver_dir ->
-                let opam_path = pkg_dir / pkg_ver_dir / "opam" in
-                let version = strip_pkg_prefix pkg pkg_ver_dir in
-                f ~handle ~pkg ~version ~opam_path)))
+    |> List.iter (fun handle -> iter_handle_packages ~path ~handle f)
 
 type entry = {
   handle : string;
@@ -164,25 +167,38 @@ let last_refresh_age_s ~now path =
   in
   Option.map (fun m -> now -. m) mtime
 
+let refresh_existing_clone ~reporter ~sys path =
+  Log.info (fun m -> m "Refreshing reporepo at %s" path);
+  reporter.Build_progress.event (Status "Refreshing reporepo");
+  try
+    Retry.with_attempts ~label:(Fmt.str "git pull reporepo at %s" path)
+      (fun () ->
+        D10.Sysops.Cmd.run sys [ "git"; "-C"; path; "pull"; "--ff-only" ])
+  with Eio.Exn.Io _ | Failure _ ->
+    Log.warn (fun m ->
+        m
+          "Failed to refresh reporepo at %s — continuing with existing state. \
+           Resolve local changes and retry if this matters."
+          path)
+
+let fresh_clone ~reporter ~fs ~sys ~url ~path =
+  mkdir_p ~fs (Filename.dirname path);
+  Log.info (fun m -> m "Cloning reporepo from %s to %s" url path);
+  reporter.Build_progress.event (Status "Cloning reporepo");
+  try
+    Fmt.kstr
+      (fun label ->
+        Retry.with_attempts ~label (fun () ->
+            D10.Sysops.Cmd.run sys [ "git"; "clone"; url; path ]))
+      "git clone %s" url
+  with Eio.Exn.Io _ | Failure _ ->
+    Error.fail_config_error "failed to clone reporepo from %s into %s" url path
+
 let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path ~url
     () =
   let dot_git = path / ".git" in
   if Sys.file_exists dot_git then
-    begin if refresh then begin
-      Log.info (fun m -> m "Refreshing reporepo at %s" path);
-      reporter.Build_progress.event (Status "Refreshing reporepo");
-      try
-        Retry.with_attempts ~label:(Fmt.str "git pull reporepo at %s" path)
-          (fun () ->
-            D10.Sysops.Cmd.run sys [ "git"; "-C"; path; "pull"; "--ff-only" ])
-      with Eio.Exn.Io _ | Failure _ ->
-        Log.warn (fun m ->
-            m
-              "Failed to refresh reporepo at %s — continuing with existing \
-               state. Resolve local changes and retry if this matters."
-              path)
-    end
-    end
+    (if refresh then refresh_existing_clone ~reporter ~sys path)
   else if
     Sys.file_exists path && Sys.is_directory path
     && Array.length (Sys.readdir path) > 0
@@ -191,20 +207,7 @@ let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path ~url
       "reporepo path %s exists but is not a git clone; move or remove it and \
        retry"
       path
-  else begin
-    mkdir_p ~fs (Filename.dirname path);
-    Log.info (fun m -> m "Cloning reporepo from %s to %s" url path);
-    reporter.Build_progress.event (Status "Cloning reporepo");
-    try
-      Fmt.kstr
-        (fun label ->
-          Retry.with_attempts ~label (fun () ->
-              D10.Sysops.Cmd.run sys [ "git"; "clone"; url; path ]))
-        "git clone %s" url
-    with Eio.Exn.Io _ | Failure _ ->
-      Error.fail_config_error "failed to clone reporepo from %s into %s" url
-        path
-  end
+  else fresh_clone ~reporter ~fs ~sys ~url ~path
 
 let git_at ~sys ~path args =
   D10.Sysops.Cmd.run sys ("git" :: "-C" :: path :: args)
@@ -337,6 +340,11 @@ let read_bool_extension ~path extensions name =
       | OpamParserTypes.FullPos.Bool b -> Some b
       | _ -> Error.fail_config_error "%s: %s must be a boolean" path name)
 
+let string_of_value ~path ~name (it : OpamParserTypes.FullPos.value) =
+  match it.pelem with
+  | OpamParserTypes.FullPos.String s -> s
+  | _ -> Error.fail_config_error "%s: %s items must be strings" path name
+
 let read_string_list_extension ~path extensions name =
   match OpamStd.String.Map.find_opt name extensions with
   | None -> []
@@ -344,17 +352,20 @@ let read_string_list_extension ~path extensions name =
       match v.OpamParserTypes.FullPos.pelem with
       | OpamParserTypes.FullPos.String s -> [ s ]
       | OpamParserTypes.FullPos.List { pelem = items; _ } ->
-          List.map
-            (fun (it : OpamParserTypes.FullPos.value) ->
-              match it.pelem with
-              | OpamParserTypes.FullPos.String s -> s
-              | _ ->
-                  Error.fail_config_error "%s: %s items must be strings" path
-                    name)
-            items
+          List.map (string_of_value ~path ~name) items
       | _ ->
           Error.fail_config_error "%s: %s must be a string or a list of strings"
             path name)
+
+let root_packages_item ~as_string_item ~path ~name
+    (it : OpamParserTypes.FullPos.value) =
+  match it.pelem with
+  | OpamParserTypes.FullPos.String s -> [ s ]
+  | OpamParserTypes.FullPos.List { pelem = sub; _ } ->
+      List.map as_string_item sub
+  | _ ->
+      Error.fail_config_error
+        "%s: %s item must be a string or a list of strings" path name
 
 let read_root_packages_extension ~path extensions name =
   let as_string_item (v : OpamParserTypes.FullPos.value) =
@@ -369,17 +380,7 @@ let read_root_packages_extension ~path extensions name =
       match v.OpamParserTypes.FullPos.pelem with
       | OpamParserTypes.FullPos.String s -> [ [ s ] ]
       | OpamParserTypes.FullPos.List { pelem = items; _ } ->
-          List.map
-            (fun (it : OpamParserTypes.FullPos.value) ->
-              match it.pelem with
-              | OpamParserTypes.FullPos.String s -> [ s ]
-              | OpamParserTypes.FullPos.List { pelem = sub; _ } ->
-                  List.map as_string_item sub
-              | _ ->
-                  Error.fail_config_error
-                    "%s: %s item must be a string or a list of strings" path
-                    name)
-            items
+          List.map (root_packages_item ~as_string_item ~path ~name) items
       | _ ->
           Error.fail_config_error
             "%s: %s must be a string, a list of strings, or a list of lists"
@@ -404,82 +405,89 @@ let parse_depends_formula formula =
     formula;
   List.rev !out
 
+let require_name ~path opam =
+  match OpamFile.OPAM.name_opt opam with
+  | Some n -> OpamPackage.Name.to_string n
+  | None -> Error.fail_config_error "%s: missing name field" path
+
+let require_version ~path opam =
+  match OpamFile.OPAM.version_opt opam with
+  | Some v -> OpamPackage.Version.to_string v
+  | None -> Error.fail_config_error "%s: missing version field" path
+
+let url_and_commit opam =
+  match OpamFile.OPAM.url opam with
+  | Some u -> split_url_commit (OpamUrl.to_string (OpamFile.URL.url u))
+  | None -> ("", "")
+
+let validate_toolchain_fields ~path ~url_bare ~toolchain_name
+    ~toolchain_compiler ~default_toolchain =
+  if url_bare = "" && toolchain_name = None then
+    Error.fail_config_error "%s: entry needs either a [url:] block or [%s]" path
+      Keys.toolchain_name;
+  if toolchain_name <> None && toolchain_compiler = None then
+    Error.fail_config_error
+      "%s: %s is set but %s is missing — every toolchain definition must \
+       declare its compiler package (e.g. \"ocaml-base-compiler.5.4.1\")"
+      path Keys.toolchain_name Keys.toolchain_compiler;
+  if default_toolchain && toolchain_name = None then
+    Error.fail_config_error
+      "%s: %s is only meaningful on toolchain definitions (entries with %s \
+       set)"
+      path Keys.default_toolchain Keys.toolchain_name
+
+let build_entry ~path opam : entry =
+  let handle = require_name ~path opam in
+  let version = require_version ~path opam in
+  let extensions = OpamFile.OPAM.extensions opam in
+  let url_bare, commit = url_and_commit opam in
+  let toolchain_name = read_string_extension extensions Keys.toolchain_name in
+  let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
+  let ref_ = read_string_extension extensions Keys.ref in
+  let toolchain = read_string_extension extensions Keys.toolchain in
+  let toolchain_compiler =
+    read_string_extension extensions Keys.toolchain_compiler
+  in
+  let relocatable = read_bool_extension ~path extensions Keys.relocatable in
+  let toolchain_roots =
+    read_root_packages_extension ~path extensions Keys.toolchain_roots
+  in
+  let toolchain_tools =
+    read_string_list_extension ~path extensions Keys.toolchain_tools
+  in
+  let default_toolchain =
+    match read_bool_extension ~path extensions Keys.default_toolchain with
+    | Some b -> b
+    | None -> false
+  in
+  validate_toolchain_fields ~path ~url_bare ~toolchain_name ~toolchain_compiler
+    ~default_toolchain;
+  let root_packages =
+    read_root_packages_extension ~path extensions Keys.root_packages
+  in
+  {
+    handle;
+    version;
+    url = url_bare;
+    commit;
+    ref_;
+    toolchain;
+    toolchain_name;
+    toolchain_compiler;
+    relocatable;
+    toolchain_roots;
+    toolchain_tools;
+    default_toolchain;
+    depends;
+    root_packages;
+    opam_path = path;
+  }
+
 let parse_entry_file path : entry option =
   try
     let opam = OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)) in
     if not (is_overlay_extension (OpamFile.OPAM.extensions opam)) then None
-    else
-      let handle =
-        match OpamFile.OPAM.name_opt opam with
-        | Some n -> OpamPackage.Name.to_string n
-        | None -> Error.fail_config_error "%s: missing name field" path
-      in
-      let version =
-        match OpamFile.OPAM.version_opt opam with
-        | Some v -> OpamPackage.Version.to_string v
-        | None -> Error.fail_config_error "%s: missing version field" path
-      in
-      let extensions = OpamFile.OPAM.extensions opam in
-      let url_bare, commit =
-        match OpamFile.OPAM.url opam with
-        | Some u -> split_url_commit (OpamUrl.to_string (OpamFile.URL.url u))
-        | None -> ("", "")
-      in
-      let toolchain_name =
-        read_string_extension extensions Keys.toolchain_name
-      in
-      if url_bare = "" && toolchain_name = None then
-        Error.fail_config_error "%s: entry needs either a [url:] block or [%s]"
-          path Keys.toolchain_name;
-      let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
-      let ref_ = read_string_extension extensions Keys.ref in
-      let toolchain = read_string_extension extensions Keys.toolchain in
-      let toolchain_compiler =
-        read_string_extension extensions Keys.toolchain_compiler
-      in
-      if toolchain_name <> None && toolchain_compiler = None then
-        Error.fail_config_error
-          "%s: %s is set but %s is missing — every toolchain definition must \
-           declare its compiler package (e.g. \"ocaml-base-compiler.5.4.1\")"
-          path Keys.toolchain_name Keys.toolchain_compiler;
-      let relocatable = read_bool_extension ~path extensions Keys.relocatable in
-      let toolchain_roots =
-        read_root_packages_extension ~path extensions Keys.toolchain_roots
-      in
-      let toolchain_tools =
-        read_string_list_extension ~path extensions Keys.toolchain_tools
-      in
-      let default_toolchain =
-        match read_bool_extension ~path extensions Keys.default_toolchain with
-        | Some b -> b
-        | None -> false
-      in
-      if default_toolchain && toolchain_name = None then
-        Error.fail_config_error
-          "%s: %s is only meaningful on toolchain definitions (entries with %s \
-           set)"
-          path Keys.default_toolchain Keys.toolchain_name;
-      let root_packages =
-        read_root_packages_extension ~path extensions Keys.root_packages
-      in
-      Some
-        {
-          handle;
-          version;
-          url = url_bare;
-          commit;
-          ref_;
-          toolchain;
-          toolchain_name;
-          toolchain_compiler;
-          relocatable;
-          toolchain_roots;
-          toolchain_tools;
-          default_toolchain;
-          depends;
-          root_packages;
-          opam_path = path;
-        }
+    else Some (build_entry ~path opam)
   with
   | Error.E _ as e -> raise e
   | exn ->
@@ -491,6 +499,44 @@ let version_compare a b =
     (OpamPackage.Version.of_string a)
     (OpamPackage.Version.of_string b)
 
+let parse_handle_versions packages_dir h =
+  let handle_dir = packages_dir / h in
+  if not (Sys.is_directory handle_dir) then []
+  else
+    let versions = Sys.readdir handle_dir |> Array.to_list in
+    List.sort String.compare versions
+    |> List.filter_map (fun v ->
+        let opam_path = handle_dir / v / "opam" in
+        if Sys.file_exists opam_path then parse_entry_file opam_path else None)
+
+let collect_latest_per_handle entries =
+  List.fold_left
+    (fun acc (e : entry) ->
+      match List.assoc_opt e.handle acc with
+      | None -> (e.handle, e) :: acc
+      | Some prev when version_compare e.version prev.version > 0 ->
+          (e.handle, e) :: List.remove_assoc e.handle acc
+      | Some _ -> acc)
+    [] entries
+
+let check_default_toolchains ~path entries =
+  let latest_per_handle = collect_latest_per_handle entries in
+  let defaults =
+    latest_per_handle
+    |> List.filter_map (fun (_, (e : entry)) ->
+        if e.default_toolchain then Some e.handle else None)
+    |> List.sort String.compare
+  in
+  match defaults with
+  | [] | [ _ ] -> ()
+  | many ->
+      Error.fail_config_error
+        "reporepo at %s has %d toolchains marked as default (%s: true): %s. \
+         Exactly one toolchain may be the default — clear the flag on the \
+         others."
+        path (List.length many) Keys.default_toolchain
+        (String.concat ", " many)
+
 let load ~path =
   let packages_dir = meta_packages_dir ~path in
   if not (Sys.file_exists packages_dir) then []
@@ -498,47 +544,13 @@ let load ~path =
     let entries =
       let handles = Sys.readdir packages_dir |> Array.to_list in
       List.sort String.compare handles
-      |> List.concat_map (fun h ->
-          let handle_dir = packages_dir / h in
-          if not (Sys.is_directory handle_dir) then []
-          else
-            let versions = Sys.readdir handle_dir |> Array.to_list in
-            List.sort String.compare versions
-            |> List.filter_map (fun v ->
-                let opam_path = handle_dir / v / "opam" in
-                if Sys.file_exists opam_path then parse_entry_file opam_path
-                else None))
+      |> List.concat_map (parse_handle_versions packages_dir)
     in
     (* Default-flag check: ask "for each handle's LATEST version, is
        it flagged?". Older versions don't count — bumping a
        toolchain to clear the flag must not be defeated by the
        original-flagged entry still on disk. *)
-    let latest_per_handle =
-      entries
-      |> List.fold_left
-           (fun acc (e : entry) ->
-             match List.assoc_opt e.handle acc with
-             | None -> (e.handle, e) :: acc
-             | Some prev when version_compare e.version prev.version > 0 ->
-                 (e.handle, e) :: List.remove_assoc e.handle acc
-             | Some _ -> acc)
-           []
-    in
-    let defaults =
-      latest_per_handle
-      |> List.filter_map (fun (_, (e : entry)) ->
-          if e.default_toolchain then Some e.handle else None)
-      |> List.sort String.compare
-    in
-    (match defaults with
-    | [] | [ _ ] -> ()
-    | many ->
-        Error.fail_config_error
-          "reporepo at %s has %d toolchains marked as default (%s: true): %s. \
-           Exactly one toolchain may be the default — clear the flag on the \
-           others."
-          path (List.length many) Keys.default_toolchain
-          (String.concat ", " many));
+    check_default_toolchains ~path entries;
     entries
 
 let latest entries ~handle =
@@ -575,6 +587,11 @@ let default_toolchain entries =
   | [] -> None
   | e :: _ -> Some e
 
+let visit_dep ~by_handle ~visit (h, _v) =
+  match Hashtbl.find_opt by_handle h with
+  | Some dep -> visit dep
+  | None -> ()
+
 let topo_sort entries =
   let by_handle = Hashtbl.create 16 in
   List.iter (fun (e : entry) -> Hashtbl.replace by_handle e.handle e) entries;
@@ -583,12 +600,7 @@ let topo_sort entries =
   let rec visit (e : entry) =
     if not (Hashtbl.mem visited e.handle) then begin
       Hashtbl.add visited e.handle ();
-      List.iter
-        (fun (h, _v) ->
-          match Hashtbl.find_opt by_handle h with
-          | Some dep -> visit dep
-          | None -> ())
-        e.depends;
+      List.iter (visit_dep ~by_handle ~visit) e.depends;
       out_rev := e :: !out_rev
     end
   in
@@ -596,6 +608,27 @@ let topo_sort entries =
   List.rev !out_rev
 
 module Inst = Opam_0install.Solver.Make (Opam_0install.Dir_context)
+
+let log_resolved (e : entry) =
+  let short =
+    if String.length e.commit >= 7 then String.sub e.commit 0 7 else e.commit
+  in
+  Log.debug (fun m ->
+      m "  resolved %s.%s@%s via %s" e.handle e.version short e.url)
+
+let resolve_from_selection entries sels =
+  let pkgs = Inst.packages_of_result sels in
+  let resolved =
+    List.filter_map
+      (fun pkg ->
+        find entries
+          ~handle:(OpamPackage.Name.to_string (OpamPackage.name pkg))
+          ~version:(OpamPackage.Version.to_string (OpamPackage.version pkg)))
+      pkgs
+  in
+  let sorted = topo_sort resolved in
+  List.iter log_resolved sorted;
+  sorted
 
 let resolve entries ~roots =
   if roots = [] then []
@@ -631,28 +664,7 @@ let resolve entries ~roots =
     | Error diag ->
         Error.fail_config_error "overlay resolution failed: %s"
           (Inst.diagnostics diag)
-    | Ok sels ->
-        let pkgs = Inst.packages_of_result sels in
-        let resolved =
-          List.filter_map
-            (fun pkg ->
-              find entries
-                ~handle:(OpamPackage.Name.to_string (OpamPackage.name pkg))
-                ~version:
-                  (OpamPackage.Version.to_string (OpamPackage.version pkg)))
-            pkgs
-        in
-        let sorted = topo_sort resolved in
-        List.iter
-          (fun (e : entry) ->
-            let short =
-              if String.length e.commit >= 7 then String.sub e.commit 0 7
-              else e.commit
-            in
-            Log.debug (fun m ->
-                m "  resolved %s.%s@%s via %s" e.handle e.version short e.url))
-          sorted;
-        sorted
+    | Ok sels -> resolve_from_selection entries sels
 
 let base_entries () =
   let path = env_path () in
@@ -674,6 +686,22 @@ let assert_overlay_dir ~path ~handle =
       handle path dir handle;
   dir
 
+let refresh_needed_by_age ~threshold path =
+  match last_refresh_age_s ~now:(Unix.time ()) path with
+  | Some age when age > threshold ->
+      Log.info (fun m ->
+          m "Reporepo at %s is %.0fs old (>%.0fs); auto-refreshing" path age
+            threshold);
+      true
+  | _ -> false
+
+let compute_effective_refresh ~refresh path =
+  if refresh then true
+  else
+    let threshold = auto_refresh_after_s () in
+    if threshold <= 0. then false
+    else refresh_needed_by_age ~threshold path
+
 let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false)
     ?(reporter = Build_progress.null) () =
   let path = env_path () in
@@ -683,20 +711,7 @@ let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false)
      already requested (avoid the double-pull), when the clone
      doesn't exist yet (the clone path itself counts as a fresh
      fetch), or when the threshold is non-positive. *)
-  let effective_refresh =
-    if refresh then true
-    else
-      let threshold = auto_refresh_after_s () in
-      if threshold <= 0. then false
-      else
-        match last_refresh_age_s ~now:(Unix.time ()) path with
-        | Some age when age > threshold ->
-            Log.info (fun m ->
-                m "Reporepo at %s is %.0fs old (>%.0fs); auto-refreshing" path
-                  age threshold);
-            true
-        | _ -> false
-  in
+  let effective_refresh = compute_effective_refresh ~refresh path in
   ensure_clone ~reporter ~fs ~sys ~refresh:effective_refresh ~path
     ~url:(env_url ()) ();
   Log.debug (fun m -> m "ensure_base: reading reporepo %s" path);
@@ -741,6 +756,29 @@ let try_ls_remote ~sys url args =
     Error.fail_config_error "git ls-remote %s failed: %s" url
       (Printexc.to_string exn)
 
+let pick_default_branch_sha ~url refs =
+  let prefer name =
+    List.find_map (fun (sha, r) -> if r = name then Some sha else None) refs
+  in
+  match prefer "refs/heads/main" with
+  | Some sha -> sha
+  | None -> (
+      match prefer "refs/heads/master" with
+      | Some sha -> sha
+      | None -> (
+          match refs with
+          | (sha, _) :: _ -> sha
+          | [] -> Error.fail_config_error "git ls-remote %s returned no refs" url))
+
+let ls_remote_default_sha ~sys url =
+  let head = try_ls_remote ~sys url [ "HEAD" ] in
+  match parse_ls_remote_output head with
+  | (sha, _) :: _ -> sha
+  | [] ->
+      let all = try_ls_remote ~sys url [] in
+      let refs = parse_ls_remote_output all in
+      pick_default_branch_sha ~url refs
+
 let ls_remote_sha ~sys ?ref_ url =
   match ref_ with
   | Some r -> (
@@ -749,29 +787,7 @@ let ls_remote_sha ~sys ?ref_ url =
       | (sha, _) :: _ -> sha
       | [] -> Error.fail_config_error "git ls-remote %s %s: ref not found" url r
       )
-  | None -> (
-      let head = try_ls_remote ~sys url [ "HEAD" ] in
-      match parse_ls_remote_output head with
-      | (sha, _) :: _ -> sha
-      | [] -> (
-          let all = try_ls_remote ~sys url [] in
-          let refs = parse_ls_remote_output all in
-          let prefer name =
-            List.find_map
-              (fun (sha, r) -> if r = name then Some sha else None)
-              refs
-          in
-          match prefer "refs/heads/main" with
-          | Some sha -> sha
-          | None -> (
-              match prefer "refs/heads/master" with
-              | Some sha -> sha
-              | None -> (
-                  match refs with
-                  | (sha, _) :: _ -> sha
-                  | [] ->
-                      Error.fail_config_error
-                        "git ls-remote %s returned no refs" url))))
+  | None -> ls_remote_default_sha ~sys url
 
 let today_yyyymmdd () =
   let tm = Unix.gmtime (Unix.time ()) in
@@ -809,22 +825,22 @@ let escape_string s =
   Buffer.add_char buf '"';
   Buffer.contents buf
 
+let render_root_group buf pp group =
+  match group with
+  | [] -> ()
+  | [ one ] -> Fmt.pf pp "  %s\n" (escape_string one)
+  | multi ->
+      Buffer.add_string buf "  [";
+      List.iter (fun p -> Fmt.pf pp " %s" (escape_string p)) multi;
+      Buffer.add_string buf " ]\n"
+
 let render_root_groups buf field groups =
   match groups with
   | [] -> ()
   | groups ->
       let pp = Fmt.with_buffer buf in
       Fmt.pf pp "%s: [\n" field;
-      List.iter
-        (fun group ->
-          match group with
-          | [] -> ()
-          | [ one ] -> Fmt.pf pp "  %s\n" (escape_string one)
-          | multi ->
-              Buffer.add_string buf "  [";
-              List.iter (fun p -> Fmt.pf pp " %s" (escape_string p)) multi;
-              Buffer.add_string buf " ]\n")
-        groups;
+      List.iter (render_root_group buf pp) groups;
       Buffer.add_string buf "]\n"
 
 type toolchain_def = {
@@ -902,24 +918,22 @@ let default_synopsis handle = "Overlay: " ^ handle ^ " — pinned opam repositor
 let is_base_handle h = h = "default" || h = "relocatable"
 let default_base_handles = [ "relocatable"; "default" ]
 
+let base_dep_for entries ~handle h =
+  if h = handle then None
+    (* A handle never depends on itself. Filtering here keeps
+       [base_handles_of_toolchain] callers safe even when the
+       toolchain definition's own [depends:] lists the overlay
+       that anchors its compiler (e.g. [toolchain-oxcaml]
+       depends on [oxcaml]); bumping the [oxcaml] overlay must
+       not generate an [oxcaml = ...] self-dep. *)
+  else
+    match latest entries ~handle:h with
+    | Some e -> Some (h, Some e.version)
+    | None -> None
+
 let auto_base_depends entries ~handle ~base_handles =
   if is_base_handle handle then []
-  else
-    List.filter_map
-      (fun h ->
-        if h = handle then
-          None
-          (* A handle never depends on itself. Filtering here keeps
-             [base_handles_of_toolchain] callers safe even when the
-             toolchain definition's own [depends:] lists the overlay
-             that anchors its compiler (e.g. [toolchain-oxcaml]
-             depends on [oxcaml]); bumping the [oxcaml] overlay must
-             not generate an [oxcaml = ...] self-dep. *)
-        else
-          match latest entries ~handle:h with
-          | Some e -> Some (h, Some e.version)
-          | None -> None)
-      base_handles
+  else List.filter_map (base_dep_for entries ~handle) base_handles
 
 (* -- v1 overlay materialisation -------------------------------------- *)
 
@@ -958,6 +972,37 @@ let classify_url ~where (u : OpamUrl.t) : [ `Git | `Tarball | `Local ] =
    needs; the three cases are: keep as-is, replace the URL (sha pin),
    add a checksum to a tarball that lacked one, or report why we
    couldn't pin it. *)
+let resolve_git_url ~sys (u : OpamUrl.t) =
+  match u.hash with
+  | Some sha when is_sha_string sha -> `Keep
+  | ref_opt -> (
+      (* git(1) doesn't understand opam's [git+https://...] spelling — strip
+         the [git+] backend prefix and feed it the plain [transport://path]
+         form. The rewritten URL we write back to the opam file keeps the
+         [git+] form. *)
+      let url_for_query = { u with hash = None } in
+      let url_str = OpamUrl.base_url url_for_query in
+      try
+        let sha = ls_remote_sha ~sys ?ref_:ref_opt url_str in
+        `Replace_url { u with hash = Some sha }
+      with exn ->
+        `Failed
+          (Fmt.str "git ls-remote %s%s failed: %s" url_str
+             (match ref_opt with None -> "" | Some r -> " " ^ r)
+             (Printexc.to_string exn)))
+
+let resolve_tarball_url ~fs ~sys (u : OpamUrl.t) ~has_checksum =
+  if has_checksum then `Keep
+  else
+    let url_str = OpamUrl.to_string u in
+    let tmp = Filename.temp_file "oi-bump-tarball-" ".bin" in
+    Fun.protect
+      ~finally:(fun () -> try Sys.remove tmp with Sys_error _ -> ())
+      (fun () ->
+        if D10.Sysops.Http.fetch sys ~url:url_str ~dst:Eio.Path.(fs / tmp) then
+          `Add_checksum (OpamHash.compute ~kind:`SHA256 tmp)
+        else `Failed (Fmt.str "could not fetch tarball at %s" url_str))
+
 let try_resolve_url ~fs ~sys ~where (u : OpamUrl.t) ~has_checksum :
     [ `Keep
     | `Replace_url of OpamUrl.t
@@ -965,44 +1010,13 @@ let try_resolve_url ~fs ~sys ~where (u : OpamUrl.t) ~has_checksum :
     | `Failed of string ] =
   match classify_url ~where u with
   | `Local ->
-      (* Local-directory pins (opam [rsync] backend, [file://]
-         URLs) don't need resolution — the path on disk is already
-         the source of truth. [Pin.fetch_pin] later calls
-         [OpamRepository.pull_tree] which handles the rsync-copy
-         itself. *)
+      (* Local-directory pins (opam [rsync] backend, [file://] URLs) don't
+         need resolution — the path on disk is already the source of truth.
+         [Pin.fetch_pin] later calls [OpamRepository.pull_tree] which
+         handles the rsync-copy itself. *)
       `Keep
-  | `Git ->
-      begin match u.hash with
-      | Some sha when is_sha_string sha -> `Keep
-      | ref_opt -> begin
-          (* git(1) doesn't understand opam's [git+https://...]
-             spelling — strip the [git+] backend prefix and feed it the
-             plain [transport://path] form. The rewritten URL we write
-             back to the opam file keeps the [git+] form. *)
-          let url_for_query = { u with hash = None } in
-          let url_str = OpamUrl.base_url url_for_query in
-          try
-            let sha = ls_remote_sha ~sys ?ref_:ref_opt url_str in
-            `Replace_url { u with hash = Some sha }
-          with exn ->
-            `Failed
-              (Fmt.str "git ls-remote %s%s failed: %s" url_str
-                 (match ref_opt with None -> "" | Some r -> " " ^ r)
-                 (Printexc.to_string exn))
-        end
-      end
-  | `Tarball ->
-      if has_checksum then `Keep
-      else begin
-        let url_str = OpamUrl.to_string u in
-        let tmp = Filename.temp_file "oi-bump-tarball-" ".bin" in
-        Fun.protect
-          ~finally:(fun () -> try Sys.remove tmp with Sys_error _ -> ())
-          (fun () ->
-            if D10.Sysops.Http.fetch sys ~url:url_str ~dst:Eio.Path.(fs / tmp)
-            then `Add_checksum (OpamHash.compute ~kind:`SHA256 tmp)
-            else `Failed (Fmt.str "could not fetch tarball at %s" url_str))
-      end
+  | `Git -> resolve_git_url ~sys u
+  | `Tarball -> resolve_tarball_url ~fs ~sys u ~has_checksum
 
 type pkg_outcome =
   | Pkg_kept
@@ -1063,35 +1077,35 @@ let process_main_url ~fs ~sys ~package opam =
           (stamp_source_url opam original, Pkg_kept, 0)
     end
 
+let resolve_pin_dep ~fs ~sys ~package (pkg, url) =
+  let where =
+    Fmt.str "%s pin-depends %s" package (OpamPackage.to_string pkg)
+  in
+  match try_resolve_url ~fs ~sys ~where url ~has_checksum:false with
+  | `Keep -> ((pkg, url), 0)
+  | `Replace_url u' -> ((pkg, u'), 1)
+  | `Add_checksum _ ->
+      Log.warn (fun m ->
+          m "%s: tarball pin without checksum — leaving unpinned (%s)" where
+            (OpamUrl.to_string url));
+      ((pkg, url), 0)
+  | `Failed reason ->
+      Log.warn (fun m -> m "%s: leaving pin unpinned (%s)" where reason);
+      ((pkg, url), 0)
+
 let process_pin_depends ~fs ~sys ~package opam =
   match OpamFile.OPAM.pin_depends opam with
   | [] -> (opam, 0)
   | pins ->
-      (* For pin-depends we only ever rewrite (when ls-remote
-         resolves) or keep (when it doesn't, when a tarball has no
-         checksum slot, or when there's nothing to add). The package
-         stays solvable in every case — opam discovers the broken pin
-         at fetch time, matching pre-v1 behaviour. *)
-      let resolve_one (pkg, url) =
-        let where =
-          Fmt.str "%s pin-depends %s" package (OpamPackage.to_string pkg)
-        in
-        match try_resolve_url ~fs ~sys ~where url ~has_checksum:false with
-        | `Keep -> ((pkg, url), 0)
-        | `Replace_url u' -> ((pkg, u'), 1)
-        | `Add_checksum _ ->
-            Log.warn (fun m ->
-                m "%s: tarball pin without checksum — leaving unpinned (%s)"
-                  where (OpamUrl.to_string url));
-            ((pkg, url), 0)
-        | `Failed reason ->
-            Log.warn (fun m -> m "%s: leaving pin unpinned (%s)" where reason);
-            ((pkg, url), 0)
-      in
+      (* For pin-depends we only ever rewrite (when ls-remote resolves) or
+         keep (when it doesn't, when a tarball has no checksum slot, or when
+         there's nothing to add). The package stays solvable in every case —
+         opam discovers the broken pin at fetch time, matching pre-v1
+         behaviour. *)
       let rewritten, count =
         List.fold_right
           (fun pin (acc, n) ->
-            let pin', delta = resolve_one pin in
+            let pin', delta = resolve_pin_dep ~fs ~sys ~package pin in
             (pin' :: acc, n + delta))
           pins ([], 0)
       in
@@ -1304,21 +1318,21 @@ let add ~fs ~sys ~path ~handle ~url ?ref_ ?toolchain ?base_handles ?depends
 (* Compute the bumped [depends] list. Auto-derive from [base_handles] (or the
    defaults), then preserve any extras [prev] carried — bumped to their
    current latest version so a fresh bump never leaves a stale pin. *)
-let compute_bump_depends ~entries ~handle ~base_handles ~prev_depends depends =
-  let auto_derive_depends ~auto ~prev =
-    let auto_handles = List.map fst auto in
-    let extras_from_prev =
-      List.filter_map
-        (fun (h, _) ->
-          if List.mem h auto_handles then None
-          else
-            match latest entries ~handle:h with
-            | Some e -> Some (h, Some e.version)
-            | None -> None)
-        prev
-    in
-    auto @ extras_from_prev
+let extra_from_prev ~entries ~auto_handles (h, _) =
+  if List.mem h auto_handles then None
+  else
+    match latest entries ~handle:h with
+    | Some e -> Some (h, Some e.version)
+    | None -> None
+
+let auto_derive_depends ~entries ~auto ~prev =
+  let auto_handles = List.map fst auto in
+  let extras_from_prev =
+    List.filter_map (extra_from_prev ~entries ~auto_handles) prev
   in
+  auto @ extras_from_prev
+
+let compute_bump_depends ~entries ~handle ~base_handles ~prev_depends depends =
   match depends with
   | Some d -> d
   | None ->
@@ -1332,7 +1346,7 @@ let compute_bump_depends ~entries ~handle ~base_handles ~prev_depends depends =
                 ~base_handles:default_base_handles
         in
         if auto = [] then prev_depends
-        else auto_derive_depends ~auto ~prev:prev_depends
+        else auto_derive_depends ~entries ~auto ~prev:prev_depends
 
 let bump_unchanged ~url ~commit ~ref_ ~toolchain ~default_toolchain ~depends
     ~root_packages (prev : entry) =

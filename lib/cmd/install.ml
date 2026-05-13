@@ -66,27 +66,35 @@ let print_path_hint ~bin_dir =
    Overlay_pkg, [@h] → Overlay_all, anything else → Plain. *)
 let parse_target s = Oi.Build_pipeline.parse s
 
+(* One regular file under [<root_layer_fs>/<sub>/<name>]: returns the
+   triple stored in {!preview_targets}'s flat list, or [None] when the
+   entry isn't a regular file or [stat] errors out. *)
+let preview_entry ~sub ~src ~prefix name =
+  let s = src / name in
+  match (Unix.stat s).st_kind with
+  | Unix.S_REG -> Some (sub, name, prefix / sub / name)
+  | _ -> None
+  | exception Unix.Unix_error _ -> None
+
+(* List regular files inside one sub-tree ([bin/] or [sbin/]) of a root
+   layer. Sorted by name so error messages and copy order are stable. *)
+let scan_subtree ~root_layer_fs ~prefix sub =
+  let src = root_layer_fs / sub in
+  if not (Sys.file_exists src) then []
+  else
+    try
+      Sys.readdir src |> Array.to_list |> List.sort String.compare
+      |> List.filter_map (preview_entry ~sub ~src ~prefix)
+    with Sys_error _ -> []
+
 (* Enumerate what [collect_install] would write for [root_layer_fs] into
    [prefix], i.e. every [bin/<n>], [sbin/<n>] file in the layer. Used
    for the pre-flight overwrite check; [share/] is deliberately
    skipped because data files commonly land at the same path across
    versions and [--force] is too coarse a hammer for them. *)
 let preview_targets ~root_layer_fs ~prefix =
-  let scan sub =
-    let src = root_layer_fs / sub in
-    if not (Sys.file_exists src) then []
-    else
-      try
-        Sys.readdir src |> Array.to_list |> List.sort String.compare
-        |> List.filter_map (fun name ->
-            let s = src / name in
-            match (Unix.stat s).st_kind with
-            | Unix.S_REG -> Some (sub, name, prefix / sub / name)
-            | _ -> None
-            | exception Unix.Unix_error _ -> None)
-      with Sys_error _ -> []
-  in
-  scan "bin" @ scan "sbin"
+  scan_subtree ~root_layer_fs ~prefix "bin"
+  @ scan_subtree ~root_layer_fs ~prefix "sbin"
 
 (* Promote every [root] tree (a directory shaped like [{bin,sbin,share}/])
    into [prefix]. Common backend for the target-mode and project-mode
@@ -155,213 +163,271 @@ let cwd_has_opam_files cwd =
         Filename.check_suffix f ".opam" && Filename.chop_suffix f ".opam" <> "")
   with Sys_error _ -> false
 
-(* -- Main command body --------------------------------------------------- *)
+(* Pre-flight: make sure the prefix is writable (or creatable). The Dist
+   copy code mkdirs on demand but a clear up-front error beats a
+   half-finished tree if e.g. the user typoed a path under a dir they
+   don't own. *)
+let ensure_prefix_writable ~fs ~prefix =
+  try Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / prefix)
+  with exn ->
+    Oi.Error.fail_config_error
+      "oi install: cannot create %s: %s. Pass --prefix=DIR to install \
+       elsewhere."
+      prefix (Printexc.to_string exn)
 
-let cmd =
-  let run (c : Terms.common) refresh locked skip_local registry use_registry
-      with_repos with_deps jobs toolchain_override prefix force targets =
-    Harness.run @@ fun ~sw env ->
-    let harness =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
-        c.cache_dir
-    in
-    let {
-      Harness.fs;
-      proc_mgr;
-      clock;
-      sys;
-      platform;
-      os_key;
-      cache;
-      data_dir;
-      http_session;
-      _;
-    } =
-      harness
-    in
-    let prefix = expand_tilde prefix in
-    let bin_dir = prefix / "bin" in
-    (* Pre-flight: make sure the prefix is writable (or creatable). The
-       Dist copy code mkdirs on demand but a clear up-front error beats
-       a half-finished tree if e.g. the user typoed a path under a dir
-       they don't own. *)
-    (try Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / prefix)
-     with exn ->
-       Oi.Error.fail_config_error
-         "oi install: cannot create %s: %s. Pass --prefix=DIR to install \
-          elsewhere."
-         prefix (Printexc.to_string exn));
-    let cwd_s, _ = Workspace.resolved_cwd fs in
-    let project_mode =
-      targets = [] && (not skip_local) && cwd_has_opam_files cwd_s
-    in
-    if targets = [] && not project_mode then
+(* Project mode: dune-build the cwd via [Project_build] (same path [oi
+   build] uses with no positional), then promote the resulting
+   [_build/install/default/] tree into [--prefix]. The Project_build
+   step is the heavy lift — sync deps into [_oi/], run dune; if it
+   exits non-zero we propagate that immediately. *)
+let do_project ~harness ~refresh ~registry ~use_registry ~with_repos
+    ~with_deps ~jobs ~toolchain_override ~prefix ~bin_dir ~force ~cwd_s =
+  let {
+    Harness.fs;
+    proc_mgr;
+    clock;
+    sys;
+    platform;
+    os_key;
+    cache;
+    data_dir;
+    http_session;
+    _;
+  } =
+    harness
+  in
+  let ec =
+    Project_build.run ~action:`Build ~fs ~proc_mgr ~clock ~sys ~platform
+      ~os_key ~cache ~data_dir ~registry ~use_registry ~session:http_session
+      ~refresh ~with_repos ~with_deps ?jobs ?toolchain:toolchain_override
+      ~cwd:cwd_s ()
+  in
+  if ec <> 0 then exit ec;
+  let install_root = cwd_s / "_build" / "install" / "default" in
+  if not (Sys.file_exists install_root) then
+    Oi.Error.fail_config_error
+      "oi install: project built but %s is missing. Does the project's \
+       dune-project declare anything installable?"
+      install_root;
+  promote_to_prefix ~prefix ~bin_dir ~force ~roots:[ install_root ]
+
+(* Format one failed [D10ir.Direct] node for the diagnostic emitted on
+   build failure. *)
+let pp_failure (f : D10ir.Direct.failure) =
+  Fmt.str "%s.%s @ %s: %s — see %s" f.package.name f.package.version
+    (D10ir.Direct.string_of_phase f.phase)
+    f.error f.log_path
+
+(* Build outcome triage. Mirrors what [oi run] does, minus the
+   empty-d10ir-plan diagnostic (the install path can't usefully reason
+   about cache freshness — if [Build_pipeline.build] returned [Some r]
+   with zero work, every root layer should still be present and we
+   just copy from them). *)
+let check_build_result = function
+  | None -> Oi.Error.fail_config_error "oi install: build pipeline failed."
+  | Some (r : D10ir.Direct.result) when r.failed = 0 && r.skipped = 0 -> ()
+  | Some (r : D10ir.Direct.result) when r.failures <> [] ->
+      let summary = List.map pp_failure r.failures |> String.concat "\n  " in
       Oi.Error.fail_config_error
-        "oi install: pass one or more PKG / @HANDLE/PKG targets, or run from a \
-         directory containing *.opam files.";
-    if project_mode then begin
-      (* Project mode: dune-build the cwd via [Project_build] (same path
-         [oi build] uses with no positional), then promote the resulting
-         [_build/install/default/] tree into [--prefix]. The Project_build
-         step is the heavy lift — sync deps into [_oi/], run dune; if it
-         exits non-zero we propagate that immediately. *)
-      let ec =
-        Project_build.run ~action:`Build ~fs ~proc_mgr ~clock ~sys ~platform
-          ~os_key ~cache ~data_dir ~registry ~use_registry ~session:http_session
-          ~refresh ~with_repos ~with_deps ?jobs ?toolchain:toolchain_override
-          ~cwd:cwd_s ()
-      in
-      if ec <> 0 then exit ec;
-      let install_root = cwd_s / "_build" / "install" / "default" in
-      if not (Sys.file_exists install_root) then
-        Oi.Error.fail_config_error
-          "oi install: project built but %s is missing. Does the project's \
-           dune-project declare anything installable?"
-          install_root;
-      promote_to_prefix ~prefix ~bin_dir ~force ~roots:[ install_root ]
-    end
-    else begin
-      (* Explicit targets bypass cwd project metadata: [oi install] should
-         match what [oi build] would do for the same targets so that
-         [install = build + copy] holds. Build's non-project flow doesn't
-         call [Project.load cwd], so neither should install here. Otherwise
-         a project's [x-repos:] / [pin-depends:] silently expands the solve
-         scope when the user gave an explicit [@h/pkg], producing different
-         layer hashes than [oi build @h/pkg] in the same cwd. [--skip-local]
-         (the CLI flag) still controls project_mode above; here we force
-         project skipping unconditionally because we already decided we're
-         not in project mode. *)
-      let {
-        Pipeline_setup.env = pipeline_env;
-        request = req;
+        "oi install: build failed (%d node(s), %d skipped).@\n  %s" r.failed
+        r.skipped summary
+  | Some (r : D10ir.Direct.result) ->
+      Oi.Error.fail_config_error
+        "oi install: build failed (%d skipped). Re-run with \
+         --verbosity=debug for the per-node trace."
+        r.skipped
+
+(* Run the solve + build under the progress UI and return both results.
+   Same idiom as the other [Pipeline_setup]-driven commands. *)
+let solve_and_build ~pipeline_env ~req ~layer_remote ~source_remote ~jobs
+    ~clock ~target_label =
+  Progress_ui.with_ui ~target:target_label
+    ~clock:(clock :> _ Eio.Resource.t)
+    ~enabled:(Tty.is_tty ())
+  @@ fun reporter ->
+  let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
+  let result =
+    Oi.Build_pipeline.build pipeline_env ~reporter
+      {
+        solved;
         layer_remote;
         source_remote;
-        _;
-      } =
-        Pipeline_setup.prepare ~harness ~refresh ~locked ~skip_local:true
-          ~registry ~use_registry ~with_repos ~with_deps ~toolchain_override
-          ~targets:(List.map parse_target targets)
-          ()
-      in
-      let target_label = String.concat ", " targets in
-      let solved, build_result =
-        Progress_ui.with_ui ~target:target_label
-          ~clock:(clock :> _ Eio.Resource.t)
-          ~enabled:(Tty.is_tty ())
-        @@ fun reporter ->
-        let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
-        let result =
-          Oi.Build_pipeline.build pipeline_env ~reporter
-            {
-              solved;
-              layer_remote;
-              source_remote;
-              jobs;
-              upload_archive_url = None;
-            }
-        in
-        (solved, result)
-      in
-      let cache_root = Oi.Cache.root_s cache in
-      if
-        List.for_all
-          (fun (gr : Oi.Build_pipeline.group_result) ->
-            Result.is_error gr.error)
-          solved.groups
-      then
-        Oi.Error.fail_config_error
-          "oi install: every solve group failed; nothing to install.";
-      (* Build outcome triage. Mirrors what [oi run] does, minus the
-         empty-d10ir-plan diagnostic (the install path can't usefully
-         reason about cache freshness — if [Build_pipeline.build]
-         returned [Some r] with zero work, every root layer should
-         still be present and we just copy from them). *)
-      (match build_result with
-      | None -> Oi.Error.fail_config_error "oi install: build pipeline failed."
-      | Some r when r.failed = 0 && r.skipped = 0 -> ()
-      | Some r ->
-          let pp_fail (f : D10ir.Direct.failure) =
-            Fmt.str "%s.%s @ %s: %s — see %s" f.package.name f.package.version
-              (D10ir.Direct.string_of_phase f.phase)
-              f.error f.log_path
-          in
-          if r.failures <> [] then begin
-            let summary = List.map pp_fail r.failures |> String.concat "\n  " in
-            Oi.Error.fail_config_error
-              "oi install: build failed (%d node(s), %d skipped).@\n  %s"
-              r.failed r.skipped summary
-          end
-          else
-            Oi.Error.fail_config_error
-              "oi install: build failed (%d skipped). Re-run with \
-               --verbosity=debug for the per-node trace."
-              r.skipped);
-      let root_hashes = Oi.Build_pipeline.root_layer_hashes solved in
-      if root_hashes = [] then
-        Oi.Error.fail_config_error
-          "oi install: solve succeeded but no root packages matched the \
-           requested targets. Re-run with --refresh.";
-      let roots =
-        List.map
-          (fun h -> cache_root / "layers" / os_key / h / "fs")
-          root_hashes
-      in
-      promote_to_prefix ~prefix ~bin_dir ~force ~roots
-    end
+        jobs;
+        upload_archive_url = None;
+      }
   in
-  let prefix =
-    Arg.(
-      value
-      & opt string (default_prefix ())
-      & info ~docv:"DIR"
-          ~doc:
-            "Install prefix; files land in $(i,DIR)/bin, /sbin, /share. \
-             Leading $(b,~) is expanded."
-          [ "prefix" ])
+  (solved, result)
+
+(* Target mode: explicit targets bypass cwd project metadata, so [oi
+   install] matches what [oi build] would do for the same targets and
+   [install = build + copy] holds. Build's non-project flow doesn't call
+   [Project.load cwd], so neither should install here. Otherwise a
+   project's [x-repos:] / [pin-depends:] silently expands the solve
+   scope when the user gave an explicit [@h/pkg], producing different
+   layer hashes than [oi build @h/pkg] in the same cwd. [--skip-local]
+   (the CLI flag) still controls project_mode in [run]; here we force
+   project skipping unconditionally because we already decided we're
+   not in project mode. *)
+let do_targets ~harness ~refresh ~locked ~registry ~use_registry
+    ~with_repos ~with_deps ~jobs ~toolchain_override ~prefix ~bin_dir ~force
+    ~targets =
+  let { Harness.clock; cache; os_key; _ } = harness in
+  let {
+    Pipeline_setup.env = pipeline_env;
+    request = req;
+    layer_remote;
+    source_remote;
+    _;
+  } =
+    Pipeline_setup.prepare ~harness ~refresh ~locked ~skip_local:true
+      ~registry ~use_registry ~with_repos ~with_deps ~toolchain_override
+      ~targets:(List.map parse_target targets)
+      ()
   in
-  let force =
-    Arg.(
-      value & flag
-      & info ~doc:"Overwrite existing files under $(b,--prefix)."
-          [ "force"; "f" ])
+  let target_label = String.concat ", " targets in
+  let solved, build_result =
+    solve_and_build ~pipeline_env ~req ~layer_remote ~source_remote ~jobs
+      ~clock ~target_label
   in
-  let targets =
-    Arg.(
-      value & pos_all string []
-      & info ~docv:"TARGET"
-          ~doc:
-            "Package to install: $(b,PKG), $(b,@HANDLE/PKG), or $(b,@HANDLE). \
-             Repeatable. With no $(i,TARGET), builds the cwd project."
-          [])
+  let cache_root = Oi.Cache.root_s cache in
+  if
+    List.for_all
+      (fun (gr : Oi.Build_pipeline.group_result) -> Result.is_error gr.error)
+      solved.groups
+  then
+    Oi.Error.fail_config_error
+      "oi install: every solve group failed; nothing to install.";
+  check_build_result build_result;
+  let root_hashes = Oi.Build_pipeline.root_layer_hashes solved in
+  if root_hashes = [] then
+    Oi.Error.fail_config_error
+      "oi install: solve succeeded but no root packages matched the \
+       requested targets. Re-run with --refresh.";
+  let roots =
+    List.map (fun h -> cache_root / "layers" / os_key / h / "fs") root_hashes
   in
+  promote_to_prefix ~prefix ~bin_dir ~force ~roots
+
+(* -- Main command body --------------------------------------------------- *)
+
+type cli = {
+  refresh : bool;
+  locked : bool;
+  skip_local : bool;
+  registry : string;
+  use_registry : Oi.Use_registry.t;
+  with_repos : string list;
+  with_deps : string list;
+  jobs : int option;
+  toolchain_override : string option;
+  prefix : string;
+  force : bool;
+  targets : string list;
+}
+
+let run (c : Terms.common) (cli : cli) =
+  Harness.run @@ fun ~sw env ->
+  let harness =
+    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+      c.cache_dir
+  in
+  let { Harness.fs; _ } = harness in
+  let prefix = expand_tilde cli.prefix in
+  let bin_dir = prefix / "bin" in
+  ensure_prefix_writable ~fs ~prefix;
+  let cwd_s, _ = Workspace.resolved_cwd fs in
+  let project_mode =
+    cli.targets = [] && (not cli.skip_local) && cwd_has_opam_files cwd_s
+  in
+  if cli.targets = [] && not project_mode then
+    Oi.Error.fail_config_error
+      "oi install: pass one or more PKG / @HANDLE/PKG targets, or run from a \
+       directory containing *.opam files.";
+  if project_mode then
+    do_project ~harness ~refresh:cli.refresh ~registry:cli.registry
+      ~use_registry:cli.use_registry ~with_repos:cli.with_repos
+      ~with_deps:cli.with_deps ~jobs:cli.jobs
+      ~toolchain_override:cli.toolchain_override ~prefix ~bin_dir
+      ~force:cli.force ~cwd_s
+  else
+    do_targets ~harness ~refresh:cli.refresh ~locked:cli.locked
+      ~registry:cli.registry ~use_registry:cli.use_registry
+      ~with_repos:cli.with_repos ~with_deps:cli.with_deps ~jobs:cli.jobs
+      ~toolchain_override:cli.toolchain_override ~prefix ~bin_dir
+      ~force:cli.force ~targets:cli.targets
+
+let prefix_arg =
+  Arg.(
+    value
+    & opt string (default_prefix ())
+    & info ~docv:"DIR"
+        ~doc:
+          "Install prefix; files land in $(i,DIR)/bin, /sbin, /share. \
+           Leading $(b,~) is expanded."
+        [ "prefix" ])
+
+let force_arg =
+  Arg.(
+    value & flag
+    & info ~doc:"Overwrite existing files under $(b,--prefix)." [ "force"; "f" ])
+
+let targets_arg =
+  Arg.(
+    value & pos_all string []
+    & info ~docv:"TARGET"
+        ~doc:
+          "Package to install: $(b,PKG), $(b,@HANDLE/PKG), or $(b,@HANDLE). \
+           Repeatable. With no $(i,TARGET), builds the cwd project."
+        [])
+
+let man =
+  [
+    `S Manpage.s_description;
+    `P
+      "Solve and build $(i,TARGET), then copy each root package's \
+       $(b,bin/), $(b,sbin/), and $(b,share/) into $(b,--prefix) (default \
+       $(b,\\$HOME/.local)).";
+    `P
+      "With no $(i,TARGET) and a cwd containing $(b,*.opam) files, builds \
+       the cwd project via $(b,dune build) and promotes \
+       $(b,_build/install/default/) instead. $(b,--skip-local) forces \
+       target mode in a project directory.";
+    `P
+      "Refuses to clobber existing files; $(b,--force) overrides. Prints a \
+       $(b,\\$PATH) hint when $(b,--prefix/bin) is missing from it.";
+    `S Manpage.s_examples;
+    `Pre
+      "  oi install                  # cwd project\n\
+      \  oi install dune\n\
+      \  oi install @avsm/owntracks\n\
+      \  oi install --prefix=/opt/oi --force utop merlin";
+  ]
+
+let cmd =
   let info =
     Cmd.info "install"
-      ~doc:"Build a target and copy its binaries into a user prefix"
-      ~man:
-        [
-          `S Manpage.s_description;
-          `P
-            "Solve and build $(i,TARGET), then copy each root package's \
-             $(b,bin/), $(b,sbin/), and $(b,share/) into $(b,--prefix) \
-             (default $(b,\\$HOME/.local)).";
-          `P
-            "With no $(i,TARGET) and a cwd containing $(b,*.opam) files, \
-             builds the cwd project via $(b,dune build) and promotes \
-             $(b,_build/install/default/) instead. $(b,--skip-local) forces \
-             target mode in a project directory.";
-          `P
-            "Refuses to clobber existing files; $(b,--force) overrides. Prints \
-             a $(b,\\$PATH) hint when $(b,--prefix/bin) is missing from it.";
-          `S Manpage.s_examples;
-          `Pre
-            "  oi install                  # cwd project\n\
-            \  oi install dune\n\
-            \  oi install @avsm/owntracks\n\
-            \  oi install --prefix=/opt/oi --force utop merlin";
-        ]
+      ~doc:"Build a target and copy its binaries into a user prefix" ~man
+  in
+  let go c refresh locked skip_local registry use_registry with_repos
+      with_deps jobs toolchain_override prefix force targets =
+    run c
+      {
+        refresh;
+        locked;
+        skip_local;
+        registry;
+        use_registry;
+        with_repos;
+        with_deps;
+        jobs;
+        toolchain_override;
+        prefix;
+        force;
+        targets;
+      }
   in
   Cmd.v info
     Term.(
-      const run $ Terms.common $ Terms.refresh $ Terms.locked $ Terms.skip_local
+      const go $ Terms.common $ Terms.refresh $ Terms.locked $ Terms.skip_local
       $ Terms.registry $ Terms.use_registry $ Terms.with_repos $ Terms.with_deps
-      $ Terms.jobs $ Terms.toolchain $ prefix $ force $ targets)
+      $ Terms.jobs $ Terms.toolchain $ prefix_arg $ force_arg $ targets_arg)

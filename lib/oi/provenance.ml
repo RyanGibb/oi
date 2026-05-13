@@ -86,39 +86,27 @@ let build_env_codec =
   |> Object.mem "ocaml_version" string ~enc:(fun e -> e.ocaml_version)
   |> Object.finish
 
+let make_provenance schema layer_hash os_key pkg method_ built_at duration_s
+    phases opam source deps depexts_declared build_env =
+  {
+    schema;
+    layer_hash;
+    os_key;
+    pkg;
+    method_;
+    built_at;
+    duration_s;
+    phases;
+    opam;
+    source;
+    deps;
+    depexts_declared;
+    build_env;
+  }
+
 let codec =
   let open Jsont in
-  Object.map ~kind:"provenance"
-    (fun
-      schema
-      layer_hash
-      os_key
-      pkg
-      method_
-      built_at
-      duration_s
-      phases
-      opam
-      source
-      deps
-      depexts_declared
-      build_env
-    ->
-      {
-        schema;
-        layer_hash;
-        os_key;
-        pkg;
-        method_;
-        built_at;
-        duration_s;
-        phases;
-        opam;
-        source;
-        deps;
-        depexts_declared;
-        build_env;
-      })
+  Object.map ~kind:"provenance" make_provenance
   |> Object.mem "schema" int ~enc:(fun r -> r.schema)
   |> Object.mem "layer_hash" string ~enc:(fun r -> r.layer_hash)
   |> Object.mem "os_key" string ~enc:(fun r -> r.os_key)
@@ -149,16 +137,17 @@ let pp ppf t =
 let path ~cache_root ~os_key ~hash =
   cache_root / "layers" / os_key / hash / "provenance.json"
 
+let save_encoded ~fs ~dst s =
+  try Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / dst) s
+  with exn ->
+    Log.warn (fun m -> m "provenance write %s: %s" dst (Printexc.to_string exn))
+
 let write ~fs ~cache_root r =
   let layer_dir = cache_root / "layers" / r.os_key / r.layer_hash in
   if Sys.file_exists layer_dir then
     let dst = path ~cache_root ~os_key:r.os_key ~hash:r.layer_hash in
     match Jsont_bytesrw.encode_string ~format:Jsont.Indent codec r with
-    | Ok s -> (
-        try Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / dst) s
-        with exn ->
-          Log.warn (fun m ->
-              m "provenance write %s: %s" dst (Printexc.to_string exn)))
+    | Ok s -> save_encoded ~fs ~dst s
     | Error e -> Log.warn (fun m -> m "provenance encode %s: %s" dst e)
 
 let try_decode ~fs ~path : t option =

@@ -114,6 +114,15 @@ let with_timeout t ~cmd f =
          disables)."
         timeout mins argv
 
+let handle_run_quiet_result ~cmd ~buf result =
+  let output = String.trim (Buffer.contents buf) in
+  match result with
+  | `Exited 0 -> if output <> "" then Log.debug (fun m -> m "%s" output)
+  | `Exited n ->
+      if output <> "" then Log.debug (fun m -> m "%s" output);
+      raise (cmd_failed ~argv:cmd ~status:(`Exited n) ~output)
+  | `Signaled n -> raise (cmd_failed ~argv:cmd ~status:(`Signaled n) ~output)
+
 let run_quiet t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
   with_timeout t ~cmd @@ fun () ->
@@ -121,17 +130,7 @@ let run_quiet t cmd =
   let buf = Buffer.create 256 in
   let sink = Eio.Flow.buffer_sink buf in
   let child = Eio.Process.spawn ~sw t.proc_mgr ~stdout:sink ~stderr:sink cmd in
-  match Eio.Process.await child with
-  | `Exited 0 ->
-      let output = String.trim (Buffer.contents buf) in
-      if output <> "" then Log.debug (fun m -> m "%s" output)
-  | `Exited n ->
-      let output = String.trim (Buffer.contents buf) in
-      if output <> "" then Log.debug (fun m -> m "%s" output);
-      raise (cmd_failed ~argv:cmd ~status:(`Exited n) ~output)
-  | `Signaled n ->
-      let output = String.trim (Buffer.contents buf) in
-      raise (cmd_failed ~argv:cmd ~status:(`Signaled n) ~output)
+  handle_run_quiet_result ~cmd ~buf (Eio.Process.await child)
 
 let run_capture t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
@@ -279,19 +278,22 @@ let link_tree t ~src ~dst =
    pull/push where hiding the subprocess output would leave the user
    guessing. Falls back to [run_quiet] when no stdout/stderr resources
    were registered on [t]. *)
+let handle_run_inherit_result ~cmd = function
+  | `Exited 0 -> ()
+  | `Exited n -> raise (cmd_failed ~argv:cmd ~status:(`Exited n) ~output:"")
+  | `Signaled n -> raise (cmd_failed ~argv:cmd ~status:(`Signaled n) ~output:"")
+
+let run_inherit_with t ~stdout ~stderr cmd =
+  with_timeout t ~cmd @@ fun () ->
+  Eio.Switch.run @@ fun sw ->
+  let child = Eio.Process.spawn ~sw t.proc_mgr ~stdout ~stderr cmd in
+  handle_run_inherit_result ~cmd (Eio.Process.await child)
+
 let run_inherit t cmd =
   Log.debug (fun m -> m "$ %s" (String.concat " " cmd));
   match (t.stdout, t.stderr) with
   | None, _ | _, None -> run_quiet t cmd
-  | Some stdout, Some stderr -> (
-      with_timeout t ~cmd @@ fun () ->
-      Eio.Switch.run @@ fun sw ->
-      let child = Eio.Process.spawn ~sw t.proc_mgr ~stdout ~stderr cmd in
-      match Eio.Process.await child with
-      | `Exited 0 -> ()
-      | `Exited n -> raise (cmd_failed ~argv:cmd ~status:(`Exited n) ~output:"")
-      | `Signaled n ->
-          raise (cmd_failed ~argv:cmd ~status:(`Signaled n) ~output:""))
+  | Some stdout, Some stderr -> run_inherit_with t ~stdout ~stderr cmd
 
 module Cmd = struct
   let run t cmd = run_quiet t cmd
@@ -406,26 +408,32 @@ module Http = struct
      a [Content-Length] header and [None] otherwise (chunked transfer).
      Throttled to ~20Hz inside [copy_with_progress] so terminal redraws
      don't dominate the wall-clock cost on a fast LAN. *)
-  let fetch ?on_progress t ~url ~dst =
-    with_http_timeout ~clock:t.clock ~url @@ fun () ->
-    Eio.Switch.run @@ fun sw ->
+  let save_body ?on_progress t ~dst resp =
+    let total = Requests.Response.content_length resp in
+    let body = Requests.Response.body resp in
+    Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
+        copy_with_progress ~clock:t.clock ?on_progress ?total body out);
+    true
+
+  let fetch_response ?on_progress t ~url ~dst resp =
+    if not (Requests.Response.ok resp) then begin
+      Log.debug (fun m ->
+          m "http %s: status %d" url (Requests.Response.status_code resp));
+      false
+    end
+    else save_body ?on_progress t ~dst resp
+
+  let fetch_in_switch ?on_progress t ~url ~dst sw =
     try
       let resp = Requests.One.get ~sw ~clock:t.clock ~net:t.net url in
-      if not (Requests.Response.ok resp) then begin
-        Log.debug (fun m ->
-            m "http %s: status %d" url (Requests.Response.status_code resp));
-        false
-      end
-      else begin
-        let total = Requests.Response.content_length resp in
-        let body = Requests.Response.body resp in
-        Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
-            copy_with_progress ~clock:t.clock ?on_progress ?total body out);
-        true
-      end
+      fetch_response ?on_progress t ~url ~dst resp
     with exn ->
       Log.debug (fun m -> m "http %s: %s" url (Printexc.to_string exn));
       false
+
+  let fetch ?on_progress t ~url ~dst =
+    with_http_timeout ~clock:t.clock ~url @@ fun () ->
+    Eio.Switch.run (fetch_in_switch ?on_progress t ~url ~dst)
 
   (* -- Session-based pooled HTTP -------------------------------------------
 
@@ -487,6 +495,20 @@ module Http = struct
     in
     f { req; clock = t.clock }
 
+  let session_save_body ~dst resp =
+    let body = Requests.Response.body resp in
+    Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
+        Eio.Flow.copy body out);
+    true
+
+  let session_handle_response ~url ~dst resp =
+    if not (Requests.Response.ok resp) then begin
+      Log.debug (fun m ->
+          m "http %s: status %d" url (Requests.Response.status_code resp));
+      false
+    end
+    else session_save_body ~dst resp
+
   let fetch_session ?on_progress session ~url ~dst =
     with_http_timeout ~clock:session.clock ~url @@ fun () ->
     try
@@ -497,17 +519,7 @@ module Http = struct
          [Response.body] returns and the subsequent [Flow.copy] sees
          memory-copy speed, not network speed. *)
       let resp = Requests.get ?on_progress session.req url in
-      if not (Requests.Response.ok resp) then begin
-        Log.debug (fun m ->
-            m "http %s: status %d" url (Requests.Response.status_code resp));
-        false
-      end
-      else begin
-        let body = Requests.Response.body resp in
-        Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
-            Eio.Flow.copy body out);
-        true
-      end
+      session_handle_response ~url ~dst resp
     with exn ->
       Log.debug (fun m -> m "http %s: %s" url (Printexc.to_string exn));
       false

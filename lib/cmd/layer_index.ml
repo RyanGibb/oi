@@ -55,6 +55,73 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
   end;
   index_path
 
+let is_fresh_local local_path =
+  try
+    let st = Unix.stat local_path in
+    Unix.gettimeofday () -. st.Unix.st_mtime < remote_index_max_age
+  with Unix.Unix_error _ -> false
+
+let unlink_quietly path =
+  try Unix.unlink path with Unix.Unix_error _ -> ()
+
+let report_fetch_start ~on_phase ~url =
+  match on_phase with
+  | Some f -> f "Fetching registry index"
+  | None ->
+      Log.info (fun m ->
+          m "Fetching registry index from %s (this may take a moment)..." url)
+
+let fmt_size n =
+  if Int64.compare n 1_048_576L >= 0 then
+    Fmt.str "%.1fMB" (Int64.to_float n /. 1_048_576.)
+  else if Int64.compare n 1024L >= 0 then
+    Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
+  else Fmt.str "%LdB" n
+
+let progress_reporter on_phase =
+  Option.map
+    (fun f ~received ~total ->
+      match total with
+      | Some t when Int64.compare t 0L > 0 ->
+          Fmt.kstr f "Fetching registry index (%s / %s)" (fmt_size received)
+            (fmt_size t)
+      | _ -> Fmt.kstr f "Fetching registry index (%s)" (fmt_size received))
+    on_phase
+
+let promote_tmp_to_local ~tmp_path ~local_path =
+  try Unix.rename tmp_path local_path
+  with Unix.Unix_error _ -> unlink_quietly tmp_path
+
+let fall_back_to_stale ~fs ~local_path ~registry =
+  if Eio.Path.is_file Eio.Path.(fs / local_path) then begin
+    Log.warn (fun m -> m "Failed to fetch registry index, using stale cache");
+    Some local_path
+  end
+  else begin
+    Log.warn (fun m -> m "Failed to fetch registry index from %s" registry);
+    None
+  end
+
+let fetch_remote_index ~on_phase ~sys ~fs ~os_dir ~local_path ~tmp_path ~registry
+    ~url =
+  let dst = Eio.Path.(fs / tmp_path) in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / os_dir);
+  unlink_quietly tmp_path;
+  (* Visible status goes through [on_phase] so [oi run] can wire it
+     into its preflight bar; otherwise it's a quiet [Log.info]. The
+     previous [Log.app] leaked the message to stderr unconditionally,
+     polluting [oi run]'s output. *)
+  report_fetch_start ~on_phase ~url;
+  let on_progress = progress_reporter on_phase in
+  if D10.Sysops.Http.fetch ?on_progress sys ~url ~dst then begin
+    promote_tmp_to_local ~tmp_path ~local_path;
+    Some local_path
+  end
+  else begin
+    unlink_quietly tmp_path;
+    fall_back_to_stale ~fs ~local_path ~registry
+  end
+
 let ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () =
   if registry = "" then None
   else
@@ -62,65 +129,11 @@ let ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () =
     let os_dir = cache_root / "layers" / os_key in
     let local_path = os_dir / "remote-index.db" in
     let tmp_path = local_path ^ ".tmp" in
-    let fresh =
-      try
-        let st = Unix.stat local_path in
-        Unix.gettimeofday () -. st.Unix.st_mtime < remote_index_max_age
-      with Unix.Unix_error _ -> false
-    in
-    if fresh then Some local_path
-    else begin
+    if is_fresh_local local_path then Some local_path
+    else
       let url = url_join registry (os_key / "index.db") in
-      let dst = Eio.Path.(fs / tmp_path) in
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / os_dir);
-      (try Unix.unlink tmp_path with Unix.Unix_error _ -> ());
-      (* Visible status goes through [on_phase] so [oi run] can wire it
-         into its preflight bar; otherwise it's a quiet [Log.info]. The
-         previous [Log.app] leaked the message to stderr unconditionally,
-         polluting [oi run]'s output. *)
-      (match on_phase with
-      | Some f -> f "Fetching registry index"
-      | None ->
-          Log.info (fun m ->
-              m "Fetching registry index from %s (this may take a moment)..."
-                url));
-      let fmt_size n =
-        if Int64.compare n 1_048_576L >= 0 then
-          Fmt.str "%.1fMB" (Int64.to_float n /. 1_048_576.)
-        else if Int64.compare n 1024L >= 0 then
-          Fmt.str "%.0fKB" (Int64.to_float n /. 1024.)
-        else Fmt.str "%LdB" n
-      in
-      let on_progress =
-        Option.map
-          (fun f ~received ~total ->
-            match total with
-            | Some t when Int64.compare t 0L > 0 ->
-                Fmt.kstr f "Fetching registry index (%s / %s)"
-                  (fmt_size received) (fmt_size t)
-            | _ -> Fmt.kstr f "Fetching registry index (%s)" (fmt_size received))
-          on_phase
-      in
-      if D10.Sysops.Http.fetch ?on_progress sys ~url ~dst then begin
-        (try Unix.rename tmp_path local_path
-         with Unix.Unix_error _ -> (
-           try Unix.unlink tmp_path with Unix.Unix_error _ -> ()));
-        Some local_path
-      end
-      else begin
-        (try Unix.unlink tmp_path with Unix.Unix_error _ -> ());
-        if Eio.Path.is_file Eio.Path.(fs / local_path) then begin
-          Log.warn (fun m ->
-              m "Failed to fetch registry index, using stale cache");
-          Some local_path
-        end
-        else begin
-          Log.warn (fun m ->
-              m "Failed to fetch registry index from %s" registry);
-          None
-        end
-      end
-    end
+      fetch_remote_index ~on_phase ~sys ~fs ~os_dir ~local_path ~tmp_path
+        ~registry ~url
 
 let merge_remote_into_local ~fs ~index_path ~remote_path =
   let db = D10.Index.open_ ~fs ~path:index_path in

@@ -309,96 +309,128 @@ let producers_table t =
   List.iter (fun n -> Hashtbl.replace h n.layer_hash n) t.nodes;
   h
 
+(* Dedupe a list-of-lists by a string key, preserving first-seen
+   order. Each merge field (nodes, roots, mounts, external
+   layers) uses the same shape with a different key function. *)
+let merge_dedupe_by ~size ~key plans field =
+  let seen : (string, unit) Hashtbl.t = Hashtbl.create size in
+  let keep x =
+    let k = key x in
+    if Hashtbl.mem seen k then false
+    else begin
+      Hashtbl.add seen k ();
+      true
+    end
+  in
+  List.concat_map (fun p -> List.filter keep (field p)) plans
+
+(* Find the first plan that disagrees with [first] on a non-batchable
+   field. Returns [None] if all plans are mutually batchable, otherwise
+   the offending plan. *)
+let merge_find_invalid ~first rest =
+  List.find_opt
+    (fun p ->
+      p.schema_version <> first.schema_version
+      || p.os_key <> first.os_key
+      || p.archive_root <> first.archive_root
+      || p.toolchain.name <> first.toolchain.name)
+    rest
+
+let merge_mismatch_error ~first p =
+  let mismatch field =
+    Fmt.str "merge: plans disagree on %s — cannot batch them" field
+  in
+  if p.schema_version <> first.schema_version then mismatch "schema_version"
+  else if p.os_key <> first.os_key then mismatch "os_key"
+  else if p.archive_root <> first.archive_root then mismatch "archive_root"
+  else mismatch "toolchain.name"
+
+let merge_combine ~first plans =
+  let lh x = Layer_hash.to_string x in
+  let nodes =
+    merge_dedupe_by ~size:256
+      ~key:(fun n -> lh n.layer_hash)
+      plans
+      (fun p -> p.nodes)
+  in
+  let roots = merge_dedupe_by ~size:32 ~key:lh plans (fun p -> p.roots) in
+  let mounts =
+    merge_dedupe_by ~size:8
+      ~key:(fun (m : mount) -> m.name)
+      plans
+      (fun p -> p.mounts)
+  in
+  let external_layers =
+    merge_dedupe_by ~size:8 ~key:lh plans (fun p -> p.external_layers)
+  in
+  let metadata =
+    {
+      oi_version = first.metadata.oi_version;
+      generated_at =
+        List.fold_left
+          (fun acc p -> max acc p.metadata.generated_at)
+          0. plans;
+      cli_invocation =
+        List.concat_map (fun p -> p.metadata.cli_invocation) plans;
+    }
+  in
+  {
+    schema_version = first.schema_version;
+    os_key = first.os_key;
+    toolchain = first.toolchain;
+    archive_root = first.archive_root;
+    nodes;
+    roots;
+    mounts;
+    external_layers;
+    metadata;
+  }
+
+(* The base_layer hash can legitimately differ across groups —
+   it's the recipe's [packages[0].layer_hash], which depends on
+   topological order and that group's specific dep closure. We
+   only require [toolchain.name] to match: same logical
+   toolchain ⇒ batchable. *)
 let merge = function
   | [] -> Error "merge: empty plan list"
   | first :: rest -> (
-      let mismatch field =
-        Fmt.str "merge: plans disagree on %s — cannot batch them" field
-      in
-      (* The base_layer hash can legitimately differ across groups —
-         it's the recipe's [packages[0].layer_hash], which depends on
-         topological order and that group's specific dep closure. We
-         only require [toolchain.name] to match: same logical
-         toolchain ⇒ batchable. *)
-      let invalid =
-        List.find_opt
-          (fun p ->
-            p.schema_version <> first.schema_version
-            || p.os_key <> first.os_key
-            || p.archive_root <> first.archive_root
-            || p.toolchain.name <> first.toolchain.name)
-          rest
-      in
-      match invalid with
-      | Some p when p.schema_version <> first.schema_version ->
-          Error (mismatch "schema_version")
-      | Some p when p.os_key <> first.os_key -> Error (mismatch "os_key")
-      | Some p when p.archive_root <> first.archive_root ->
-          Error (mismatch "archive_root")
-      | Some _ -> Error (mismatch "toolchain.name")
-      | None ->
-          (* Dedupe a list-of-lists by a string key, preserving first-seen
-             order. Each merge field (nodes, roots, mounts, external
-             layers) uses the same shape with a different key function. *)
-          let dedupe_by ~size ~key plans field =
-            let seen : (string, unit) Hashtbl.t = Hashtbl.create size in
-            List.concat_map
-              (fun p ->
-                List.filter
-                  (fun x ->
-                    let k = key x in
-                    if Hashtbl.mem seen k then false
-                    else begin
-                      Hashtbl.add seen k ();
-                      true
-                    end)
-                  (field p))
-              plans
-          in
-          let plans = first :: rest in
-          let lh x = Layer_hash.to_string x in
-          let nodes =
-            dedupe_by ~size:256
-              ~key:(fun n -> lh n.layer_hash)
-              plans
-              (fun p -> p.nodes)
-          in
-          let roots = dedupe_by ~size:32 ~key:lh plans (fun p -> p.roots) in
-          let mounts =
-            dedupe_by ~size:8
-              ~key:(fun (m : mount) -> m.name)
-              plans
-              (fun p -> p.mounts)
-          in
-          let external_layers =
-            dedupe_by ~size:8 ~key:lh plans (fun p -> p.external_layers)
-          in
-          let metadata =
-            {
-              oi_version = first.metadata.oi_version;
-              generated_at =
-                List.fold_left
-                  (fun acc p -> max acc p.metadata.generated_at)
-                  0. plans;
-              cli_invocation =
-                List.concat_map (fun p -> p.metadata.cli_invocation) plans;
-            }
-          in
-          Ok
-            {
-              schema_version = first.schema_version;
-              os_key = first.os_key;
-              toolchain = first.toolchain;
-              archive_root = first.archive_root;
-              nodes;
-              roots;
-              mounts;
-              external_layers;
-              metadata;
-            })
+      match merge_find_invalid ~first rest with
+      | Some p -> Error (merge_mismatch_error ~first p)
+      | None -> Ok (merge_combine ~first (first :: rest)))
 
 (* Tarjan SCC over the nodes-by-layer-hash graph; returns SCCs of size > 1
    (true cycles) and self-loops. *)
+
+type tarjan_state = {
+  index : (Layer_hash.t, int) Hashtbl.t;
+  lowlink : (Layer_hash.t, int) Hashtbl.t;
+  on_stack : (Layer_hash.t, bool) Hashtbl.t;
+  stack : node Stack.t;
+  counter : int ref;
+  sccs : Layer_hash.t list list ref;
+}
+
+let new_tarjan_state () =
+  {
+    index = Hashtbl.create 64;
+    lowlink = Hashtbl.create 64;
+    on_stack = Hashtbl.create 64;
+    stack = Stack.create ();
+    counter = ref 0;
+    sccs = ref [];
+  }
+
+let tarjan_pop_scc state (v : node) =
+  let scc = ref [] in
+  let stop = ref false in
+  while not !stop do
+    let w = Stack.pop state.stack in
+    Hashtbl.remove state.on_stack w.layer_hash;
+    scc := w.layer_hash :: !scc;
+    if Layer_hash.equal w.layer_hash v.layer_hash then stop := true
+  done;
+  !scc
+
 let cycles_in (nodes : node list) : Layer_hash.t list list =
   let producers = Hashtbl.create (List.length nodes) in
   List.iter (fun n -> Hashtbl.replace producers n.layer_hash n) nodes;
@@ -406,56 +438,43 @@ let cycles_in (nodes : node list) : Layer_hash.t list list =
     List.filter (fun h -> Hashtbl.mem producers h) n.dep_layer_hashes
     |> List.map (fun h -> Hashtbl.find producers h)
   in
-  let index = Hashtbl.create 64 in
-  let lowlink = Hashtbl.create 64 in
-  let on_stack = Hashtbl.create 64 in
-  let stack = Stack.create () in
-  let counter = ref 0 in
-  let sccs = ref [] in
+  let state = new_tarjan_state () in
+  let is_cycle_scc v scc =
+    List.length scc > 1
+    ||
+    let v_succs = List.map (fun n -> n.layer_hash) (succ v) in
+    List.exists (Layer_hash.equal v.layer_hash) v_succs
+  in
   let rec strongconnect (v : node) =
-    Hashtbl.replace index v.layer_hash !counter;
-    Hashtbl.replace lowlink v.layer_hash !counter;
-    incr counter;
-    Stack.push v stack;
-    Hashtbl.replace on_stack v.layer_hash true;
-    List.iter
-      (fun (w : node) ->
-        if not (Hashtbl.mem index w.layer_hash) then begin
-          strongconnect w;
-          let lv = Hashtbl.find lowlink v.layer_hash in
-          let lw = Hashtbl.find lowlink w.layer_hash in
-          Hashtbl.replace lowlink v.layer_hash (min lv lw)
-        end
-        else if Hashtbl.mem on_stack w.layer_hash then begin
-          let lv = Hashtbl.find lowlink v.layer_hash in
-          let iw = Hashtbl.find index w.layer_hash in
-          Hashtbl.replace lowlink v.layer_hash (min lv iw)
-        end)
-      (succ v);
-    if Hashtbl.find lowlink v.layer_hash = Hashtbl.find index v.layer_hash then begin
-      let scc = ref [] in
-      let stop = ref false in
-      while not !stop do
-        let w = Stack.pop stack in
-        Hashtbl.remove on_stack w.layer_hash;
-        scc := w.layer_hash :: !scc;
-        if Layer_hash.equal w.layer_hash v.layer_hash then stop := true
-      done;
-      let scc = !scc in
-      let is_cycle =
-        List.length scc > 1
-        ||
-        (* self-loop *)
-        let v_succs = List.map (fun n -> n.layer_hash) (succ v) in
-        List.exists (Layer_hash.equal v.layer_hash) v_succs
-      in
-      if is_cycle then sccs := scc :: !sccs
+    Hashtbl.replace state.index v.layer_hash !(state.counter);
+    Hashtbl.replace state.lowlink v.layer_hash !(state.counter);
+    incr state.counter;
+    Stack.push v state.stack;
+    Hashtbl.replace state.on_stack v.layer_hash true;
+    List.iter (visit_succ v) (succ v);
+    if
+      Hashtbl.find state.lowlink v.layer_hash
+      = Hashtbl.find state.index v.layer_hash
+    then
+      let scc = tarjan_pop_scc state v in
+      if is_cycle_scc v scc then state.sccs := scc :: !(state.sccs)
+  and visit_succ (v : node) (w : node) =
+    if not (Hashtbl.mem state.index w.layer_hash) then begin
+      strongconnect w;
+      let lv = Hashtbl.find state.lowlink v.layer_hash in
+      let lw = Hashtbl.find state.lowlink w.layer_hash in
+      Hashtbl.replace state.lowlink v.layer_hash (min lv lw)
+    end
+    else if Hashtbl.mem state.on_stack w.layer_hash then begin
+      let lv = Hashtbl.find state.lowlink v.layer_hash in
+      let iw = Hashtbl.find state.index w.layer_hash in
+      Hashtbl.replace state.lowlink v.layer_hash (min lv iw)
     end
   in
   List.iter
-    (fun n -> if not (Hashtbl.mem index n.layer_hash) then strongconnect n)
+    (fun n -> if not (Hashtbl.mem state.index n.layer_hash) then strongconnect n)
     nodes;
-  List.rev !sccs
+  List.rev !(state.sccs)
 
 let sha256_of_file ~fs:_ path =
   OpamHash.contents (OpamHash.compute ~kind:`SHA256 path)

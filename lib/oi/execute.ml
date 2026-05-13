@@ -22,86 +22,101 @@ let describe_origin ~src_url : Source.Mirror.origin -> string = function
   | Local_mirror path -> Fmt.str "local mirror (%s)" path
   | Other -> src_url
 
+let pull_source_once ~fs ~cache_root ~cache_dir ~cache_urls ~url ~dst_dir
+    ~checksums (p : Plan.package_plan) =
+  let result =
+    OpamRepository.pull_tree p.pkg ~cache_dir ~cache_urls dst_dir checksums
+      [ url ]
+    |> OpamProcess.Job.run
+  in
+  match result with
+  | OpamTypes.Result _ | OpamTypes.Up_to_date _ ->
+      (* Promote the just-fetched blob into our content-addressed mirror
+         so [oi build --export] picks it up and registry consumers can
+         fetch it offline. *)
+      ignore (Source.Mirror.import_from_opam_cache ~fs ~cache_root checksums)
+  | OpamTypes.Not_available (_, msg) ->
+      Fmt.failwith "Failed to fetch %s: %s" p.pkg msg
+
+let do_fetch_source ~fs ~cache_root ~cache_urls (p : Plan.package_plan)
+    (src : Plan.source_info) =
+  let url = OpamUrl.parse ~handle_suffix:true src.url in
+  let checksums = List.map OpamHash.of_string src.checksums in
+  let dst_dir = OpamFilename.Dir.of_string p.build_dir in
+  let cache_dir =
+    OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
+  in
+  let origin = Source.Mirror.source_origin ~cache_urls ~checksums in
+  Log.info (fun m ->
+      m "Fetching %s from %s" p.pkg (describe_origin ~src_url:src.url origin));
+  let error_log_path = fetch_log_path_of ~cache_root ~p in
+  Cache.Logs.ensure ~fs ~cache_root;
+  try
+    Retry.with_attempts
+      ~label:(Fmt.str "fetch %s (%s)" p.pkg src.url)
+      ~error_log_path
+      (fun () ->
+        pull_source_once ~fs ~cache_root ~cache_dir ~cache_urls ~url ~dst_dir
+          ~checksums p)
+  with Failure msg ->
+    (* Re-raise as a typed Fetch_failed so the build loop can classify the
+       outcome distinctly from a Build_failed. *)
+    Error.raise (Fetch_failed { url = src.url; msg })
+
 let fetch_source ?(cache_urls = []) ~fs ~cache_root (p : Plan.package_plan) =
   match p.source with
   | None -> ()
   | Some src ->
-      if not (Sys.file_exists p.build_dir) then begin
-        let url = OpamUrl.parse ~handle_suffix:true src.url in
-        let checksums = List.map OpamHash.of_string src.checksums in
-        let dst_dir = OpamFilename.Dir.of_string p.build_dir in
-        let cache_dir =
-          OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
-        in
-        let origin = Source.Mirror.source_origin ~cache_urls ~checksums in
-        Log.info (fun m ->
-            m "Fetching %s from %s" p.pkg
-              (describe_origin ~src_url:src.url origin));
-        let error_log_path = fetch_log_path_of ~cache_root ~p in
-        Cache.Logs.ensure ~fs ~cache_root;
-        try
-          Retry.with_attempts ~label:(Fmt.str "fetch %s (%s)" p.pkg src.url)
-            ~error_log_path (fun () ->
-              let result =
-                OpamRepository.pull_tree p.pkg ~cache_dir ~cache_urls dst_dir
-                  checksums [ url ]
-                |> OpamProcess.Job.run
-              in
-              match result with
-              | OpamTypes.Result _ | OpamTypes.Up_to_date _ ->
-                  (* Promote the just-fetched blob into our content-
-                     addressed mirror so [oi build --export] picks it up
-                     and registry consumers can fetch it offline. *)
-                  ignore
-                    (Source.Mirror.import_from_opam_cache ~fs ~cache_root
-                       checksums)
-              | OpamTypes.Not_available (_, msg) ->
-                  Fmt.failwith "Failed to fetch %s: %s" p.pkg msg)
-        with Failure msg ->
-          (* Re-raise as a typed Fetch_failed so the build loop can
-             classify the outcome distinctly from a Build_failed. *)
-          Error.raise (Fetch_failed { url = src.url; msg })
-      end
+      if not (Sys.file_exists p.build_dir) then
+        do_fetch_source ~fs ~cache_root ~cache_urls p src
+
+let pull_extra_once ~fs ~cache_root ~cache_dir ~cache_urls ~url ~dst_file
+    ~checksums ~name =
+  let result =
+    OpamRepository.pull_file name ~cache_dir ~cache_urls ~silent_hits:true
+      dst_file checksums [ url ]
+    |> OpamProcess.Job.run
+  in
+  match result with
+  | OpamTypes.Result () | OpamTypes.Up_to_date () ->
+      ignore (Source.Mirror.import_from_opam_cache ~fs ~cache_root checksums)
+  | OpamTypes.Not_available (_, msg) -> Fmt.failwith "%s" msg
+
+let do_fetch_extra_source ~fs ~cache_root ~cache_urls (p : Plan.package_plan)
+    name (src : Plan.source_info) =
+  let dst = p.build_dir / name in
+  let url = OpamUrl.parse ~handle_suffix:true src.url in
+  let checksums = List.map OpamHash.of_string src.checksums in
+  let dst_file = OpamFilename.of_string dst in
+  let cache_dir =
+    OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
+  in
+  let origin = Source.Mirror.source_origin ~cache_urls ~checksums in
+  Log.info (fun m ->
+      m "Fetching extra source %s for %s from %s" name p.pkg
+        (describe_origin ~src_url:src.url origin));
+  let error_log_path = fetch_log_path_of ~cache_root ~p in
+  Cache.Logs.ensure ~fs ~cache_root;
+  try
+    Retry.with_attempts
+      ~label:(Fmt.str "fetch extra source %s (%s)" name src.url)
+      ~error_log_path
+      (fun () ->
+        pull_extra_once ~fs ~cache_root ~cache_dir ~cache_urls ~url ~dst_file
+          ~checksums ~name)
+  with Failure msg ->
+    (* Match the previous semantics: extra sources are best-effort, so a
+       hard failure (after retries) downgrades to a warning rather than
+       aborting the whole build. *)
+    Log.warn (fun m -> m "Failed to fetch extra source %s: %s" name msg)
 
 let fetch_extra_sources ?(cache_urls = []) ~fs ~cache_root
     (p : Plan.package_plan) =
   List.iter
     (fun (name, (src : Plan.source_info)) ->
       let dst = p.build_dir / name in
-      if not (Sys.file_exists dst) then begin
-        let url = OpamUrl.parse ~handle_suffix:true src.url in
-        let checksums = List.map OpamHash.of_string src.checksums in
-        let dst_file = OpamFilename.of_string dst in
-        let cache_dir =
-          OpamRepositoryPath.download_cache OpamStateConfig.(!r.root_dir)
-        in
-        let origin = Source.Mirror.source_origin ~cache_urls ~checksums in
-        Log.info (fun m ->
-            m "Fetching extra source %s for %s from %s" name p.pkg
-              (describe_origin ~src_url:src.url origin));
-        let error_log_path = fetch_log_path_of ~cache_root ~p in
-        Cache.Logs.ensure ~fs ~cache_root;
-        try
-          Retry.with_attempts
-            ~label:(Fmt.str "fetch extra source %s (%s)" name src.url)
-            ~error_log_path (fun () ->
-              let result =
-                OpamRepository.pull_file name ~cache_dir ~cache_urls
-                  ~silent_hits:true dst_file checksums [ url ]
-                |> OpamProcess.Job.run
-              in
-              match result with
-              | OpamTypes.Result () | OpamTypes.Up_to_date () ->
-                  ignore
-                    (Source.Mirror.import_from_opam_cache ~fs ~cache_root
-                       checksums)
-              | OpamTypes.Not_available (_, msg) -> Fmt.failwith "%s" msg)
-        with Failure msg ->
-          (* Match the previous semantics: extra sources are
-             best-effort, so a hard failure (after retries) downgrades
-             to a warning rather than aborting the whole build. *)
-          Log.warn (fun m -> m "Failed to fetch extra source %s: %s" name msg)
-      end)
+      if not (Sys.file_exists dst) then
+        do_fetch_extra_source ~fs ~cache_root ~cache_urls p name src)
     p.extra_sources
 
 (* -- Patches and substitutions -------------------------------------------- *)

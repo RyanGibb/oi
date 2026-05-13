@@ -56,6 +56,15 @@ let field label fmt =
    prefix exactly so wrapped lines line up under the first item. *)
 let field_continuation_indent = 2 + label_width + 1
 
+let emit_field_lines ~pad label lines =
+  match lines with
+  | [] -> ()
+  | first :: rest ->
+      Fmt.pr "  %a %s@." Style.pp_dim_string
+        (Fmt.str "%-*s" label_width (label ^ ":"))
+        first;
+      List.iter (fun line -> Fmt.pr "%s%s@." pad line) rest
+
 let field_list ?(sep = ", ") label items =
   match items with
   | [] -> ()
@@ -66,13 +75,7 @@ let field_list ?(sep = ", ") label items =
       let wrapped = Tty.Width.wrap body_w joined in
       let pad = String.make field_continuation_indent ' ' in
       interject (fun () ->
-          (match String.split_on_char '\n' wrapped with
-          | [] -> ()
-          | first :: rest ->
-              Fmt.pr "  %a %s@." Style.pp_dim_string
-                (Fmt.str "%-*s" label_width (label ^ ":"))
-                first;
-              List.iter (fun line -> Fmt.pr "%s%s@." pad line) rest);
+          emit_field_lines ~pad label (String.split_on_char '\n' wrapped);
           flush_out ())
 
 let progress msg =

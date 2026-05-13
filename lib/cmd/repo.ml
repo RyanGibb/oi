@@ -217,6 +217,76 @@ let base_handles_of_toolchain = function
             "unknown toolchain %S — known builtins listed by 'oi config'" t)
 
 module Ls = struct
+  (* Split toolchain definitions out of the overlay table — they don't have
+     a URL of their own and their reporepo handle ([toolchain-*]) is an
+     implementation detail; users address them by their CLI name (e.g.
+     [ocaml-5.4]). Within overlays, base entries (no [x-oi-toolchain] tag,
+     e.g. [default], [relocatable]) sort first since they're not user-
+     supplied. *)
+  let split_overlays_toolchains entries =
+    let toolchains, overlays =
+      List.partition
+        (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain_name <> None)
+        entries
+    in
+    let untagged, tagged =
+      List.partition
+        (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain = None)
+        overlays
+    in
+    (untagged @ tagged, toolchains)
+
+  let pp_subtitle ppf s = Oi.Style.pp_dim_string ppf s
+
+  (* Per-entry [git ls-remote] runs in parallel up to four at a time. Four
+     keeps the pipe/fd footprint small without making a 30-entry reporepo
+     serial. Failures downgrade to [Unknown] — a flaky network must not
+     make [oi repo list] unusable. *)
+  let render_overlays_with_status ~sys overlays =
+    let indexed = List.mapi (fun i e -> (i, e)) overlays in
+    let statuses = Array.make (List.length indexed) Unknown in
+    Eio.Fiber.List.iter ~max_fibers:4
+      (fun (i, e) -> statuses.(i) <- check_upstream ~sys e)
+      indexed;
+    render_overlay_table ~with_status:true
+      (List.mapi (fun i e -> overlay_row ~status:statuses.(i) e) overlays)
+
+  let render_overlays ~sys ~no_check overlays =
+    if overlays = [] then ()
+    else begin
+      Fmt.pr "%a@." Oi.Style.pp_header_string "OVERLAYS";
+      Fmt.pr "%a@.@." pp_subtitle
+        "Curated opam packages pinned to git commits. Use as \
+         --with-repo=@HANDLE, --with=@HANDLE/PKG, or 'x-repos:' in *.opam.";
+      if no_check then
+        render_overlay_table ~with_status:false (List.map overlay_row overlays)
+      else render_overlays_with_status ~sys overlays
+    end
+
+  let render_toolchains ~had_overlays toolchains =
+    if toolchains = [] then ()
+    else begin
+      if had_overlays then Fmt.pr "@.";
+      Fmt.pr "%a@." Oi.Style.pp_header_string "TOOLCHAINS";
+      Fmt.pr "%a@.@." pp_subtitle
+        "Compiler bundles. Select with --toolchain=NAME; the DEFAULT entry \
+         is used otherwise.";
+      render_toolchain_table (List.map toolchain_row toolchains)
+    end
+
+  let render_entries ~sys ~reporepo ~no_check entries =
+    Fmt.pr "Reporepo: %s@.@." reporepo;
+    let latest_entries =
+      entries
+      |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
+      |> List.sort_uniq String.compare
+      |> List.filter_map (fun handle ->
+          Oi.Source.Reporepo.latest entries ~handle)
+    in
+    let overlays, toolchains = split_overlays_toolchains latest_entries in
+    render_overlays ~sys ~no_check overlays;
+    render_toolchains ~had_overlays:(overlays <> []) toolchains
+
   let cmd =
     let run () reporepo reporepo_url no_check =
       Harness.run @@ fun ~sw:_ env ->
@@ -231,68 +301,7 @@ module Ls = struct
         ~url:reporepo_url ();
       match Oi.Source.Reporepo.load ~path:reporepo with
       | [] -> Fmt.pr "Reporepo %s is empty.@." reporepo
-      | entries ->
-          Fmt.pr "Reporepo: %s@.@." reporepo;
-          let latest_entries =
-            entries
-            |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
-            |> List.sort_uniq String.compare
-            |> List.filter_map (fun handle ->
-                Oi.Source.Reporepo.latest entries ~handle)
-          in
-          (* Split toolchain definitions out of the overlay table — they
-           don't have a URL of their own and their reporepo handle
-           ([toolchain-*]) is an implementation detail; users address
-           them by their CLI name (e.g. [ocaml-5.4]). Within overlays,
-           base entries (no [x-oi-toolchain] tag, e.g. [default],
-           [relocatable]) sort first since they're not user-supplied. *)
-          let toolchains, overlays =
-            List.partition
-              (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain_name <> None)
-              latest_entries
-          in
-          let overlays =
-            let untagged, tagged =
-              List.partition
-                (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain = None)
-                overlays
-            in
-            untagged @ tagged
-          in
-          let pp_subtitle ppf s = Oi.Style.pp_dim_string ppf s in
-          if overlays <> [] then begin
-            Fmt.pr "%a@." Oi.Style.pp_header_string "OVERLAYS";
-            Fmt.pr "%a@.@." pp_subtitle
-              "Curated opam packages pinned to git commits. Use as \
-               --with-repo=@HANDLE, --with=@HANDLE/PKG, or 'x-repos:' in \
-               *.opam.";
-            if no_check then
-              render_overlay_table ~with_status:false
-                (List.map overlay_row overlays)
-            else begin
-              (* Parallel [git ls-remote] per entry. Four at a time keeps
-               the pipe/fd footprint small without making a 30-entry
-               reporepo serial. Failures downgrade to [Unknown] — a
-               flaky network must not make [oi repo list] unusable. *)
-              let indexed = List.mapi (fun i e -> (i, e)) overlays in
-              let statuses = Array.make (List.length indexed) Unknown in
-              Eio.Fiber.List.iter ~max_fibers:4
-                (fun (i, e) -> statuses.(i) <- check_upstream ~sys e)
-                indexed;
-              render_overlay_table ~with_status:true
-                (List.mapi
-                   (fun i e -> overlay_row ~status:statuses.(i) e)
-                   overlays)
-            end
-          end;
-          if toolchains <> [] then begin
-            if overlays <> [] then Fmt.pr "@.";
-            Fmt.pr "%a@." Oi.Style.pp_header_string "TOOLCHAINS";
-            Fmt.pr "%a@.@." pp_subtitle
-              "Compiler bundles. Select with --toolchain=NAME; the DEFAULT \
-               entry is used otherwise.";
-            render_toolchain_table (List.map toolchain_row toolchains)
-          end
+      | entries -> render_entries ~sys ~reporepo ~no_check entries
     in
     let no_check =
       Arg.(
@@ -336,6 +345,33 @@ module Ls = struct
 end
 
 module Show = struct
+  let print_depend (h, v) =
+    match v with
+    | None -> Fmt.pr "    %s@." h
+    | Some ver -> Fmt.pr "    %s = %s@." h ver
+
+  let print_root_group = function
+    | [] -> ()
+    | [ p ] -> Fmt.pr "    %s@." p
+    | multi -> Fmt.pr "    [%s]@." (String.concat " " multi)
+
+  let print_entry (e : Oi.Source.Reporepo.entry) =
+    Fmt.pr "%s.%s@." e.handle e.version;
+    Fmt.pr "  url:    %s@." e.url;
+    Fmt.pr "  commit: %s@." e.commit;
+    (match e.ref_ with Some r -> Fmt.pr "  ref:    %s@." r | None -> ());
+    (match e.depends with
+    | [] -> ()
+    | ds ->
+        Fmt.pr "  depends:@.";
+        List.iter print_depend ds);
+    (match e.root_packages with
+    | [] -> ()
+    | groups ->
+        Fmt.pr "  root-packages:@.";
+        List.iter print_root_group groups);
+    Fmt.pr "@."
+
   let cmd =
     let run () reporepo reporepo_url handle =
       Harness.run @@ fun ~sw:_ env ->
@@ -363,35 +399,7 @@ module Show = struct
       if matches = [] then
         Oi.Error.fail_not_found handle "no overlay %s in reporepo %s" handle
           reporepo;
-      List.iter
-        (fun (e : Oi.Source.Reporepo.entry) ->
-          Fmt.pr "%s.%s@." e.handle e.version;
-          Fmt.pr "  url:    %s@." e.url;
-          Fmt.pr "  commit: %s@." e.commit;
-          (match e.ref_ with Some r -> Fmt.pr "  ref:    %s@." r | None -> ());
-          (match e.depends with
-          | [] -> ()
-          | ds ->
-              Fmt.pr "  depends:@.";
-              List.iter
-                (fun (h, v) ->
-                  match v with
-                  | None -> Fmt.pr "    %s@." h
-                  | Some ver -> Fmt.pr "    %s = %s@." h ver)
-                ds);
-          (match e.root_packages with
-          | [] -> ()
-          | groups ->
-              Fmt.pr "  root-packages:@.";
-              List.iter
-                (fun group ->
-                  match group with
-                  | [] -> ()
-                  | [ p ] -> Fmt.pr "    %s@." p
-                  | multi -> Fmt.pr "    [%s]@." (String.concat " " multi))
-                groups);
-          Fmt.pr "@.")
-        matches
+      List.iter print_entry matches
     in
     let handle =
       Arg.(
@@ -416,6 +424,23 @@ module Show = struct
 end
 
 module Add = struct
+  let print_dep (h, v) =
+    match v with
+    | Some ver -> Fmt.pr "  %s = %s@." h ver
+    | None -> Fmt.pr "  %s@." h
+
+  let print_materialise_summary ~fs ~sys ~path (e : Oi.Source.Reporepo.entry) =
+    Fmt.pr "Materialising v2/%s/ from %s @ %s@." e.handle e.url
+      (String.sub e.commit 0 (min 7 (String.length e.commit)));
+    let summary =
+      Oi.Source.Reporepo.materialise_handle ~fs ~sys ~path ~handle:e.handle
+        ~url:e.url ~commit:e.commit
+    in
+    Fmt.pr
+      "  %d packages: %d already pinned, %d rewritten, %d marked unavailable@."
+      summary.total summary.kept summary.rewrote
+      (List.length summary.unavailable)
+
   let cmd =
     let run () reporepo reporepo_url handle url ref_ toolchain depend_specs
         force =
@@ -443,26 +468,10 @@ module Add = struct
         e.commit e.opam_path;
       if e.depends <> [] then begin
         Fmt.pr "Depends:@.";
-        List.iter
-          (fun (h, v) ->
-            match v with
-            | Some ver -> Fmt.pr "  %s = %s@." h ver
-            | None -> Fmt.pr "  %s@." h)
-          e.depends
+        List.iter print_dep e.depends
       end;
-      if e.url <> "" then begin
-        Fmt.pr "Materialising v2/%s/ from %s @ %s@." e.handle e.url
-          (String.sub e.commit 0 (min 7 (String.length e.commit)));
-        let summary =
-          Oi.Source.Reporepo.materialise_handle ~fs ~sys ~path:reporepo
-            ~handle:e.handle ~url:e.url ~commit:e.commit
-        in
-        Fmt.pr
-          "  %d packages: %d already pinned, %d rewritten, %d marked \
-           unavailable@."
-          summary.total summary.kept summary.rewrote
-          (List.length summary.unavailable)
-      end;
+      if e.url <> "" then
+        print_materialise_summary ~fs ~sys ~path:reporepo e;
       auto_commit ~sys ~reporepo ~op:(Fmt.str "add %s" handle)
     in
     let handle =
@@ -568,6 +577,28 @@ module Bump = struct
       Some ((url, extras), Oi.Keys.read_string_ext Oi.Keys.d10_archive opam)
     with Failure _ | Sys_error _ -> None
 
+  (* Apply [f] to one [<pkg>.<ver_dir>/opam] file if it parses and the dir
+     name starts with [pkg.]. *)
+  let iter_one_opam ~pkg ~pkg_dir ~ver_dir f =
+    let opam_path = pkg_dir / ver_dir / "opam" in
+    if not (Sys.file_exists opam_path) then ()
+    else
+      let prefix = pkg ^ "." in
+      if not (String.starts_with ~prefix ver_dir) then ()
+      else
+        let version =
+          String.sub ver_dir (String.length prefix)
+            (String.length ver_dir - String.length prefix)
+        in
+        f ~pkg ~version ~pkg_dir:(pkg_dir / ver_dir) ~opam_path
+
+  (* Apply [f] to every [packages/<pkg>/<pkg>.VER/opam] under [pkg_dir]. *)
+  let iter_pkg_versions ~pkg ~pkg_dir f =
+    if not (Sys.is_directory pkg_dir) then ()
+    else
+      Sys.readdir pkg_dir
+      |> Array.iter (fun ver_dir -> iter_one_opam ~pkg ~pkg_dir ~ver_dir f)
+
   let iter_handle_opams ~reporepo ~handle f =
     let pkgs_dir = reporepo / "v2" / handle / "packages" in
     if not (Sys.file_exists pkgs_dir) then ()
@@ -575,18 +606,7 @@ module Bump = struct
       Sys.readdir pkgs_dir
       |> Array.iter (fun pkg ->
           let pkg_dir = pkgs_dir / pkg in
-          if Sys.is_directory pkg_dir then
-            Sys.readdir pkg_dir
-            |> Array.iter (fun ver_dir ->
-                let opam_path = pkg_dir / ver_dir / "opam" in
-                if Sys.file_exists opam_path then
-                  let prefix = pkg ^ "." in
-                  if String.starts_with ~prefix ver_dir then
-                    let version =
-                      String.sub ver_dir (String.length prefix)
-                        (String.length ver_dir - String.length prefix)
-                    in
-                    f ~pkg ~version ~pkg_dir:(pkg_dir / ver_dir) ~opam_path))
+          iter_pkg_versions ~pkg ~pkg_dir f)
 
   (* Capture (pkg, ver_dir) -> (source_identity, baked sha) for every
      opam file in v2/<handle>/ that already has an x-d10-archive set.
@@ -747,6 +767,130 @@ module Bump = struct
        caller can decide what to commit with. *)
     entry
 
+  (* Normalise trailing slash off the archives-URL so [<base>/<sha>] never
+     grows a double slash. *)
+  let strip_trailing_slash u =
+    if String.length u > 0 && u.[String.length u - 1] = '/' then
+      String.sub u 0 (String.length u - 1)
+    else u
+
+  (* [--upload-archives]: invoke [s3cmd put <path> <base>/<sha>.tar.zst] for
+     each fresh bake. Failures print a warning but don't abort. *)
+  let make_upload_callback ~sys ~upload_archives ~archives_url =
+    if not upload_archives then None
+    else
+      let base = strip_trailing_slash archives_url in
+      Some
+        (fun ~name ~version ~sha ~path ->
+          let url = Fmt.str "%s/%s.tar.zst" base sha in
+          try
+            D10.Sysops.Cmd.run sys [ "s3cmd"; "put"; "--quiet"; path; url ];
+            Fmt.pr "    %a %s -> %s@." Oi.Style.pp_ok_string "uploaded"
+              (Fmt.str "%s.%s" name version)
+              url
+          with exn ->
+            Fmt.pr "    %a upload %s.%s: %s@." Oi.Style.pp_warn_string "skip"
+              name version (Printexc.to_string exn))
+
+  type bump_ctx = {
+    proc_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
+    fs : Eio.Fs.dir_ty Eio.Path.t;
+    sys : D10.Sysops.t;
+    d10 : D10.Config.t;
+    cache_root : string;
+    platform : Osrel.t;
+    reporepo : string;
+    no_bake : bool;
+    rebake : bool;
+    upload_on_baked :
+      (name:string -> version:string -> sha:string -> path:string -> unit)
+      option;
+  }
+
+  let restore_or_discard_shas ctx ~handle ~snap =
+    if ctx.rebake then
+      Fmt.pr
+        "@.--rebake: discarding previous x-d10-archive shas, will re-bake \
+         every package@."
+    else begin
+      Fmt.pr "@.Restoring x-d10-archive for unchanged sources ...@.";
+      let restored =
+        restore_unchanged_archives ~reporepo:ctx.reporepo ~handle ~snap
+      in
+      Fmt.pr "  %d restored from previous bump@." restored
+    end
+
+  let run_bake_phase ctx ~handle =
+    if not ctx.no_bake then begin
+      Fmt.pr "Baking x-d10-archive for new or changed sources ...@.";
+      let baked, failed =
+        bake_changed_archives ?on_baked:ctx.upload_on_baked
+          ~proc_mgr:ctx.proc_mgr ~fs:ctx.fs ~d10:ctx.d10
+          ~cache_root:ctx.cache_root ~platform:ctx.platform
+          ~reporepo:ctx.reporepo ~handle ()
+      in
+      Fmt.pr "  %d baked, %d failed@." baked failed
+    end
+    else
+      Fmt.pr
+        "  --no-bake: skipping fresh bakes; %d package(s) without \
+         x-d10-archive will be left unbaked@."
+        (count_packages_missing_archive ~reporepo:ctx.reporepo ~handle)
+
+  (* Snapshot pre-materialise source identity + baked sha for every package
+     so the post-materialise pass can preserve [x-d10-archive] for any
+     package whose source URL + checksums are unchanged — even with
+     [--no-bake]. [--rebake] feeds an empty snapshot, so restore is a no-op
+     and bake sees every opam. *)
+  let bump_and_bake ~ctx ~url ~ref_ ~toolchain ~depends ~default handle =
+    let snap =
+      if ctx.rebake then Hashtbl.create 0
+      else snapshot_handle ~reporepo:ctx.reporepo ~handle
+    in
+    let entry =
+      bump_one ~fs:ctx.fs ~sys:ctx.sys ~reporepo:ctx.reporepo ~handle ~url
+        ~ref_ ~toolchain ~depends ~default
+    in
+    if entry.url <> "" then begin
+      restore_or_discard_shas ctx ~handle ~snap;
+      run_bake_phase ctx ~handle;
+      let stripped =
+        strip_resolved_artifacts ~fs:ctx.fs ~reporepo:ctx.reporepo ~handle
+      in
+      if stripped > 0 then
+        Fmt.pr "Stripped patches+extra-files from %d baked package(s)@."
+          stripped
+    end;
+    auto_commit ~sys:ctx.sys ~reporepo:ctx.reporepo
+      ~op:(Fmt.str "bump %s" handle)
+
+  let check_all_overrides ~url ~ref_ ~toolchain ~depend_specs ~default =
+    if
+      url <> None || ref_ <> None || toolchain <> None || depend_specs <> []
+      || default <> None
+    then begin
+      Fmt.epr
+        "oi repo bump --all: per-entry overrides (--url, --ref, --toolchain, \
+         --depend, --default) are not supported with --all.@.";
+      exit 1
+    end
+
+  let bump_all ~reporepo ~bump_one_handle =
+    let entries = Oi.Source.Reporepo.load ~path:reporepo in
+    let handles =
+      entries
+      |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
+      |> List.sort_uniq String.compare
+    in
+    List.iter
+      (fun h ->
+        Fmt.pr "@.%a@." Oi.Style.pp_header_string ("== " ^ h ^ " ==");
+        try bump_one_handle h
+        with exn ->
+          Fmt.pr "  %a %s: %s@." Oi.Style.pp_error_string "error" h
+            (Printexc.to_string exn))
+      handles
+
   let cmd =
     let run (c : Terms.common) reporepo reporepo_url handle_opt all url ref_
         toolchain depend_specs default no_bake rebake upload_archives
@@ -765,31 +909,8 @@ module Bump = struct
           "oi repo bump: --upload-archives requires baking; drop --no-bake.@.";
         exit 1
       end;
-      (* Build the upload callback up front when [--upload-archives] is
-         set. Each fresh bake invokes [s3cmd put <path> <url>/<sha>.tar.zst];
-         per-file failures print a warning but don't abort the bump. The
-         destination URL is normalised so [<url>/<sha>] never grows a
-         double slash. *)
       let upload_on_baked =
-        if not upload_archives then None
-        else
-          let base =
-            let u = archives_url in
-            if String.length u > 0 && u.[String.length u - 1] = '/' then
-              String.sub u 0 (String.length u - 1)
-            else u
-          in
-          Some
-            (fun ~name ~version ~sha ~path ->
-              let url = Fmt.str "%s/%s.tar.zst" base sha in
-              try
-                D10.Sysops.Cmd.run sys [ "s3cmd"; "put"; "--quiet"; path; url ];
-                Fmt.pr "    %a %s -> %s@." Oi.Style.pp_ok_string "uploaded"
-                  (Fmt.str "%s.%s" name version)
-                  url
-              with exn ->
-                Fmt.pr "    %a upload %s.%s: %s@." Oi.Style.pp_warn_string
-                  "skip" name version (Printexc.to_string exn))
+        make_upload_callback ~sys ~upload_archives ~archives_url
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url ();
@@ -802,58 +923,22 @@ module Bump = struct
         Oi.Pipeline.d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
       in
       let cache_root = Oi.Cache.root_s cache in
-      let bump_and_bake handle =
-        (* Snapshot the pre-materialise source identity + baked sha for
-           every package version, so the post-materialise pass can
-           preserve [x-d10-archive] for any package whose source URL +
-           checksums are unchanged — even with [--no-bake].
-
-           [--rebake] forces every package to re-bake by feeding an
-           empty snapshot, so [restore_unchanged_archives] is a no-op
-           and [bake_changed_archives] sees every opam without
-           x-d10-archive. *)
-        let snap =
-          if rebake then Hashtbl.create 0 else snapshot_handle ~reporepo ~handle
-        in
-        let entry =
-          bump_one ~fs ~sys ~reporepo ~handle ~url ~ref_ ~toolchain ~depends
-            ~default
-        in
-        if entry.url <> "" then begin
-          if rebake then
-            Fmt.pr
-              "@.--rebake: discarding previous x-d10-archive shas, will \
-               re-bake every package@."
-          else begin
-            Fmt.pr "@.Restoring x-d10-archive for unchanged sources ...@.";
-            let restored = restore_unchanged_archives ~reporepo ~handle ~snap in
-            Fmt.pr "  %d restored from previous bump@." restored
-          end;
-          if not no_bake then begin
-            Fmt.pr "Baking x-d10-archive for new or changed sources ...@.";
-            let on_baked = upload_on_baked in
-            let baked, failed =
-              bake_changed_archives ?on_baked ~proc_mgr ~fs ~d10 ~cache_root
-                ~platform ~reporepo ~handle ()
-            in
-            Fmt.pr "  %d baked, %d failed@." baked failed
-          end
-          else
-            Fmt.pr
-              "  --no-bake: skipping fresh bakes; %d package(s) without \
-               x-d10-archive will be left unbaked@."
-              (count_packages_missing_archive ~reporepo ~handle);
-          (* The bake step has folded each package's patches + extra-files
-             into the consolidated d10ir archive, so the freshly
-             materialised [packages/<pkg>/<ver>/files/] dirs are now
-             dead weight. Reclaim them before committing — typical
-             saving is 5-10x on baked overlays where patches dominate. *)
-          let stripped = strip_resolved_artifacts ~fs ~reporepo ~handle in
-          if stripped > 0 then
-            Fmt.pr "Stripped patches+extra-files from %d baked package(s)@."
-              stripped
-        end;
-        auto_commit ~sys ~reporepo ~op:(Fmt.str "bump %s" handle)
+      let ctx =
+        {
+          proc_mgr;
+          fs;
+          sys;
+          d10;
+          cache_root;
+          platform;
+          reporepo;
+          no_bake;
+          rebake;
+          upload_on_baked;
+        }
+      in
+      let bump_one_handle h =
+        bump_and_bake ~ctx ~url ~ref_ ~toolchain ~depends ~default h
       in
       match (all, handle_opt) with
       | false, None ->
@@ -863,31 +948,9 @@ module Bump = struct
           Fmt.epr "oi repo bump: HANDLE and --all are mutually exclusive.@.";
           exit 1
       | true, None ->
-          if
-            url <> None || ref_ <> None || toolchain <> None
-            || depend_specs <> [] || default <> None
-          then begin
-            Fmt.epr
-              "oi repo bump --all: per-entry overrides (--url, --ref, \
-               --toolchain, --depend, --default) are not supported with \
-               --all.@.";
-            exit 1
-          end;
-          let entries = Oi.Source.Reporepo.load ~path:reporepo in
-          let handles =
-            entries
-            |> List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle)
-            |> List.sort_uniq String.compare
-          in
-          List.iter
-            (fun h ->
-              Fmt.pr "@.%a@." Oi.Style.pp_header_string ("== " ^ h ^ " ==");
-              try bump_and_bake h
-              with exn ->
-                Fmt.pr "  %a %s: %s@." Oi.Style.pp_error_string "error" h
-                  (Printexc.to_string exn))
-            handles
-      | false, Some handle -> bump_and_bake handle
+          check_all_overrides ~url ~ref_ ~toolchain ~depend_specs ~default;
+          bump_all ~reporepo ~bump_one_handle
+      | false, Some handle -> bump_one_handle handle
     in
     let handle =
       Arg.(
@@ -1030,6 +1093,53 @@ module Bake = struct
         | None -> ());
     List.sort_uniq String.compare !acc
 
+  (* Bake every missing archive for a handle, strip files dirs, then
+     publish the resulting shas as hardlinks into [to_dir]. *)
+  let bake_one ~proc_mgr ~fs ~d10 ~cache_root ~platform ~cache ~reporepo
+      ~to_dir handle =
+    let missing = Bump.count_packages_missing_archive ~reporepo ~handle in
+    if missing = 0 then
+      Fmt.pr "@.%a %s: every package already baked@." Oi.Style.pp_ok_string
+        "✓" handle
+    else begin
+      Fmt.pr "@.%a %s: baking %d missing archive(s)...@."
+        Oi.Style.pp_info_string "▸" handle missing;
+      let baked, failed =
+        Bump.bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform
+          ~reporepo ~handle ()
+      in
+      Fmt.pr "  %d baked, %d failed@." baked failed
+    end;
+    (* Same strip step as [oi repo bump]: the freshly-baked archives
+       subsume each package's [files/] dir. *)
+    let stripped = Bump.strip_resolved_artifacts ~fs ~reporepo ~handle in
+    if stripped > 0 then
+      Fmt.pr "  Stripped patches+extra-files from %d baked package(s)@."
+        stripped;
+    let shas = collect_handle_shas ~reporepo ~handle in
+    let { Oi.D10ir_archives.linked; present; missing } =
+      Oi.D10ir_archives.publish_shas ~cache ~output:to_dir shas
+    in
+    let total = linked + present in
+    Fmt.pr
+      "  %a %d archive(s) at %s/d10ir-archives/ (%d new, %d already present)@."
+      Oi.Style.pp_ok_string "✓" total to_dir linked present;
+    if missing > 0 then
+      Fmt.pr
+        "  %a %d archive(s) referenced by %s opams but not in local cache; \
+         run [oi repo bump %s] to bake them@."
+        Oi.Style.pp_warn_string "!" missing handle handle
+
+  let bake_all_handles ~reporepo ~bake_handle =
+    let entries = Oi.Source.Reporepo.load ~path:reporepo in
+    let handles =
+      List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle) entries
+      |> List.sort_uniq String.compare
+    in
+    if handles = [] then
+      Fmt.epr "oi repo bake: no overlays found in %s@." reporepo
+    else List.iter bake_handle handles
+
   let cmd =
     let run (c : Terms.common) reporepo reporepo_url handle_opt to_dir =
       Harness.run @@ fun ~sw env ->
@@ -1043,54 +1153,14 @@ module Bake = struct
         Oi.Pipeline.d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
       in
       let cache_root = Oi.Cache.root_s cache in
-      let bake_one handle =
-        let missing = Bump.count_packages_missing_archive ~reporepo ~handle in
-        if missing = 0 then
-          Fmt.pr "@.%a %s: every package already baked@." Oi.Style.pp_ok_string
-            "✓" handle
-        else begin
-          Fmt.pr "@.%a %s: baking %d missing archive(s)...@."
-            Oi.Style.pp_info_string "▸" handle missing;
-          let baked, failed =
-            Bump.bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform
-              ~reporepo ~handle ()
-          in
-          Fmt.pr "  %d baked, %d failed@." baked failed
-        end;
-        (* Same strip step as [oi repo bump]: the freshly-baked
-           archives subsume each package's [files/] dir. *)
-        let stripped = Bump.strip_resolved_artifacts ~fs ~reporepo ~handle in
-        if stripped > 0 then
-          Fmt.pr "  Stripped patches+extra-files from %d baked package(s)@."
-            stripped;
-        let shas = collect_handle_shas ~reporepo ~handle in
-        let { Oi.D10ir_archives.linked; present; missing } =
-          Oi.D10ir_archives.publish_shas ~cache ~output:to_dir shas
-        in
-        let total = linked + present in
-        Fmt.pr
-          "  %a %d archive(s) at %s/d10ir-archives/ (%d new, %d already \
-           present)@."
-          Oi.Style.pp_ok_string "✓" total to_dir linked present;
-        if missing > 0 then
-          Fmt.pr
-            "  %a %d archive(s) referenced by %s opams but not in local cache; \
-             run [oi repo bump %s] to bake them@."
-            Oi.Style.pp_warn_string "!" missing handle handle
+      let bake_handle h =
+        bake_one ~proc_mgr ~fs ~d10 ~cache_root ~platform ~cache ~reporepo
+          ~to_dir h
       in
       Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / to_dir);
-      (match handle_opt with
-      | Some handle -> bake_one handle
-      | None ->
-          let entries = Oi.Source.Reporepo.load ~path:reporepo in
-          let handles =
-            List.map (fun (e : Oi.Source.Reporepo.entry) -> e.handle) entries
-            |> List.sort_uniq String.compare
-          in
-          if handles = [] then
-            Fmt.epr "oi repo bake: no overlays found in %s@." reporepo
-          else List.iter bake_one handles);
-      ()
+      match handle_opt with
+      | Some handle -> bake_handle handle
+      | None -> bake_all_handles ~reporepo ~bake_handle
     in
     let handle =
       Arg.(
@@ -1327,6 +1397,27 @@ module Remove = struct
 end
 
 module Push = struct
+  let print_step_outcome = function
+    | Oi.Source.Reporepo.Step_commit { files = [] } ->
+        Fmt.pr "  commit: %a (working tree clean)@." Oi.Style.pp_dim_string
+          "skipped"
+    | Oi.Source.Reporepo.Step_commit { files } ->
+        Fmt.pr "  commit: %a (%d file(s))@." Oi.Style.pp_ok_string "ok"
+          (List.length files);
+        List.iter (fun f -> Fmt.pr "    %s@." f) files
+    | Oi.Source.Reporepo.Step_pull { commits = 0 } ->
+        Fmt.pr "  pull:   %a (already up to date)@." Oi.Style.pp_dim_string
+          "skipped"
+    | Oi.Source.Reporepo.Step_pull { commits } ->
+        Fmt.pr "  pull:   %a (%d new upstream commit(s))@."
+          Oi.Style.pp_ok_string "ok" commits
+    | Oi.Source.Reporepo.Step_push { commits = 0 } ->
+        Fmt.pr "  push:   %a (nothing to push)@." Oi.Style.pp_dim_string
+          "skipped"
+    | Oi.Source.Reporepo.Step_push { commits } ->
+        Fmt.pr "  push:   %a (%d local commit(s) sent)@."
+          Oi.Style.pp_ok_string "ok" commits
+
   let cmd =
     let run () reporepo reporepo_url push_url =
       Harness.run @@ fun ~sw:_ env ->
@@ -1353,28 +1444,7 @@ module Push = struct
         Oi.Source.Reporepo.push ~on_step_start ~sys ~path:reporepo ()
       in
       Fmt.pr "@.%a@." Oi.Style.pp_header_string "summary:";
-      List.iter
-        (function
-          | Oi.Source.Reporepo.Step_commit { files = [] } ->
-              Fmt.pr "  commit: %a (working tree clean)@."
-                Oi.Style.pp_dim_string "skipped"
-          | Oi.Source.Reporepo.Step_commit { files } ->
-              Fmt.pr "  commit: %a (%d file(s))@." Oi.Style.pp_ok_string "ok"
-                (List.length files);
-              List.iter (fun f -> Fmt.pr "    %s@." f) files
-          | Oi.Source.Reporepo.Step_pull { commits = 0 } ->
-              Fmt.pr "  pull:   %a (already up to date)@."
-                Oi.Style.pp_dim_string "skipped"
-          | Oi.Source.Reporepo.Step_pull { commits } ->
-              Fmt.pr "  pull:   %a (%d new upstream commit(s))@."
-                Oi.Style.pp_ok_string "ok" commits
-          | Oi.Source.Reporepo.Step_push { commits = 0 } ->
-              Fmt.pr "  push:   %a (nothing to push)@." Oi.Style.pp_dim_string
-                "skipped"
-          | Oi.Source.Reporepo.Step_push { commits } ->
-              Fmt.pr "  push:   %a (%d local commit(s) sent)@."
-                Oi.Style.pp_ok_string "ok" commits)
-        outcome
+      List.iter print_step_outcome outcome
     in
     let push_url =
       Arg.(
@@ -1449,123 +1519,172 @@ module Lint = struct
       entries;
     tbl
 
-  let collect_problems ~reporepo (entries : Oi.Source.Reporepo.entry list) :
-      problem list =
-    let problems = ref [] in
-    let add ~where ~paths fmt =
-      Fmt.kstr (fun msg -> problems := { where; paths; msg } :: !problems) fmt
-    in
-    let toolchain_names =
-      List.filter_map
-        (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain_name)
-        entries
-      |> List.sort_uniq String.compare
-    in
-    let known_toolchain n = List.mem n toolchain_names in
-    let latest = latest_per_handle entries in
-    List.iter
-      (fun (e : Oi.Source.Reporepo.entry) ->
-        let where = Fmt.str "%s.%s" e.handle e.version in
-        let here fmt = add ~where ~paths:[ e.opam_path ] fmt in
-        if e.handle = "" then here "empty handle";
-        if e.version = "" then here "empty version";
-        (* url/commit consistency. An entry with a [url:] must carry
-           the 40-char sha it's pinned to; conversely, a definition-
-           only entry (no url) must not pretend to pin a commit. *)
-        if e.url = "" && e.commit <> "" then
-          here "[commit] is set (%s) but [url] is empty" e.commit;
-        if e.url <> "" && e.commit = "" then
-          here "[url: %s] is set but no commit is pinned" e.url;
-        if e.commit <> "" && not (Oi.Source.Reporepo.is_sha_string e.commit)
-        then here "pinned commit %S is not a 40-char hex sha" e.commit;
-        (match e.toolchain_name with
-        | None ->
-            if e.relocatable <> None then
-              here
-                "[%s] is set but [%s] is not — only toolchain definitions take \
-                 this field"
-                Oi.Keys.relocatable Oi.Keys.toolchain_name;
-            if e.toolchain_roots <> [] then
-              here
-                "[%s] is set but [%s] is not — only toolchain definitions take \
-                 this field"
-                Oi.Keys.toolchain_roots Oi.Keys.toolchain_name
-        | Some name ->
-            if name = "" then here "[%s] is empty" Oi.Keys.toolchain_name;
-            if e.relocatable = None then
-              here "toolchain %S missing [%s] (must be true or false)" name
-                Oi.Keys.relocatable;
-            if e.toolchain_roots = [] then
-              here "toolchain %S has empty [%s]" name Oi.Keys.toolchain_roots;
-            if e.toolchain_compiler = None then
-              here
-                "toolchain %S missing [%s] (e.g. \"ocaml-base-compiler.5.4.1\")"
-                name Oi.Keys.toolchain_compiler);
-        (match e.toolchain with
-        | None -> ()
-        | Some t ->
-            if not (known_toolchain t) then
-              here
-                "[%s: %s] does not match any [%s] in this reporepo (known: %s)"
-                Oi.Keys.toolchain t Oi.Keys.toolchain_name
-                (if toolchain_names = [] then "none"
-                 else String.concat ", " toolchain_names));
-        (* For url-bearing entries, the materialised [v2/<handle>/]
-           tree must exist on disk. A missing tree means "ran
-           [oi repo add] / received a checkout that hasn't been
-           bumped"; downstream commands hard-error in confusing ways
-           without this check. *)
-        if e.url <> "" then begin
-          let v2 = reporepo / "v2" / e.handle / "packages" in
-          if not (Sys.file_exists v2) then
+  (* Mutable accumulator for problems found while scanning. [add_problem]
+     appends in reverse order; the public collector flips at the end. *)
+  type acc = { mutable items : problem list }
+
+  let add_problem acc ~where ~paths fmt =
+    Fmt.kstr
+      (fun msg -> acc.items <- { where; paths; msg } :: acc.items)
+      fmt
+
+  (* Basic shape checks: empty handle/version, url/commit consistency. *)
+  let check_entry_shape ~acc ~where (e : Oi.Source.Reporepo.entry) =
+    let here fmt = add_problem acc ~where ~paths:[ e.opam_path ] fmt in
+    if e.handle = "" then here "empty handle";
+    if e.version = "" then here "empty version";
+    if e.url = "" && e.commit <> "" then
+      here "[commit] is set (%s) but [url] is empty" e.commit;
+    if e.url <> "" && e.commit = "" then
+      here "[url: %s] is set but no commit is pinned" e.url;
+    if e.commit <> "" && not (Oi.Source.Reporepo.is_sha_string e.commit) then
+      here "pinned commit %S is not a 40-char hex sha" e.commit
+
+  (* Toolchain-definition fields must appear together. *)
+  let check_toolchain_fields ~acc ~where (e : Oi.Source.Reporepo.entry) =
+    let here fmt = add_problem acc ~where ~paths:[ e.opam_path ] fmt in
+    match e.toolchain_name with
+    | None ->
+        if e.relocatable <> None then
+          here
+            "[%s] is set but [%s] is not — only toolchain definitions take \
+             this field"
+            Oi.Keys.relocatable Oi.Keys.toolchain_name;
+        if e.toolchain_roots <> [] then
+          here
+            "[%s] is set but [%s] is not — only toolchain definitions take \
+             this field"
+            Oi.Keys.toolchain_roots Oi.Keys.toolchain_name
+    | Some name ->
+        if name = "" then here "[%s] is empty" Oi.Keys.toolchain_name;
+        if e.relocatable = None then
+          here "toolchain %S missing [%s] (must be true or false)" name
+            Oi.Keys.relocatable;
+        if e.toolchain_roots = [] then
+          here "toolchain %S has empty [%s]" name Oi.Keys.toolchain_roots;
+        if e.toolchain_compiler = None then
+          here
+            "toolchain %S missing [%s] (e.g. \"ocaml-base-compiler.5.4.1\")"
+            name Oi.Keys.toolchain_compiler
+
+  let check_toolchain_ref ~acc ~where ~toolchain_names ~known_toolchain
+      (e : Oi.Source.Reporepo.entry) =
+    match e.toolchain with
+    | None -> ()
+    | Some t when known_toolchain t -> ()
+    | Some t ->
+        add_problem acc ~where ~paths:[ e.opam_path ]
+          "[%s: %s] does not match any [%s] in this reporepo (known: %s)"
+          Oi.Keys.toolchain t Oi.Keys.toolchain_name
+          (if toolchain_names = [] then "none"
+           else String.concat ", " toolchain_names)
+
+  (* For url-bearing entries, the materialised [v2/<handle>/] tree must exist
+     on disk. A missing tree means "ran [oi repo add] / received a checkout
+     that hasn't been bumped"; downstream commands fail confusingly without
+     this check. *)
+  let check_materialised_tree ~reporepo ~acc ~where
+      (e : Oi.Source.Reporepo.entry) =
+    if e.url <> "" then
+      let v2 = reporepo / "v2" / e.handle / "packages" in
+      if not (Sys.file_exists v2) then
+        add_problem acc ~where ~paths:[ e.opam_path ]
+          "missing materialised tree at v2/%s/packages/ — run 'oi repo bump \
+           %s' to populate"
+          e.handle e.handle
+
+  (* Append the appropriate out-of-date / unknown-handle problem for one
+     [(handle, pinned)] depend on a latest-version entry. *)
+  let check_one_depend ~acc ~where ~latest (e : Oi.Source.Reporepo.entry)
+      (h, pinned) =
+    let here fmt = add_problem acc ~where ~paths:[ e.opam_path ] fmt in
+    match Hashtbl.find_opt latest h with
+    | None ->
+        here
+          "depends on unknown handle %S (no entry for it in this reporepo)" h
+    | Some (latest_dep : Oi.Source.Reporepo.entry)
+      when version_compare pinned latest_dep.version < 0 -> (
+        match latest_dep.toolchain_name with
+        | Some tname ->
             here
-              "missing materialised tree at v2/%s/packages/ — run 'oi repo \
-               bump %s' to populate"
-              e.handle e.handle
-        end;
-        (* Out-of-date dependencies. Only check the LATEST version of
-           each handle: older entries are kept around for history and
-           are by definition pinned to old depends. The check
-           highlights toolchain depends specially since "your overlay
-           is using a stale toolchain" is the common case the user
-           cares about. *)
-        match Hashtbl.find_opt latest e.handle with
-        | Some l when l.opam_path = e.opam_path ->
-            List.iter
-              (fun (h, vopt) ->
-                match vopt with
-                | None -> ()
-                | Some pinned -> (
-                    match Hashtbl.find_opt latest h with
-                    | None ->
-                        here
-                          "depends on unknown handle %S (no entry for it in \
-                           this reporepo)"
-                          h
-                    | Some (latest_dep : Oi.Source.Reporepo.entry)
-                      when version_compare pinned latest_dep.version < 0 -> (
-                        match latest_dep.toolchain_name with
-                        | Some tname ->
-                            here
-                              "uses out-of-date toolchain %S: pinned [%s = %s] \
-                               but latest is %s. Run 'oi repo bump %s' to \
-                               update."
-                              tname h pinned latest_dep.version e.handle
-                        | None ->
-                            here
-                              "out-of-date depend [%s = %s]: latest is %s. Run \
-                               'oi repo bump %s' to update."
-                              h pinned latest_dep.version e.handle)
-                    | Some _ -> ()))
-              e.depends
-        | _ -> ())
-      entries;
-    (* Default-toolchain validation. Match {!Reporepo.load}'s
-       semantics: count one default per HANDLE using its latest
-       version. Older versions of the same handle still carrying the
-       flag are stale (older bump didn't get cleared by a later
-       --default rotation); they don't break [load] but the user
-       should clear them to avoid confusion. *)
+              "uses out-of-date toolchain %S: pinned [%s = %s] but latest is \
+               %s. Run 'oi repo bump %s' to update."
+              tname h pinned latest_dep.version e.handle
+        | None ->
+            here
+              "out-of-date depend [%s = %s]: latest is %s. Run 'oi repo bump \
+               %s' to update."
+              h pinned latest_dep.version e.handle)
+    | Some _ -> ()
+
+  (* Out-of-date dependencies on the latest version of each handle. Older
+     entries are kept around for history with old depends — skip them. *)
+  let check_dependencies ~acc ~where ~latest (e : Oi.Source.Reporepo.entry) =
+    match Hashtbl.find_opt latest e.handle with
+    | Some (l : Oi.Source.Reporepo.entry) when l.opam_path = e.opam_path ->
+        List.iter
+          (fun (h, vopt) ->
+            match vopt with
+            | None -> ()
+            | Some pinned -> check_one_depend ~acc ~where ~latest e (h, pinned))
+          e.depends
+    | _ -> ()
+
+  let check_entry ~reporepo ~toolchain_names ~known_toolchain ~latest ~acc
+      (e : Oi.Source.Reporepo.entry) =
+    let where = Fmt.str "%s.%s" e.handle e.version in
+    check_entry_shape ~acc ~where e;
+    check_toolchain_fields ~acc ~where e;
+    check_toolchain_ref ~acc ~where ~toolchain_names ~known_toolchain e;
+    check_materialised_tree ~reporepo ~acc ~where e;
+    check_dependencies ~acc ~where ~latest e
+
+  let report_no_default ~acc ~toolchain_names =
+    let hint =
+      if toolchain_names = [] then "no toolchain definitions found"
+      else
+        Fmt.str "mark one with: oi repo bump <handle> --default. Known: %s"
+          (String.concat ", " toolchain_names)
+    in
+    add_problem acc ~where:"(reporepo)" ~paths:[]
+      "no entry has [%s: true] — %s. Without a default, [oi run] / [oi sync] \
+       / etc. hard-error when the user omits [--toolchain]."
+      Oi.Keys.default_toolchain hint
+
+  let report_many_defaults ~acc many =
+    let labels =
+      List.map
+        (fun (e : Oi.Source.Reporepo.entry) ->
+          Fmt.str "%s.%s" e.handle e.version)
+        many
+    in
+    let paths =
+      List.map (fun (e : Oi.Source.Reporepo.entry) -> e.opam_path) many
+    in
+    add_problem acc ~where:"(reporepo)" ~paths
+      "multiple handles flagged [%s: true]: %s — only one toolchain handle \
+       may be the default. Clear the flag on the losing handle with 'oi repo \
+       bump <handle> --no-default'."
+      Oi.Keys.default_toolchain (String.concat ", " labels)
+
+  let report_stale_default ~acc ~latest (e : Oi.Source.Reporepo.entry) =
+    let where = Fmt.str "%s.%s" e.handle e.version in
+    add_problem acc ~where ~paths:[ e.opam_path ]
+      "stale [%s: true] on a non-latest version of %s (latest is %s). Clear \
+       with 'oi repo bump %s --no-default' on this version, or just remove \
+       this opam file if it's no longer needed."
+      Oi.Keys.default_toolchain e.handle
+      (match Hashtbl.find_opt latest e.handle with
+      | Some (l : Oi.Source.Reporepo.entry) -> l.version
+      | None -> "?")
+      e.handle
+
+  (* Default-toolchain validation. Match {!Reporepo.load}'s semantics: count
+     one default per HANDLE using its latest version. Older versions of the
+     same handle still carrying the flag are stale (an older bump didn't get
+     cleared by a later --default rotation); they don't break [load] but the
+     user should clear them to avoid confusion. *)
+  let check_defaults ~acc ~toolchain_names ~latest entries =
     let latest_defaults =
       Hashtbl.fold
         (fun _ (e : Oi.Source.Reporepo.entry) acc ->
@@ -1584,47 +1703,30 @@ module Lint = struct
     in
     (match latest_defaults with
     | [ _ ] -> () (* exactly one handle is default — fine *)
-    | [] ->
-        let hint =
-          if toolchain_names = [] then "no toolchain definitions found"
-          else
-            Fmt.str "mark one with: oi repo bump <handle> --default. Known: %s"
-              (String.concat ", " toolchain_names)
-        in
-        add ~where:"(reporepo)" ~paths:[]
-          "no entry has [%s: true] — %s. Without a default, [oi run] / [oi \
-           sync] / etc. hard-error when the user omits [--toolchain]."
-          Oi.Keys.default_toolchain hint
-    | many ->
-        let labels =
-          List.map
-            (fun (e : Oi.Source.Reporepo.entry) ->
-              Fmt.str "%s.%s" e.handle e.version)
-            many
-        in
-        let paths =
-          List.map (fun (e : Oi.Source.Reporepo.entry) -> e.opam_path) many
-        in
-        add ~where:"(reporepo)" ~paths
-          "multiple handles flagged [%s: true]: %s — only one toolchain handle \
-           may be the default. Clear the flag on the losing handle with 'oi \
-           repo bump <handle> --no-default'."
-          Oi.Keys.default_toolchain
-          (String.concat ", " labels));
+    | [] -> report_no_default ~acc ~toolchain_names
+    | many -> report_many_defaults ~acc many);
+    List.iter (report_stale_default ~acc ~latest) stale_defaults
+
+  let collect_problems ~reporepo (entries : Oi.Source.Reporepo.entry list) :
+      problem list =
+    let acc = { items = [] } in
+    let toolchain_names =
+      List.filter_map
+        (fun (e : Oi.Source.Reporepo.entry) -> e.toolchain_name)
+        entries
+      |> List.sort_uniq String.compare
+    in
+    let known_toolchain n = List.mem n toolchain_names in
+    let latest = latest_per_handle entries in
     List.iter
-      (fun (e : Oi.Source.Reporepo.entry) ->
-        let where = Fmt.str "%s.%s" e.handle e.version in
-        add ~where ~paths:[ e.opam_path ]
-          "stale [%s: true] on a non-latest version of %s (latest is %s). \
-           Clear with 'oi repo bump %s --no-default' on this version, or just \
-           remove this opam file if it's no longer needed."
-          Oi.Keys.default_toolchain e.handle
-          (match Hashtbl.find_opt latest e.handle with
-          | Some l -> l.version
-          | None -> "?")
-          e.handle)
-      stale_defaults;
-    List.rev !problems
+      (check_entry ~reporepo ~toolchain_names ~known_toolchain ~latest ~acc)
+      entries;
+    check_defaults ~acc ~toolchain_names ~latest entries;
+    List.rev acc.items
+
+  let print_problem { where; paths; msg } =
+    Fmt.pr "%a %s: %s@." Oi.Style.pp_error_string "error:" where msg;
+    List.iter (fun p -> Fmt.pr "    %a@." Oi.Style.pp_dim_string p) paths
 
   let cmd =
     let run () reporepo reporepo_url =
@@ -1646,13 +1748,7 @@ module Lint = struct
         exit 0
       end
       else begin
-        List.iter
-          (fun { where; paths; msg } ->
-            Fmt.pr "%a %s: %s@." Oi.Style.pp_error_string "error:" where msg;
-            List.iter
-              (fun p -> Fmt.pr "    %a@." Oi.Style.pp_dim_string p)
-              paths)
-          problems;
+        List.iter print_problem problems;
         Fmt.pr "@.%d problem(s) in %s@." (List.length problems) reporepo;
         exit 1
       end

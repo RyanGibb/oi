@@ -319,30 +319,35 @@ let build_events_by_hash ~fs ~cache_root ~os_key ~layers_dir =
     tbl
   end
 
+let package_prefix_match ~prefix s =
+  String.length s >= String.length prefix
+  && String.sub s 0 (String.length prefix) = prefix
+
+let match_for_hash ~fs ~os_key ~cache_root ~layers_dir ~root ~events_for ~package
+    hash =
+  let json = Eio.Path.(root / "layers" / os_key / hash / "layer.json") in
+  match D10.Layer.load_meta json with
+  | Some m when package_prefix_match ~prefix:package m.package ->
+      let files_count = count_files (layers_dir / hash / "fs") in
+      let provenance = Oi.Provenance.read_one ~fs ~cache_root ~os_key ~hash in
+      Some
+        {
+          layer_hash = hash;
+          meta = m;
+          files_count;
+          provenance;
+          callers = events_for hash;
+        }
+  | _ -> None
+
 let matches_for_package ~fs ~os_key ~cache_root ~layers_dir ~root ~events_for
     package =
   if not (Sys.file_exists layers_dir) then []
   else
     Sys.readdir layers_dir |> Array.to_list
-    |> List.filter_map (fun hash ->
-        let json = Eio.Path.(root / "layers" / os_key / hash / "layer.json") in
-        match D10.Layer.load_meta json with
-        | Some m
-          when String.length m.package >= String.length package
-               && String.sub m.package 0 (String.length package) = package ->
-            let files_count = count_files (layers_dir / hash / "fs") in
-            let provenance =
-              Oi.Provenance.read_one ~fs ~cache_root ~os_key ~hash
-            in
-            Some
-              {
-                layer_hash = hash;
-                meta = m;
-                files_count;
-                provenance;
-                callers = events_for hash;
-              }
-        | _ -> None)
+    |> List.filter_map
+         (match_for_hash ~fs ~os_key ~cache_root ~layers_dir ~root ~events_for
+            ~package)
 
 let print_show_match (m : show_match) =
   let status =
@@ -379,27 +384,30 @@ let print_show_json ~os_key ~package matches =
       print_newline ()
   | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e
 
-let run_show (c : Terms.common) package =
-  Harness.run @@ fun ~sw env ->
-  let h =
-    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env c.cache_dir
-  in
-  with_d10 h @@ fun d10 ->
+let show_for_d10 ~h ~package c d10 =
   let layers_dir = layers_root_s d10 in
-  let cache_root = Eio.Path.native_exn d10.root in
+  let cache_root = Eio.Path.native_exn d10.D10.Config.root in
   let events_by_hash =
-    build_events_by_hash ~fs:h.fs ~cache_root ~os_key:d10.os_key ~layers_dir
+    build_events_by_hash ~fs:h.Harness.fs ~cache_root ~os_key:d10.os_key
+      ~layers_dir
   in
   let events_for hash =
     match Hashtbl.find_opt events_by_hash hash with Some xs -> xs | None -> []
   in
   let matches =
-    matches_for_package ~fs:h.fs ~os_key:d10.os_key ~cache_root ~layers_dir
-      ~root:d10.root ~events_for package
+    matches_for_package ~fs:h.Harness.fs ~os_key:d10.os_key ~cache_root
+      ~layers_dir ~root:d10.root ~events_for package
   in
-  match c.format with
+  match (c : Terms.common).format with
   | Json -> print_show_json ~os_key:d10.os_key ~package matches
   | Text -> print_show_text ~package matches
+
+let run_show (c : Terms.common) package =
+  Harness.run @@ fun ~sw env ->
+  let h =
+    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env c.cache_dir
+  in
+  with_d10 h (show_for_d10 ~h ~package c)
 
 let show_cmd =
   let package =

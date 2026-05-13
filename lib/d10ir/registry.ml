@@ -102,22 +102,27 @@ let max_attempts () =
       | _ -> default_max_attempts)
   | None -> default_max_attempts
 
+let log_fetch_success ~sha ~attempts attempt =
+  if attempt > 1 then
+    Log.app (fun m ->
+        m "fetch %s succeeded on attempt %d/%d" sha attempt attempts)
+
+let backoff_and_retry ~clock ~sha ~attempts attempt delay loop =
+  Log.warn (fun m ->
+      m "fetch %s failed (attempt %d/%d); retrying in %.0fs" sha attempt
+        attempts delay);
+  Eio.Time.sleep clock delay;
+  loop (attempt + 1) (delay *. 2.0)
+
 let do_fetch_with_retries ~clock ~fs ~session ~cache_root ~remote ~sha ~dst =
   let attempts = max_attempts () in
   let rec loop attempt delay =
     if do_fetch ~fs ~session ~cache_root ~remote ~sha ~dst then begin
-      if attempt > 1 then
-        Log.app (fun m ->
-            m "fetch %s succeeded on attempt %d/%d" sha attempt attempts);
+      log_fetch_success ~sha ~attempts attempt;
       true
     end
-    else if attempt < attempts then begin
-      Log.warn (fun m ->
-          m "fetch %s failed (attempt %d/%d); retrying in %.0fs" sha attempt
-            attempts delay);
-      Eio.Time.sleep clock delay;
-      loop (attempt + 1) (delay *. 2.0)
-    end
+    else if attempt < attempts then
+      backoff_and_retry ~clock ~sha ~attempts attempt delay loop
     else false
   in
   loop 1 2.0

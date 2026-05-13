@@ -18,6 +18,24 @@ let ( / ) = Filename.concat
 let local_dir ~cache = Cache.root_s cache / "d10ir" / "archives"
 let dst_dir ~output = output / "d10ir-archives"
 
+let copy_stream ic oc =
+  let buf = Bytes.create 65536 in
+  let rec loop () =
+    let n = In_channel.input ic buf 0 (Bytes.length buf) in
+    if n > 0 then begin
+      Out_channel.output oc buf 0 n;
+      loop ()
+    end
+  in
+  loop ()
+
+let copy_file ~src ~dst =
+  try
+    In_channel.with_open_bin src (fun ic ->
+        Out_channel.with_open_bin dst (fun oc -> copy_stream ic oc));
+    true
+  with Sys_error _ | Unix.Unix_error _ -> false
+
 (* Single-file publish: hardlink, falling back to a streamed copy.
    Already-present (same name) at [dst] short-circuits. *)
 let publish_one ~src ~dst =
@@ -26,38 +44,24 @@ let publish_one ~src ~dst =
     try
       Unix.link src dst;
       true
-    with Unix.Unix_error _ -> (
-      try
-        In_channel.with_open_bin src (fun ic ->
-            Out_channel.with_open_bin dst (fun oc ->
-                let buf = Bytes.create 65536 in
-                let rec loop () =
-                  let n = In_channel.input ic buf 0 (Bytes.length buf) in
-                  if n > 0 then begin
-                    Out_channel.output oc buf 0 n;
-                    loop ()
-                  end
-                in
-                loop ()));
-        true
-      with Sys_error _ | Unix.Unix_error _ -> false)
+    with Unix.Unix_error _ -> copy_file ~src ~dst
 
 (* List every [<sha>.tar.zst] in [<cache>/d10ir/archives/] with its
    on-disk size. Returns [(sha, size_bytes)] pairs sorted by sha. *)
+let entry_of_name ~src name =
+  match Filename.chop_suffix_opt ~suffix:".tar.zst" name with
+  | None -> None
+  | Some sha ->
+      let path = src / name in
+      let size = try (Unix.stat path).st_size with Unix.Unix_error _ -> 0 in
+      Some (sha, size)
+
 let list ~cache =
   let src = local_dir ~cache in
   if not (Sys.file_exists src) then []
   else
     Sys.readdir src |> Array.to_list
-    |> List.filter_map (fun name ->
-        match Filename.chop_suffix_opt ~suffix:".tar.zst" name with
-        | None -> None
-        | Some sha ->
-            let path = src / name in
-            let size =
-              try (Unix.stat path).st_size with Unix.Unix_error _ -> 0
-            in
-            Some (sha, size))
+    |> List.filter_map (entry_of_name ~src)
     |> List.sort (fun (a, _) (b, _) -> String.compare a b)
 
 (* Result of a publish pass. [linked]: archives newly hardlinked/copied

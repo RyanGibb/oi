@@ -174,38 +174,53 @@ let extract_handle_pins ~with_repos tokens =
   in
   (stripped, !acc_repos, !acc_pins)
 
+let strip_version_prefix ~prefix entry =
+  if String.starts_with ~prefix entry then
+    Some
+      (String.sub entry (String.length prefix)
+         (String.length entry - String.length prefix))
+  else None
+
+let versions_in_dir ~pkg ~prefix d =
+  let subdir = d / pkg in
+  if not (Sys.file_exists subdir) then []
+  else
+    Sys.readdir subdir |> Array.to_list
+    |> List.filter_map (strip_version_prefix ~prefix)
+
+let max_version a v =
+  if
+    OpamPackage.Version.compare
+      (OpamPackage.Version.of_string v)
+      (OpamPackage.Version.of_string a)
+    > 0
+  then v
+  else a
+
 let latest_version_in_dirs ~pkg dirs =
   let prefix = pkg ^ "." in
   let versions =
-    List.concat_map
-      (fun d ->
-        let subdir = d / pkg in
-        if not (Sys.file_exists subdir) then []
-        else
-          Sys.readdir subdir |> Array.to_list
-          |> List.filter_map (fun entry ->
-              if String.starts_with ~prefix entry then
-                Some
-                  (String.sub entry (String.length prefix)
-                     (String.length entry - String.length prefix))
-              else None))
-      dirs
+    List.concat_map (versions_in_dir ~pkg ~prefix) dirs
     |> List.sort_uniq String.compare
   in
   match versions with
   | [] -> None
-  | _ ->
-      Some
-        (List.fold_left
-           (fun a v ->
-             if
-               OpamPackage.Version.compare
-                 (OpamPackage.Version.of_string v)
-                 (OpamPackage.Version.of_string a)
-               > 0
-             then v
-             else a)
-           (List.hd versions) (List.tl versions))
+  | _ -> Some (List.fold_left max_version (List.hd versions) (List.tl versions))
+
+let resolve_handle_pin ~overlay_pkg_dirs acc { handle; pkg; user_constr } =
+  match user_constr with
+  | Some c -> OpamPackage.Name.Map.add pkg c acc
+  | None ->
+      let pkg_s = OpamPackage.Name.to_string pkg in
+      (match latest_version_in_dirs ~pkg:pkg_s overlay_pkg_dirs with
+       | None ->
+           Error.fail_config_error
+             "overlay %s does not provide a package named %s" handle pkg_s
+       | Some v ->
+           log_overlay "pinning %s = %s from overlay %s" pkg_s v handle;
+           OpamPackage.Name.Map.add pkg
+             (`Eq, OpamPackage.Version.of_string v)
+             acc)
 
 let handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras handle_pins =
   if handle_pins = [] then OpamPackage.Name.Map.empty
@@ -214,20 +229,7 @@ let handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras handle_pins =
       Source.Repo.ensure_many ~fs ~data_dir ~refresh cli_extras
     in
     List.fold_left
-      (fun acc { handle; pkg; user_constr } ->
-        match user_constr with
-        | Some c -> OpamPackage.Name.Map.add pkg c acc
-        | None -> (
-            let pkg_s = OpamPackage.Name.to_string pkg in
-            match latest_version_in_dirs ~pkg:pkg_s overlay_pkg_dirs with
-            | None ->
-                Error.fail_config_error
-                  "overlay %s does not provide a package named %s" handle pkg_s
-            | Some v ->
-                log_overlay "pinning %s = %s from overlay %s" pkg_s v handle;
-                OpamPackage.Name.Map.add pkg
-                  (`Eq, OpamPackage.Version.of_string v)
-                  acc))
+      (resolve_handle_pin ~overlay_pkg_dirs)
       OpamPackage.Name.Map.empty handle_pins
 
 let merge_extras ~cli ~project =

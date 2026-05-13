@@ -265,85 +265,82 @@ let codec =
 
 (* -- Data gathering ------------------------------------------------------ *)
 
+let gather_toolchain_entries () =
+  List.map
+    (fun (s : Oi.Toolchain.summary) ->
+      {
+        handle = s.handle;
+        url = s.url;
+        ref_ = s.ref_;
+        relocatable = s.relocatable;
+        is_default = s.is_default;
+        depends = s.depends;
+        roots = s.roots;
+        tools = s.tools;
+        installs = List.map (fun (path, ready) -> { path; ready }) s.installs;
+      })
+    (Oi.Toolchain.available ())
+
+let gather_base_overlays () =
+  let reporepo_path = Terms.reporepo_path () in
+  List.map
+    (fun (e : Oi.Source.Reporepo.entry) ->
+      let dir =
+        Oi.Source.Reporepo.overlay_packages_dir ~path:reporepo_path
+          ~handle:e.handle
+      in
+      {
+        handle = e.handle;
+        version = e.version;
+        url = e.url;
+        materialised = e.url <> "" && Sys.file_exists dir;
+      })
+    (Oi.Source.Reporepo.base_entries ())
+
+(* Build the [project_summary] view of the loaded [Oi.Project.t]. Pure
+   field-by-field projection. *)
+let project_summary_of ~fs cwd_s (p : Oi.Project.t) =
+  let extra_repos =
+    List.map
+      (fun (r : Oi.Project.extra_repo) -> { name = r.name; url = r.url })
+      p.extra_repos
+  in
+  let pins =
+    List.map
+      (fun (pin : Oi.Project.pin) ->
+        {
+          name = OpamPackage.Name.to_string (OpamPackage.name pin.pkg);
+          version =
+            OpamPackage.Version.to_string (OpamPackage.version pin.pkg);
+          url = OpamUrl.to_string pin.url;
+        })
+      p.pins
+  in
+  let dev_tools =
+    List.map
+      (fun (r : Oi.Project.Tool.result) ->
+        {
+          name = r.spec.name;
+          hit = r.hit;
+          version = r.version;
+          detail = r.detail;
+        })
+      (Oi.Project.Tool.probe ~fs cwd_s)
+  in
+  { extra_repos; pins; overlays = p.overlays;
+    packages_dir = p.packages_dir; dev_tools }
+
+let gather_project ~fs ~skip_local =
+  if skip_local then None
+  else
+    let cwd_s, _ = Workspace.resolved_cwd fs in
+    match Oi.Project.load ~fs cwd_s with
+    | exception Sys_error _ -> None
+    | exception Eio.Exn.Io _ -> None
+    | p -> Some (project_summary_of ~fs cwd_s p)
+
 let gather ~fs ~cache ~os_key ~data_dir ~cache_dir ~skip_local =
   let mirror_stats = Oi.Source.Mirror.stats ~cache in
-  let toolchain_entries =
-    List.map
-      (fun (s : Oi.Toolchain.summary) ->
-        {
-          handle = s.handle;
-          url = s.url;
-          ref_ = s.ref_;
-          relocatable = s.relocatable;
-          is_default = s.is_default;
-          depends = s.depends;
-          roots = s.roots;
-          tools = s.tools;
-          installs = List.map (fun (path, ready) -> { path; ready }) s.installs;
-        })
-      (Oi.Toolchain.available ())
-  in
-  let reporepo_path = Terms.reporepo_path () in
-  let base_overlays =
-    List.map
-      (fun (e : Oi.Source.Reporepo.entry) ->
-        let dir =
-          Oi.Source.Reporepo.overlay_packages_dir ~path:reporepo_path
-            ~handle:e.handle
-        in
-        {
-          handle = e.handle;
-          version = e.version;
-          url = e.url;
-          materialised = e.url <> "" && Sys.file_exists dir;
-        })
-      (Oi.Source.Reporepo.base_entries ())
-  in
-  let project =
-    if skip_local then None
-    else
-      let cwd_s, _ = Workspace.resolved_cwd fs in
-      match Oi.Project.load ~fs cwd_s with
-      | exception Sys_error _ -> None
-      | exception Eio.Exn.Io _ -> None
-      | p ->
-          let extra_repos =
-            List.map
-              (fun (r : Oi.Project.extra_repo) ->
-                { name = r.name; url = r.url })
-              p.extra_repos
-          in
-          let pins =
-            List.map
-              (fun (pin : Oi.Project.pin) ->
-                {
-                  name = OpamPackage.Name.to_string (OpamPackage.name pin.pkg);
-                  version =
-                    OpamPackage.Version.to_string (OpamPackage.version pin.pkg);
-                  url = OpamUrl.to_string pin.url;
-                })
-              p.pins
-          in
-          let dev_tools =
-            List.map
-              (fun (r : Oi.Project.Tool.result) ->
-                {
-                  name = r.spec.name;
-                  hit = r.hit;
-                  version = r.version;
-                  detail = r.detail;
-                })
-              (Oi.Project.Tool.probe ~fs cwd_s)
-          in
-          Some
-            {
-              extra_repos;
-              pins;
-              overlays = p.overlays;
-              packages_dir = p.packages_dir;
-              dev_tools;
-            }
-  in
   {
     platform = { os_key; ocaml_version = Workspace.ocaml_version };
     directories = { data = data_dir; cache = cache_dir };
@@ -361,131 +358,137 @@ let gather ~fs ~cache ~os_key ~data_dir ~cache_dir ~skip_local =
     toolchains =
       {
         install_root = Oi.Toolchain.default_root ();
-        entries = toolchain_entries;
+        entries = gather_toolchain_entries ();
       };
-    base_overlays;
-    project;
+    base_overlays = gather_base_overlays ();
+    project = gather_project ~fs ~skip_local;
   }
 
 (* -- Renderers ----------------------------------------------------------- *)
 
-let render_text c =
-  let {
-    platform;
-    directories;
-    registry;
-    source_mirror;
-    toolchains;
-    base_overlays;
-    project;
-  } =
-    c
-  in
+let render_platform (p : platform) =
   Fmt.pr "@[<v>%a@," Oi.Style.pp_header_string "Platform";
-  Fmt.pr "  os-key:     %s@," platform.os_key;
-  Fmt.pr "  ocaml:      %s (relocatable)@," platform.ocaml_version;
+  Fmt.pr "  os-key:     %s@," p.os_key;
+  Fmt.pr "  ocaml:      %s (relocatable)@," p.ocaml_version
+
+let render_directories (d : directories) =
   Fmt.pr "@,%a@," Oi.Style.pp_header_string "Directories";
-  Fmt.pr "  data:       %s@," directories.data;
-  Fmt.pr "  cache:      %s@," directories.cache;
+  Fmt.pr "  data:       %s@," d.data;
+  Fmt.pr "  cache:      %s@," d.cache
+
+let render_registry (r : registry) =
   Fmt.pr "@,%a@," Oi.Style.pp_header_string "Registry";
-  Fmt.pr "  url:        %s@," registry.url;
-  Fmt.pr "  index TTL:  %gs@," registry.index_ttl_s;
+  Fmt.pr "  url:        %s@," r.url;
+  Fmt.pr "  index TTL:  %gs@," r.index_ttl_s
+
+let render_source_mirror (m : source_mirror) =
   Fmt.pr "@,%a@," Oi.Style.pp_header_string "Source mirror";
-  Fmt.pr "  dir:        %s@," source_mirror.dir;
-  Fmt.pr "  blobs:      %d@," source_mirror.blobs;
-  Fmt.pr "  total size: %s@," (human_bytes source_mirror.total_bytes);
+  Fmt.pr "  dir:        %s@," m.dir;
+  Fmt.pr "  blobs:      %d@," m.blobs;
+  Fmt.pr "  total size: %s@," (human_bytes m.total_bytes)
+
+(* Per-toolchain install status: list each install path with a colored
+   ready/partial badge, or print a dim "not installed" if none. *)
+let render_toolchain_installs xs =
+  match xs with
+  | [] -> Fmt.pr "    status:     %a@," Oi.Style.pp_dim_string "not installed"
+  | xs ->
+      List.iter
+        (fun { path; ready } ->
+          let status =
+            if ready then Fmt.str "%a" Oi.Style.pp_ok_string "ready"
+            else Fmt.str "%a" Oi.Style.pp_warn_string "partial"
+          in
+          Fmt.pr "    install:    %s  %s@," status path)
+        xs
+
+let render_toolchain_entry (t : toolchain_entry) =
+  let url_with_ref =
+    match t.ref_ with Some r -> Fmt.str "%s#%s" t.url r | None -> t.url
+  in
+  let mode_tag =
+    if t.relocatable then Fmt.str "[%a]" Oi.Style.pp_ok_string "relocatable"
+    else Fmt.str "[%a]" Oi.Style.pp_warn_string "fixed-prefix"
+  in
+  let default_tag =
+    if t.is_default then Fmt.str "  [%a]" Oi.Style.pp_accent_string "default"
+    else ""
+  in
+  Fmt.pr "  %a  %s%s  %s@," Oi.Style.pp_header_string t.handle mode_tag
+    default_tag url_with_ref;
+  if t.depends <> [] then
+    Fmt.pr "    depends:    %s@," (String.concat ", " t.depends);
+  Fmt.pr "    roots:      %s@," (String.concat ", " t.roots);
+  if t.tools <> [] then
+    Fmt.pr "    tools:      %s@," (String.concat ", " t.tools);
+  if not t.relocatable then render_toolchain_installs t.installs
+
+let render_toolchains (t : toolchains) =
   Fmt.pr "@,%a@," Oi.Style.pp_header_string "Toolchains";
-  Fmt.pr "  install root:  %s@," toolchains.install_root;
-  List.iter
-    (fun (t : toolchain_entry) ->
-      let url_with_ref =
-        match t.ref_ with Some r -> Fmt.str "%s#%s" t.url r | None -> t.url
-      in
-      let mode_tag =
-        if t.relocatable then Fmt.str "[%a]" Oi.Style.pp_ok_string "relocatable"
-        else Fmt.str "[%a]" Oi.Style.pp_warn_string "fixed-prefix"
-      in
-      let default_tag =
-        if t.is_default then
-          Fmt.str "  [%a]" Oi.Style.pp_accent_string "default"
-        else ""
-      in
-      Fmt.pr "  %a  %s%s  %s@," Oi.Style.pp_header_string t.handle mode_tag
-        default_tag url_with_ref;
-      if t.depends <> [] then
-        Fmt.pr "    depends:    %s@," (String.concat ", " t.depends);
-      Fmt.pr "    roots:      %s@," (String.concat ", " t.roots);
-      if t.tools <> [] then
-        Fmt.pr "    tools:      %s@," (String.concat ", " t.tools);
-      if t.relocatable then ()
-      else
-        match t.installs with
-        | [] ->
-            Fmt.pr "    status:     %a@," Oi.Style.pp_dim_string "not installed"
-        | xs ->
-            List.iter
-              (fun { path; ready } ->
-                let status =
-                  if ready then Fmt.str "%a" Oi.Style.pp_ok_string "ready"
-                  else Fmt.str "%a" Oi.Style.pp_warn_string "partial"
-                in
-                Fmt.pr "    install:    %s  %s@," status path)
-              xs)
-    toolchains.entries;
+  Fmt.pr "  install root:  %s@," t.install_root;
+  List.iter render_toolchain_entry t.entries
+
+let render_base_overlay (o : base_overlay) =
+  let status =
+    if o.url = "" then Fmt.str "%a" Oi.Style.pp_dim_string "definition only"
+    else if o.materialised then
+      Fmt.str "%a" Oi.Style.pp_ok_string "materialised"
+    else Fmt.str "%a" Oi.Style.pp_warn_string "not materialised"
+  in
+  Fmt.pr "  %a.%s  %s  %s@," Oi.Style.pp_header_string o.handle o.version status
+    o.url
+
+let render_base_overlays overlays =
   Fmt.pr "@,%a@," Oi.Style.pp_header_string "Base overlays (from reporepo)";
-  if base_overlays = [] then
+  if overlays = [] then
     Fmt.pr
       "  %a no 'relocatable' overlay in reporepo %s. Run 'oi repo add' to \
        bootstrap.@,"
       Oi.Style.pp_warn_string "(none)" (Terms.reporepo_path ())
-  else
+  else List.iter render_base_overlay overlays
+
+let render_dev_tool (t : dev_tool) =
+  let mark =
+    if t.hit then Fmt.str "%a" Oi.Style.pp_ok_string "hit"
+    else Fmt.str "%a" Oi.Style.pp_dim_string "miss"
+  in
+  Fmt.pr "  %-18s %-4s %s@." t.name mark t.detail
+
+let render_project (p : project_summary) =
+  if p.extra_repos <> [] then begin
+    Fmt.pr "@.Project extra repositories:@.";
     List.iter
-      (fun (o : base_overlay) ->
-        let status =
-          if o.url = "" then
-            Fmt.str "%a" Oi.Style.pp_dim_string "definition only"
-          else if o.materialised then
-            Fmt.str "%a" Oi.Style.pp_ok_string "materialised"
-          else Fmt.str "%a" Oi.Style.pp_warn_string "not materialised"
-        in
-        Fmt.pr "  %a.%s  %s  %s@," Oi.Style.pp_header_string o.handle o.version
-          status o.url)
-      base_overlays;
-  Fmt.pr "@]@.";
-  match project with
+      (fun (r : extra_repo_summary) -> Fmt.pr "  %-20s %s@." r.name r.url)
+      p.extra_repos
+  end;
+  if p.pins <> [] then begin
+    Fmt.pr "@.Project pin-depends:@.";
+    List.iter
+      (fun (pin : pin_summary) ->
+        Fmt.pr "  %-20s %s@." (pin.name ^ "." ^ pin.version) pin.url)
+      p.pins
+  end;
+  if p.overlays <> [] then begin
+    Fmt.pr "@.Project overlays (x-repos @-handles):@.";
+    List.iter (fun h -> Fmt.pr "  %s@." h) p.overlays
+  end;
+  (match p.packages_dir with
   | None -> ()
-  | Some p ->
-      if p.extra_repos <> [] then begin
-        Fmt.pr "@.Project extra repositories:@.";
-        List.iter
-          (fun (r : extra_repo_summary) -> Fmt.pr "  %-20s %s@." r.name r.url)
-          p.extra_repos
-      end;
-      if p.pins <> [] then begin
-        Fmt.pr "@.Project pin-depends:@.";
-        List.iter
-          (fun (pin : pin_summary) ->
-            Fmt.pr "  %-20s %s@." (pin.name ^ "." ^ pin.version) pin.url)
-          p.pins
-      end;
-      if p.overlays <> [] then begin
-        Fmt.pr "@.Project overlays (x-repos @-handles):@.";
-        List.iter (fun h -> Fmt.pr "  %s@." h) p.overlays
-      end;
-      (match p.packages_dir with
-      | None -> ()
-      | Some dir ->
-          Fmt.pr "@.Project local opam-repository:@.";
-          Fmt.pr "  %s@." dir);
-      Fmt.pr "@.Dev tools:@.";
-      List.iter
-        (fun (t : dev_tool) ->
-          let mark =
-            if t.hit then Fmt.str "%a" Oi.Style.pp_ok_string "hit"
-            else Fmt.str "%a" Oi.Style.pp_dim_string "miss"
-          in
-          Fmt.pr "  %-18s %-4s %s@." t.name mark t.detail)
-        p.dev_tools
+  | Some dir ->
+      Fmt.pr "@.Project local opam-repository:@.";
+      Fmt.pr "  %s@." dir);
+  Fmt.pr "@.Dev tools:@.";
+  List.iter render_dev_tool p.dev_tools
+
+let render_text c =
+  render_platform c.platform;
+  render_directories c.directories;
+  render_registry c.registry;
+  render_source_mirror c.source_mirror;
+  render_toolchains c.toolchains;
+  render_base_overlays c.base_overlays;
+  Fmt.pr "@]@.";
+  match c.project with None -> () | Some p -> render_project p
 
 let render_json c =
   match Jsont_bytesrw.encode_string ~format:Jsont.Indent codec c with

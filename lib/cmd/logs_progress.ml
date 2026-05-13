@@ -23,14 +23,20 @@ let () =
           active := None;
           try Progress.Display.finalise d with Sys_error _ | Failure _ -> ()))
 
+let pause_display d =
+  try Progress.Display.pause d with Sys_error _ | Failure _ -> ()
+
+let resume_display d =
+  try Progress.Display.resume d with Sys_error _ | Failure _ -> ()
+
+let with_paused_display d f =
+  pause_display d;
+  Fun.protect f ~finally:(fun () -> resume_display d)
+
 let interject f =
   match !active with
   | None -> f ()
-  | Some d ->
-      with_lock (fun () ->
-          (try Progress.Display.pause d with Sys_error _ | Failure _ -> ());
-          Fun.protect f ~finally:(fun () ->
-              try Progress.Display.resume d with Sys_error _ | Failure _ -> ()))
+  | Some d -> with_lock (fun () -> with_paused_display d f)
 
 let wrap_reporter (r : Logs.reporter) : Logs.reporter =
   let report src level ~over k msgf =

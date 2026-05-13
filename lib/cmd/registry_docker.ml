@@ -443,21 +443,14 @@ let sexp_escape s =
    [(secrets …)] mounts the two named keys at [/run/secrets/<id>]; the
    build shell reads them via [cat] (matching the Dockerfile path) and
    the keys are only available during this RUN. *)
-let obuilder_spec_one_distro ?(s3 = default_s3_config) ?(overlay_depexts = []) d
-    =
-  let resolved = Distro.resolve_alias d in
-  let img, tag = Distro.base_distro_tag (resolved :> Distro.t) in
-  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
-  let mgr = Distro.package_manager (resolved :> Distro.t) in
-  let mgr =
-    match mgr with
-    | (`Apk | `Apt | `Yum) as m -> m
-    | _ ->
-        Oi.Error.fail_config_error
-          "oi docker --obuilder: distro %s uses an unsupported package manager"
-          distro_label
-  in
-  let base = build_depexts mgr in
+let resolve_obuilder_pkg_manager ~distro_label = function
+  | (`Apk | `Apt | `Yum) as m -> m
+  | _ ->
+      Oi.Error.fail_config_error
+        "oi docker --obuilder: distro %s uses an unsupported package manager"
+        distro_label
+
+let combine_depexts ~base overlay_depexts =
   let base_words =
     String.split_on_char ' ' base |> List.filter (fun s -> s <> "")
   in
@@ -466,21 +459,30 @@ let obuilder_spec_one_distro ?(s3 = default_s3_config) ?(overlay_depexts = []) d
     |> List.filter (fun p -> not (List.mem p base_words))
     |> List.sort_uniq String.compare
   in
-  let combined =
-    match overlay_extras with
-    | [] -> base
-    | xs -> base ^ " " ^ String.concat " " xs
+  match overlay_extras with
+  | [] -> base
+  | xs -> base ^ " " ^ String.concat " " xs
+
+let fetch_oi_obuilder =
+  Fmt.str
+    "arch=$(uname -m) && curl -fsSL -o /usr/local/bin/oi \
+     https://github.com/%s/releases/latest/download/oi-linux-$arch && curl \
+     -fsSL -o /usr/local/bin/oix \
+     https://github.com/%s/releases/latest/download/oix-linux-$arch && chmod \
+     0755 /usr/local/bin/oi /usr/local/bin/oix"
+    release_repo release_repo
+
+let obuilder_spec_one_distro ?(s3 = default_s3_config) ?(overlay_depexts = []) d
+    =
+  let resolved = Distro.resolve_alias d in
+  let img, tag = Distro.base_distro_tag (resolved :> Distro.t) in
+  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
+  let mgr =
+    resolve_obuilder_pkg_manager ~distro_label
+      (Distro.package_manager (resolved :> Distro.t))
   in
+  let combined = combine_depexts ~base:(build_depexts mgr) overlay_depexts in
   let install = install_cmd mgr combined in
-  let fetch_oi =
-    Fmt.str
-      "arch=$(uname -m) && curl -fsSL -o /usr/local/bin/oi \
-       https://github.com/%s/releases/latest/download/oi-linux-$arch && curl \
-       -fsSL -o /usr/local/bin/oix \
-       https://github.com/%s/releases/latest/download/oix-linux-$arch && chmod \
-       0755 /usr/local/bin/oi /usr/local/bin/oix"
-      release_repo release_repo
-  in
   (* Obuilder defaults the [(run (shell ...))] interpreter to
      [/bin/bash -c]. Alpine doesn't ship bash, so pin the spec's
      shell to [/bin/sh -c] before any run op. apt/dnf distros already
@@ -509,7 +511,7 @@ let obuilder_spec_one_distro ?(s3 = default_s3_config) ?(overlay_depexts = []) d
       (shell "%s")))
 |}
     distro_label s3_access_key_secret s3_secret_key_secret distro_label
-    s3.bucket img tag shell_op (sexp_escape install) (sexp_escape fetch_oi)
+    s3.bucket img tag shell_op (sexp_escape install) (sexp_escape fetch_oi_obuilder)
     s3_access_key_secret s3_access_key_secret s3_secret_key_secret
     s3_secret_key_secret
     (sexp_escape (build_sync_shell ~s3 ()))

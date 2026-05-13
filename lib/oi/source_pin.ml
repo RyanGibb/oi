@@ -88,44 +88,47 @@ end
    returned list has the same shape and order as [pins], but with each
    [Project.pin.url] swapped for its resolved URL — downstream
    [fetch_pin] then clones at exactly that sha. *)
+let resolve_pin_url ~fs ~sys ~pkg_s ~origin (pin : Project.pin) =
+  match
+    Source_reporepo.try_resolve_url ~fs ~sys ~where:pkg_s pin.url
+      ~has_checksum:false
+  with
+  | `Keep -> pin.url
+  | `Replace_url u -> u
+  (* Tarball pin without checksum: format has no checksum slot, so we
+     leave the URL alone. *)
+  | `Add_checksum _ -> pin.url
+  | `Failed reason ->
+      Error.fail_config_error "pin %s: cannot resolve URL %s: %s" pkg_s origin
+        reason
+
+let resolve_with_lock ~fs ~sys ~tbl ~pkg_s ~origin pin =
+  match Hashtbl.find_opt tbl (pkg_s, origin) with
+  | Some (entry : Lock.entry) -> OpamUrl.parse entry.resolved
+  | None -> resolve_pin_url ~fs ~sys ~pkg_s ~origin pin
+
+let fold_pin_resolution ~fs ~sys ~tbl pins =
+  List.fold_right
+    (fun (pin : Project.pin) (pins_acc, entries_acc) ->
+      let pkg_s = OpamPackage.to_string pin.pkg in
+      let origin = OpamUrl.to_string pin.url in
+      let resolved_url = resolve_with_lock ~fs ~sys ~tbl ~pkg_s ~origin pin in
+      let entry =
+        {
+          Lock.pkg = pkg_s;
+          origin;
+          resolved = OpamUrl.to_string resolved_url;
+        }
+      in
+      ({ pin with url = resolved_url } :: pins_acc, entry :: entries_acc))
+    pins ([], [])
+
 let resolve_pins ~fs ~sys ?project_root pins =
   match (pins, project_root) with
   | [], _ | _, None -> pins
   | _, Some project_root ->
       let tbl = Lock.read ~fs ~project_root in
-      let resolve_url ~pkg_s origin (pin : Project.pin) =
-        match Hashtbl.find_opt tbl (pkg_s, origin) with
-        | Some entry -> OpamUrl.parse entry.resolved
-        | None -> (
-            match
-              Source_reporepo.try_resolve_url ~fs ~sys ~where:pkg_s pin.url
-                ~has_checksum:false
-            with
-            | `Keep -> pin.url
-            | `Replace_url u -> u
-            (* Tarball pin without checksum: format has no checksum
-               slot, so we leave the URL alone. *)
-            | `Add_checksum _ -> pin.url
-            | `Failed reason ->
-                Error.fail_config_error "pin %s: cannot resolve URL %s: %s"
-                  pkg_s origin reason)
-      in
-      let pins', entries =
-        List.fold_right
-          (fun (pin : Project.pin) (pins_acc, entries_acc) ->
-            let pkg_s = OpamPackage.to_string pin.pkg in
-            let origin = OpamUrl.to_string pin.url in
-            let resolved_url = resolve_url ~pkg_s origin pin in
-            let entry =
-              {
-                Lock.pkg = pkg_s;
-                origin;
-                resolved = OpamUrl.to_string resolved_url;
-              }
-            in
-            ({ pin with url = resolved_url } :: pins_acc, entry :: entries_acc))
-          pins ([], [])
-      in
+      let pins', entries = fold_pin_resolution ~fs ~sys ~tbl pins in
       let entry_key (e : Lock.entry) = (e.pkg, e.origin, e.resolved) in
       let sorted_keys items = List.sort compare (List.map entry_key items) in
       let prev = Hashtbl.fold (fun _ v acc -> v :: acc) tbl [] |> sorted_keys in

@@ -463,18 +463,46 @@ let prepare_mounts ~fs (mounts : Plan.mount list) =
     mounts;
   List.concat_map (fun (m : Plan.mount) -> m.env) mounts
 
-let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
-    ?(reporter = null_reporter) ?(plan_dir = Sys.getcwd ()) (plan : Plan.t) =
-  let mount_env = prepare_mounts ~fs plan.mounts in
-  reporter.event (Plan_started { total = List.length plan.nodes });
+type counts_t = <
+  built : unit -> unit ;
+  cached : unit -> unit ;
+  failed : failure -> unit ;
+  skipped : unit -> unit ;
+  snapshot : int * int * int * int * failure list
+>
+
+let make_counts () : counts_t =
+  object
+    val mutable built = 0
+    val mutable cached = 0
+    val mutable failed = 0
+    val mutable skipped = 0
+    val mutable failures : failure list = []
+    method built () = built <- built + 1
+    method cached () = cached <- cached + 1
+
+    method failed (f : failure) =
+      failed <- failed + 1;
+      failures <- f :: failures
+
+    method skipped () = skipped <- skipped + 1
+    method snapshot = (built, cached, failed, skipped, List.rev failures)
+  end
+
+type node_tables = {
+  promises : (string, [ `Ok | `Failed | `Skipped ] Eio.Promise.t) Hashtbl.t;
+  resolvers : (string, [ `Ok | `Failed | `Skipped ] Eio.Promise.u) Hashtbl.t;
+  producer_keys : (string, unit) Hashtbl.t;
+  producers : (string, Plan.node) Hashtbl.t;
+  external_keys : (string, unit) Hashtbl.t;
+}
+
+let build_node_tables (plan : Plan.t) =
   let n_nodes = List.length plan.nodes in
-  let promises : (string, [ `Ok | `Failed | `Skipped ] Eio.Promise.t) Hashtbl.t
-      =
-    Hashtbl.create n_nodes
-  in
+  let promises = Hashtbl.create n_nodes in
   let resolvers = Hashtbl.create n_nodes in
   let producer_keys = Hashtbl.create n_nodes in
-  let producers : (string, Plan.node) Hashtbl.t = Hashtbl.create n_nodes in
+  let producers = Hashtbl.create n_nodes in
   List.iter
     (fun (n : Plan.node) ->
       let key = Layer_hash.to_string n.layer_hash in
@@ -492,92 +520,97 @@ let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
   List.iter
     (fun h -> Hashtbl.replace external_keys (Layer_hash.to_string h) ())
     plan.external_layers;
+  { promises; resolvers; producer_keys; producers; external_keys }
 
-  let counts =
-    object
-      val mutable built = 0
-      val mutable cached = 0
-      val mutable failed = 0
-      val mutable skipped = 0
-      val mutable failures : failure list = []
-      method built () = built <- built + 1
-      method cached () = cached <- cached + 1
+let producer_dep_status ~tables key =
+  match Eio.Promise.await (Hashtbl.find tables.promises key) with
+  | `Ok -> `Ok
+  | `Failed | `Skipped -> `Failed
 
-      method failed (f : failure) =
-        failed <- failed + 1;
-        failures <- f :: failures
+let one_dep_status ~tables ~d10 h =
+  let key = Layer_hash.to_string h in
+  if Hashtbl.mem tables.producer_keys key then producer_dep_status ~tables key
+  else if Hashtbl.mem tables.external_keys key then `Ok
+  else if succeeded d10 h then `Ok
+  else `Failed
 
-      method skipped () = skipped <- skipped + 1
-      method snapshot = (built, cached, failed, skipped, List.rev failures)
-    end
+let dep_status ~tables ~d10 (n : Plan.node) =
+  let step acc h =
+    match acc with
+    | `Failed -> `Failed
+    | `Ok -> one_dep_status ~tables ~d10 h
   in
+  List.fold_left step `Ok n.dep_layer_hashes
+
+let resolve_node ~tables (n : Plan.node) v =
+  let key = Layer_hash.to_string n.layer_hash in
+  Eio.Promise.resolve (Hashtbl.find tables.resolvers key) v
+
+let handle_build_outcome ~counts ~reporter ~bump ~resolve outcome n =
+  match outcome with
+  | `Cached ->
+      bump (fun () -> counts#cached ());
+      reporter.event (Node_cached { node = n });
+      resolve n `Ok
+  | `Built (log_path, dt) ->
+      bump (fun () -> counts#built ());
+      reporter.event (Node_built { node = n; duration_s = dt; log_path });
+      resolve n `Ok
+  | `Failed (phase, log_path, error) ->
+      let f = { package = n.package; phase; log_path; error } in
+      bump (fun () -> counts#failed f);
+      reporter.event (Node_failed { node = n; phase; log_path; error });
+      resolve n `Failed
+
+let try_build_node ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir ~plan ~tables
+    ~reporter ~mount_env ~counts ~bump ~resolve ~with_slot n =
+  if succeeded d10 n.Plan.layer_hash then begin
+    bump (fun () -> counts#cached ());
+    reporter.event (Node_cached { node = n });
+    resolve n `Ok
+  end
+  else begin
+    let outcome =
+      with_slot (fun () ->
+          build_one ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir
+            ~archive_root:plan.Plan.archive_root ~producers:tables.producers
+            ~reporter ~mount_env n)
+    in
+    handle_build_outcome ~counts ~reporter ~bump ~resolve outcome n
+  end
+
+let pkg_fiber ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir ~plan ~tables
+    ~reporter ~mount_env ~counts ~bump ~with_slot n =
+  let resolve = resolve_node ~tables in
+  reporter.event (Node_queued { node = n });
+  match dep_status ~tables ~d10 n with
+  | `Failed ->
+      bump (fun () -> counts#skipped ());
+      reporter.event (Node_skipped { node = n; reason = "dep failed" });
+      resolve n `Skipped
+  | `Ok ->
+      try_build_node ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir ~plan ~tables
+        ~reporter ~mount_env ~counts ~bump ~resolve ~with_slot n
+
+let run ~(config : Config.t) ~d10 ~fs ~proc_mgr ~clock
+    ?(reporter = null_reporter) ?(plan_dir = Sys.getcwd ()) (plan : Plan.t) =
+  let mount_env = prepare_mounts ~fs plan.mounts in
+  reporter.event (Plan_started { total = List.length plan.nodes });
+  let tables = build_node_tables plan in
+  let counts = make_counts () in
   let mutex = Eio.Mutex.create () in
   let bump f = Eio.Mutex.use_rw ~protect:false mutex (fun () -> f ()) in
-
   let build_sem = Eio.Semaphore.make config.build_parallelism in
   let with_slot f =
     Eio.Semaphore.acquire build_sem;
     Fun.protect ~finally:(fun () -> Eio.Semaphore.release build_sem) f
   in
-  let dep_status (n : Plan.node) =
-    List.fold_left
-      (fun acc h ->
-        match acc with
-        | `Failed -> `Failed
-        | `Ok ->
-            let key = Layer_hash.to_string h in
-            if Hashtbl.mem producer_keys key then
-              match Eio.Promise.await (Hashtbl.find promises key) with
-              | `Ok -> `Ok
-              | `Failed | `Skipped -> `Failed
-            else if Hashtbl.mem external_keys key then `Ok
-            else if succeeded d10 h then `Ok
-            else `Failed)
-      `Ok n.dep_layer_hashes
-  in
-  let resolve (n : Plan.node) v =
-    let key = Layer_hash.to_string n.layer_hash in
-    Eio.Promise.resolve (Hashtbl.find resolvers key) v
-  in
-  let pkg_fiber (n : Plan.node) =
-    reporter.event (Node_queued { node = n });
-    match dep_status n with
-    | `Failed ->
-        bump (fun () -> counts#skipped ());
-        reporter.event (Node_skipped { node = n; reason = "dep failed" });
-        resolve n `Skipped
-    | `Ok ->
-        if succeeded d10 n.layer_hash then begin
-          bump (fun () -> counts#cached ());
-          reporter.event (Node_cached { node = n });
-          resolve n `Ok
-        end
-        else begin
-          let outcome =
-            with_slot (fun () ->
-                build_one ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir
-                  ~archive_root:plan.archive_root ~producers ~reporter
-                  ~mount_env n)
-          in
-          match outcome with
-          | `Cached ->
-              bump (fun () -> counts#cached ());
-              reporter.event (Node_cached { node = n });
-              resolve n `Ok
-          | `Built (log_path, dt) ->
-              bump (fun () -> counts#built ());
-              reporter.event
-                (Node_built { node = n; duration_s = dt; log_path });
-              resolve n `Ok
-          | `Failed (phase, log_path, error) ->
-              let f = { package = n.package; phase; log_path; error } in
-              bump (fun () -> counts#failed f);
-              reporter.event (Node_failed { node = n; phase; log_path; error });
-              resolve n `Failed
-        end
+  let run_pkg n =
+    pkg_fiber ~config ~d10 ~fs ~proc_mgr ~clock ~plan_dir ~plan ~tables
+      ~reporter ~mount_env ~counts ~bump ~with_slot n
   in
   Eio.Switch.run (fun sw ->
-      List.iter (fun n -> Eio.Fiber.fork ~sw (fun () -> pkg_fiber n)) plan.nodes);
+      List.iter (fun n -> Eio.Fiber.fork ~sw (fun () -> run_pkg n)) plan.nodes);
   let built, cached, failed, skipped, failures = counts#snapshot in
   reporter.event (Plan_done { built; cached; failed; skipped });
   { built; cached; failed; skipped; failures }

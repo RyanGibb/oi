@@ -266,36 +266,34 @@ let default_mounts () : D10ir.Plan.mount list =
     };
   ]
 
+let node_of_pkg_plan ~cache_root (p : Plan.package_plan) =
+  match p.method_ with
+  | Identity.Binary ->
+      Log.debug (fun m -> m "skipping binary package %s" p.pkg);
+      None
+  | Source -> Some (node_of_package_plan ~cache_root p)
+
+let roots_of_nodes (nodes : D10ir.Plan.node list) =
+  (* Roots: nodes that no other node depends on. Compute over the
+     layer-hash graph. *)
+  let dep_set = Hashtbl.create 64 in
+  List.iter
+    (fun (n : D10ir.Plan.node) ->
+      List.iter
+        (fun h -> Hashtbl.replace dep_set (D10ir.Layer_hash.to_string h) ())
+        n.dep_layer_hashes)
+    nodes;
+  List.filter_map
+    (fun (n : D10ir.Plan.node) ->
+      if Hashtbl.mem dep_set (D10ir.Layer_hash.to_string n.layer_hash) then None
+      else Some n.layer_hash)
+    nodes
+
 let emit ~d10 ?(cli_invocation = []) ~toolchain_name ~toolchain_layer
     (plan : Plan.t) : D10ir.Plan.t =
   let cache_root = plan.cache_root in
-  let nodes =
-    List.filter_map
-      (fun (p : Plan.package_plan) ->
-        match p.method_ with
-        | Identity.Binary ->
-            Log.debug (fun m -> m "skipping binary package %s" p.pkg);
-            None
-        | Source -> Some (node_of_package_plan ~cache_root p))
-      plan.packages
-  in
-  let roots =
-    (* Roots: nodes that no other node depends on. Compute over the
-       layer-hash graph. *)
-    let dep_set = Hashtbl.create 64 in
-    List.iter
-      (fun (n : D10ir.Plan.node) ->
-        List.iter
-          (fun h -> Hashtbl.replace dep_set (D10ir.Layer_hash.to_string h) ())
-          n.dep_layer_hashes)
-      nodes;
-    List.filter_map
-      (fun (n : D10ir.Plan.node) ->
-        if Hashtbl.mem dep_set (D10ir.Layer_hash.to_string n.layer_hash) then
-          None
-        else Some n.layer_hash)
-      nodes
-  in
+  let nodes = List.filter_map (node_of_pkg_plan ~cache_root) plan.packages in
+  let roots = roots_of_nodes nodes in
   let toolchain : D10ir.Plan.toolchain =
     {
       name = toolchain_name;

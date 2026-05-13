@@ -19,24 +19,24 @@ type env = {
    still print human text. *)
 let error_format : Terms.format ref = ref Terms.Text
 
+let env_var k =
+  match Sys.getenv_opt k with Some v when v <> "" -> Some v | _ -> None
+
+let data_dir_of_env () =
+  match env_var "OI_DATA_DIR" with
+  | Some v -> v
+  | None -> (
+      match env_var "XDG_DATA_HOME" with
+      | Some v -> v / "oi"
+      | None -> (
+          match env_var "HOME" with
+          | Some h -> h / ".local" / "share" / "oi"
+          | None -> "/tmp/oi"))
+
 (* Mirror of [Terms.data_dir]'s env resolution for callers that don't
    thread a [--data-dir] flag (e.g. [oi cache *]). *)
 let resolve_data_dir ?override () =
-  let env k =
-    match Sys.getenv_opt k with Some v when v <> "" -> Some v | _ -> None
-  in
-  match override with
-  | Some v when v <> "" -> v
-  | _ -> (
-      match env "OI_DATA_DIR" with
-      | Some v -> v
-      | None -> (
-          match env "XDG_DATA_HOME" with
-          | Some v -> v / "oi"
-          | None -> (
-              match env "HOME" with
-              | Some h -> h / ".local" / "share" / "oi"
-              | None -> "/tmp/oi")))
+  match override with Some v when v <> "" -> v | _ -> data_dir_of_env ()
 
 let pp_one_exn fmt = function
   | Oi.Error.E e -> Oi.Error.pp fmt e

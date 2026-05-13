@@ -44,6 +44,70 @@ let unique_archive_shas (plan : D10ir.Plan.t) =
       end)
     plan.nodes
 
+(* Resolve [distro] into the canonical [(image, tag, label, mgr)] tuple a
+   renderer needs, hard-erroring if the distro uses a package manager we
+   don't support. [caller] is just the command label in the error string. *)
+let resolve_distro_meta ~caller distro =
+  let resolved = Distro.resolve_alias distro in
+  let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
+  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
+  let mgr = Distro.package_manager (resolved :> Distro.t) in
+  let mgr =
+    match mgr with
+    | (`Apk | `Apt | `Yum) as m -> m
+    | _ ->
+        Oi.Error.fail_config_error
+          "%s: distro %s uses an unsupported package manager" caller
+          distro_label
+  in
+  (img, image_tag, distro_label, mgr)
+
+(* Combine base build-depexts with extra user/project depexts, deduping. *)
+let combine_depexts ~mgr ~depexts =
+  let base = Registry_docker.build_depexts mgr in
+  let words = String.split_on_char ' ' base |> List.filter (( <> ) "") in
+  let extra_words =
+    List.filter (fun p -> not (List.mem p words)) depexts
+    |> List.sort_uniq String.compare
+  in
+  String.concat " " (words @ extra_words)
+
+(* [RUN] prefix for the fetch stage. With BuildKit cache mounts we let
+   BuildKit create the target dir implicitly; without we prepend [mkdir -p]
+   so [cd] / oi steps don't crash on a missing path. *)
+let fetch_run_prefix ~no_cache_mount =
+  if no_cache_mount then "RUN mkdir -p /cache/d10ir/archives\nRUN "
+  else
+    "RUN \
+     --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives,sharing=locked \
+     \\\n"
+
+(* [RUN] prefix for the build / replay stage; same trade-off as
+   [fetch_run_prefix] but also mounts the layer cache. *)
+let build_run_prefix ~no_cache_mount =
+  if no_cache_mount then
+    "RUN mkdir -p /cache/d10ir/archives /cache/layers && \\\n    "
+  else
+    "RUN \
+     --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives \\\n\
+    \    --mount=type=cache,target=/cache/layers,id=oi-layers \\\n\
+    \    "
+
+let render_cache_doc ~no_cache_mount =
+  if no_cache_mount then
+    "#   RUN fetch-archives      -> downloaded into the image layer (no\n\
+     #                              cache mount); rebuilds re-download.\n\
+     #   RUN oi build            -> solves + builds into the image layer."
+  else
+    "#   RUN fetch-archives      -> ONE layer; busts only when the sha list \
+     inside\n\
+     #                              the heredoc changes. Archive bytes live \
+     in a\n\
+     #                              BuildKit cache mount, so unchanged shas \
+     aren't\n\
+     #                              re-downloaded.\n\
+     #   RUN oi build            -> reuses the cache mount + d10 layer cache"
+
 (* Render the full Dockerfile. One stage for the distro base + oi binary,
    one stage that fetches every archive in one heredoc'd RUN under a BuildKit
    cache mount, then [oi build TARGET] which solves against the reporepo
@@ -62,70 +126,10 @@ let unique_archive_shas (plan : D10ir.Plan.t) =
    overlay and downstream [cp -Rfl] hardlink passes (e.g. [Sysops.link_tree])
    fail with [EXDEV]. The trade-off is no cross-build cache reuse: every
    docker build re-downloads archives and rebuilds layers. *)
-let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
-    ~shas ~target_label ~recipe_node_count ~no_cache_mount =
-  let resolved = Distro.resolve_alias distro in
-  let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
-  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
-  let mgr = Distro.package_manager (resolved :> Distro.t) in
-  let mgr =
-    match mgr with
-    | (`Apk | `Apt | `Yum) as m -> m
-    | _ ->
-        Oi.Error.fail_config_error
-          "oi docker: distro %s uses an unsupported package manager"
-          (Distro.tag_of_distro (resolved :> Distro.t))
-  in
-  let base = Registry_docker.build_depexts mgr in
-  let combined =
-    let words = String.split_on_char ' ' base |> List.filter (( <> ) "") in
-    let extra_words =
-      List.filter (fun p -> not (List.mem p words)) depexts
-      |> List.sort_uniq String.compare
-    in
-    String.concat " " (words @ extra_words)
-  in
-  let install = Registry_docker.install_cmd mgr combined in
-  let sha_block = String.concat "\n" shas in
-  (* Pick the [RUN] prefix for the fetch and replay stages. With cache
-     mounts we let BuildKit create the target dirs implicitly; without,
-     we prepend a [mkdir -p] so the [cd]/oi steps don't crash on a
-     missing path. The image-overlay write goes through anyway, so
-     fetched archives + built layers persist across the two RUNs within
-     the same build (just not across builds). *)
-  let fetch_prefix =
-    if no_cache_mount then "RUN mkdir -p /cache/d10ir/archives\nRUN "
-    else
-      "RUN \
-       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives,sharing=locked \
-       \\\n"
-  in
-  let replay_prefix =
-    if no_cache_mount then
-      "RUN mkdir -p /cache/d10ir/archives /cache/layers && \\\n    "
-    else
-      "RUN \
-       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives \\\n\
-      \    --mount=type=cache,target=/cache/layers,id=oi-layers \\\n\
-      \    "
-  in
-  let cache_doc =
-    if no_cache_mount then
-      "#   RUN fetch-archives      -> downloaded into the image layer (no\n\
-       #                              cache mount); rebuilds re-download.\n\
-       #   RUN oi build            -> solves + builds into the image layer."
-    else
-      "#   RUN fetch-archives      -> ONE layer; busts only when the sha list \
-       inside\n\
-       #                              the heredoc changes. Archive bytes live \
-       in a\n\
-       #                              BuildKit cache mount, so unchanged shas \
-       aren't\n\
-       #                              re-downloaded.\n\
-       #   RUN oi build            -> reuses the cache mount + d10 layer cache"
-  in
-  Fmt.str
-    {|# syntax=docker/dockerfile:1.7
+(* Format string for the target-mode Dockerfile. Lives at module level so
+   [render_dockerfile] is short enough for the length check. *)
+let dockerfile_template : (_, _, _, _) format4 =
+  {|# syntax=docker/dockerfile:1.7
 #
 # Generated by `oi docker %s --distro=%s`.
 # Target:    %s
@@ -215,10 +219,24 @@ BASH
 FROM base AS runtime
 COPY --from=build /dist/ /usr/local/
 |}
-    target_label distro_label target_label distro_label recipe_node_count
-    (List.length shas) cache_doc oi_version_default registry_default img
-    image_tag install Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix
-    sha_block replay_prefix target_label
+
+let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
+    ~shas ~target_label ~recipe_node_count ~no_cache_mount =
+  let img, image_tag, distro_label, mgr =
+    resolve_distro_meta ~caller:"oi docker" distro
+  in
+  let install =
+    Registry_docker.install_cmd mgr (combine_depexts ~mgr ~depexts)
+  in
+  let sha_block = String.concat "\n" shas in
+  let fetch_prefix = fetch_run_prefix ~no_cache_mount in
+  let replay_prefix = build_run_prefix ~no_cache_mount in
+  let cache_doc = render_cache_doc ~no_cache_mount in
+  Fmt.str dockerfile_template target_label distro_label target_label
+    distro_label recipe_node_count (List.length shas) cache_doc
+    oi_version_default registry_default img image_tag install
+    Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix sha_block
+    replay_prefix target_label
 
 (* Obuilder spec renderer — parallel to {!render_dockerfile}, same
    multi-stage shape: a [(build oi-build (...))] stage that prefetches
@@ -231,33 +249,8 @@ COPY --from=build /dist/ /usr/local/
      baked into the [(env …)] block so swapping mirrors means regenerating
      the spec. [oi_version] is resolved to a concrete tag at gen time
      for the same reason (no [latest] indirection inside the spec). *)
-let render_obuilder_spec ~distro ~oi_version_default ~registry_default ~depexts
-    ~shas ~target_label ~recipe_node_count =
-  let resolved = Distro.resolve_alias distro in
-  let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
-  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
-  let mgr = Distro.package_manager (resolved :> Distro.t) in
-  let mgr =
-    match mgr with
-    | (`Apk | `Apt | `Yum) as m -> m
-    | _ ->
-        Oi.Error.fail_config_error
-          "oi docker --obuilder: distro %s uses an unsupported package manager"
-          distro_label
-  in
-  let base = Registry_docker.build_depexts mgr in
-  let combined =
-    let words = String.split_on_char ' ' base |> List.filter (( <> ) "") in
-    let extra_words =
-      List.filter (fun p -> not (List.mem p words)) depexts
-      |> List.sort_uniq String.compare
-    in
-    String.concat " " (words @ extra_words)
-  in
-  let install = Registry_docker.install_cmd mgr combined in
-  let sha_block = String.concat " " shas in
-  Fmt.str
-    {|; Generated by `oi docker --obuilder %s --distro=%s`.
+let obuilder_template : (_, _, _, _) format4 =
+  {|; Generated by `oi docker --obuilder %s --distro=%s`.
 ; Target:    %s
 ; Distro:    %s
 ; Nodes:     %d (solver plan at generation time; container re-solves)
@@ -287,10 +280,20 @@ let render_obuilder_spec ~distro ~oi_version_default ~registry_default ~depexts
  (run (network host) (shell "%s"))
  (copy (from (build oi-build)) (src "/dist/") (dst "/usr/local/")))
 |}
-    target_label distro_label target_label distro_label recipe_node_count
-    (List.length shas) img image_tag registry_default install oi_version_default
-    Oi.Stamp.cache_schema Oi.Stamp.data_schema sha_block registry_default
-    registry_default target_label img image_tag install
+
+let render_obuilder_spec ~distro ~oi_version_default ~registry_default ~depexts
+    ~shas ~target_label ~recipe_node_count =
+  let img, image_tag, distro_label, mgr =
+    resolve_distro_meta ~caller:"oi docker --obuilder" distro
+  in
+  let install =
+    Registry_docker.install_cmd mgr (combine_depexts ~mgr ~depexts)
+  in
+  let sha_block = String.concat " " shas in
+  Fmt.str obuilder_template target_label distro_label target_label distro_label
+    recipe_node_count (List.length shas) img image_tag registry_default install
+    oi_version_default Oi.Stamp.cache_schema Oi.Stamp.data_schema sha_block
+    registry_default registry_default target_label img image_tag install
 
 let solve_targets ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
     ~platform ~refresh targets =
@@ -339,20 +342,11 @@ let solve_targets ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
    merged d10ir plan it produces feeds the prefetch step in the
    generated Dockerfile, exactly like {!solve_targets} does for the
    non-local path. *)
-let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
-    ~session ~platform ~refresh ~cwd =
-  Oi.Pipeline.init_opam_root ~fs ~data_dir;
-  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-  let project = Oi.Project.load ~fs cwd in
-  let extra_cli, url_project =
-    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh []
+(* Resolve toolchain + project overlays + extras for a local project. *)
+let resolve_local_project_inputs ~fs ~sys ~data_dir ~conf ~project ~url_project =
+  let candidate_overlays =
+    project.Oi.Project.overlays @ url_project.Oi.Project.Url.overlays
   in
-  if project.deps = [] && extra_cli = [] && url_project.roots = [] then
-    Oi.Error.fail_config_error "oi docker: no *.opam files in %s" cwd;
-  let conf =
-    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
-  in
-  let candidate_overlays = project.overlays @ url_project.overlays in
   let toolchain =
     Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:false
       ~override:None ~handles:candidate_overlays ()
@@ -367,7 +361,11 @@ let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
       ~cli:(Target.cli_extra_repos ~fs ~sys ?toolchain project_overlays)
       ~project:(project.extra_repos @ url_project.extra_repos)
   in
-  let extra_constraints = Oi.Project.Script.constraints extra_cli in
+  (conf, toolchain, project_overlays, all_extras)
+
+(* Solver root names: project deps + non-[ocaml] CLI extras + URL-project
+   roots, deduplicated. *)
+let local_solver_names ~project ~extra_cli ~url_project =
   let extra_names =
     List.filter_map
       (fun (d : Oi.Project.Script.dep) ->
@@ -375,10 +373,26 @@ let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
         else Some (OpamPackage.Name.to_string d.name))
       extra_cli
   in
-  let names =
-    project.deps @ extra_names @ url_project.roots
-    |> List.sort_uniq String.compare
+  project.Oi.Project.deps @ extra_names @ url_project.Oi.Project.Url.roots
+  |> List.sort_uniq String.compare
+
+let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
+    ~session ~platform ~refresh ~cwd =
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+  let project = Oi.Project.load ~fs cwd in
+  let extra_cli, url_project =
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh []
   in
+  if project.deps = [] && extra_cli = [] && url_project.roots = [] then
+    Oi.Error.fail_config_error "oi docker: no *.opam files in %s" cwd;
+  let conf =
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
+  let conf, toolchain, project_overlays, all_extras =
+    resolve_local_project_inputs ~fs ~sys ~data_dir ~conf ~project ~url_project
+  in
+  let names = local_solver_names ~project ~extra_cli ~url_project in
   let local_packages_dir =
     match project.packages_dir with
     | Some _ -> project.packages_dir
@@ -402,15 +416,15 @@ let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
       with_repos = project_overlays;
       pins = project.pins @ url_project.pins;
       extra_repos = all_extras;
-      constraints = extra_constraints;
+      constraints = Oi.Project.Script.constraints extra_cli;
       toolchain_override = None;
       toolchain;
       conf;
       local_packages_dir;
       project_root = Some cwd;
-      (* Same rationale as {!solve_targets}: the container starts empty,
-         so [force_source] forces every dep into the d10ir plan even when
-         the host has a cached layer. *)
+      (* Same rationale as {!solve_targets}: the container starts empty, so
+         [force_source] forces every dep into the d10ir plan even when the
+         host has a cached layer. *)
       force_source = true;
       refresh;
     }
@@ -422,44 +436,15 @@ let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
    and reporepo, fetches archives, and builds. The image is reproducible
    only insofar as [OI_VERSION], the reporepo URL, and the registry index
    are stable — every other input is resolved at build time. *)
-let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
-    ~target_label ~no_cache_mount =
-  let resolved = Distro.resolve_alias distro in
-  let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
-  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
-  let mgr = Distro.package_manager (resolved :> Distro.t) in
-  let mgr =
-    match mgr with
-    | (`Apk | `Apt | `Yum) as m -> m
-    | _ ->
-        Oi.Error.fail_config_error
-          "oi docker: distro %s uses an unsupported package manager"
-          distro_label
-  in
-  let base = Registry_docker.build_depexts mgr in
-  let install = Registry_docker.install_cmd mgr base in
-  let build_prefix =
-    if no_cache_mount then "RUN "
-    else
-      "RUN --mount=type=cache,target=/cache,id=oi-cache-build,sharing=locked \\\n\
-      \    "
-  in
-  let cache_doc =
-    if no_cache_mount then
-      "#   oi build TARGET         -> writes /cache into the image layer (no \
-       cache\n\
-       #                              mount); rebuilds re-fetch and re-solve."
-    else
-      "#   oi build TARGET         -> one cached layer per target. The \
-       BuildKit cache\n\
-       #                              mount keeps /cache across rebuilds, so a \
-       second\n\
-       #                              build with the same OI_VERSION and \
-       TARGET hits\n\
-       #                              local d10 layers and is mostly free."
-  in
-  Fmt.str
-    {|# syntax=docker/dockerfile:1.7
+(* [RUN] prefix for the single-stage no-recipe Dockerfile. *)
+let no_recipe_build_prefix ~no_cache_mount =
+  if no_cache_mount then "RUN "
+  else
+    "RUN --mount=type=cache,target=/cache,id=oi-cache-build,sharing=locked \\\n\
+    \    "
+
+let no_recipe_template : (_, _, _, _) format4 =
+  {|# syntax=docker/dockerfile:1.7
 #
 # Generated by `oi docker --no-recipe %s --distro=%s`.
 # Target:    %s
@@ -513,17 +498,38 @@ ENV OI_REGISTRY=${OI_REGISTRY} OI_REPOREPO_URL=${OI_REPOREPO_URL}
 #   docker build -t %s -f %s .
 #   docker run --rm %s oix %s --help
 |}
-    target_label distro_label target_label distro_label cache_doc
-    oi_version_default registry_default img image_tag install
+
+let no_recipe_cache_doc ~no_cache_mount =
+  if no_cache_mount then
+    "#   oi build TARGET         -> writes /cache into the image layer (no \
+     cache\n\
+     #                              mount); rebuilds re-fetch and re-solve."
+  else
+    "#   oi build TARGET         -> one cached layer per target. The BuildKit \
+     cache\n\
+     #                              mount keeps /cache across rebuilds, so a \
+     second\n\
+     #                              build with the same OI_VERSION and TARGET \
+     hits\n\
+     #                              local d10 layers and is mostly free."
+
+let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
+    ~target_label ~no_cache_mount =
+  let img, image_tag, distro_label, mgr =
+    resolve_distro_meta ~caller:"oi docker" distro
+  in
+  let install =
+    Registry_docker.install_cmd mgr (Registry_docker.build_depexts mgr)
+  in
+  let build_prefix = no_recipe_build_prefix ~no_cache_mount in
+  let cache_doc = no_recipe_cache_doc ~no_cache_mount in
+  let slug = slug_of_target target_label in
+  let image_name = "oi-" ^ slug in
+  let dockerfile_name = Fmt.str "Dockerfile.oi-%s.%s" slug distro_label in
+  Fmt.str no_recipe_template target_label distro_label target_label distro_label
+    cache_doc oi_version_default registry_default img image_tag install
     Oi.Stamp.cache_schema Oi.Stamp.data_schema build_prefix target_label
-    (Fmt.str "oi-%s"
-       (String.concat "-" (List.map slug_of_target [ target_label ])))
-    (Fmt.str "Dockerfile.oi-%s.%s"
-       (String.concat "-" (List.map slug_of_target [ target_label ]))
-       distro_label)
-    (Fmt.str "oi-%s"
-       (String.concat "-" (List.map slug_of_target [ target_label ])))
-    target_label
+    image_name dockerfile_name image_name target_label
 
 let emit_no_recipe ~distro ~oi_version ~registry ~no_cache_mount ~output
     ~targets =
@@ -558,49 +564,8 @@ let emit_no_recipe ~distro ~oi_version ~registry ~no_cache_mount ~output
    we [COPY . /work], prefetch the dep closure's archives, then
    [oi build --dist=/dist] (project mode is auto-detected from the
    *.opam files we just copied in). The runtime stage is identical. *)
-let render_local_dockerfile ~distro ~oi_version_default ~registry_default
-    ~depexts ~shas ~project_label ~recipe_node_count ~no_cache_mount =
-  let resolved = Distro.resolve_alias distro in
-  let img, image_tag = Distro.base_distro_tag (resolved :> Distro.t) in
-  let distro_label = Distro.tag_of_distro (resolved :> Distro.t) in
-  let mgr = Distro.package_manager (resolved :> Distro.t) in
-  let mgr =
-    match mgr with
-    | (`Apk | `Apt | `Yum) as m -> m
-    | _ ->
-        Oi.Error.fail_config_error
-          "oi docker: distro %s uses an unsupported package manager"
-          (Distro.tag_of_distro (resolved :> Distro.t))
-  in
-  let base = Registry_docker.build_depexts mgr in
-  let combined =
-    let words = String.split_on_char ' ' base |> List.filter (( <> ) "") in
-    let extra_words =
-      List.filter (fun p -> not (List.mem p words)) depexts
-      |> List.sort_uniq String.compare
-    in
-    String.concat " " (words @ extra_words)
-  in
-  let install = Registry_docker.install_cmd mgr combined in
-  let sha_block = String.concat "\n" shas in
-  let fetch_prefix =
-    if no_cache_mount then "RUN mkdir -p /cache/d10ir/archives\nRUN "
-    else
-      "RUN \
-       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives,sharing=locked \
-       \\\n"
-  in
-  let build_prefix =
-    if no_cache_mount then
-      "RUN mkdir -p /cache/d10ir/archives /cache/layers && \\\n    "
-    else
-      "RUN \
-       --mount=type=cache,target=/cache/d10ir/archives,id=oi-d10ir-archives \\\n\
-      \    --mount=type=cache,target=/cache/layers,id=oi-layers \\\n\
-      \    "
-  in
-  Fmt.str
-    {|# syntax=docker/dockerfile:1.7
+let local_template : (_, _, _, _) format4 =
+  {|# syntax=docker/dockerfile:1.7
 #
 # Generated by `oi docker --distro=%s` (project mode).
 # Project:   %s
@@ -684,10 +649,65 @@ COPY . /work
 FROM base AS runtime
 COPY --from=build /dist/ /usr/local/
 |}
-    distro_label project_label distro_label recipe_node_count (List.length shas)
-    oi_version_default registry_default img image_tag install
-    Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix sha_block
-    build_prefix
+
+let render_local_dockerfile ~distro ~oi_version_default ~registry_default
+    ~depexts ~shas ~project_label ~recipe_node_count ~no_cache_mount =
+  let img, image_tag, distro_label, mgr =
+    resolve_distro_meta ~caller:"oi docker" distro
+  in
+  let install =
+    Registry_docker.install_cmd mgr (combine_depexts ~mgr ~depexts)
+  in
+  let sha_block = String.concat "\n" shas in
+  let fetch_prefix = fetch_run_prefix ~no_cache_mount in
+  let build_prefix = build_run_prefix ~no_cache_mount in
+  Fmt.str local_template distro_label project_label distro_label
+    recipe_node_count (List.length shas) oi_version_default registry_default img
+    image_tag install Oi.Stamp.cache_schema Oi.Stamp.data_schema fetch_prefix
+    sha_block build_prefix
+
+(* Stringify one group_result's error in a 4-line form. *)
+let group_error_message (gr : Oi.Build_pipeline.group_result) =
+  match gr.error with
+  | Ok () -> None
+  | Error e ->
+      let kind =
+        match e with
+        | Solve_failed { msg; _ } -> Fmt.str "solve: %s" msg
+        | Cycle _ -> "cycle"
+        | Empty_after_strip -> "empty"
+        | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
+        | Emit_failed { msg } -> Fmt.str "emit: %s" msg
+      in
+      Fmt.kstr (fun s -> Some s) "%s — %s" gr.group.label kind
+
+(* Extract the merged plan, or fail with an aggregated per-group error
+   message. [what] names the kind of input ("project" / "target") for the
+   error string. *)
+let merged_or_fail ~what (solved : Oi.Build_pipeline.solved) =
+  match solved.merged with
+  | Some m -> m
+  | None ->
+      let msgs = List.filter_map group_error_message solved.groups in
+      Oi.Error.fail_config_error
+        "oi docker: %s produced no executable plan:@\n  %s" what
+        (String.concat "\n  " msgs)
+
+(* Resolve [output] into [(dst_dir, dockerfile_path)]: if it points at an
+   existing directory, append [default_name]; otherwise treat the value
+   as the full path. [None] writes into [default_dir]. *)
+let resolve_output_path ~output ~default_dir ~default_name =
+  match output with
+  | None -> (default_dir, default_dir / default_name)
+  | Some p ->
+      if Sys.file_exists p && Sys.is_directory p then (p, p / default_name)
+      else (Filename.dirname p, p)
+
+let print_wrote ~merged_nodes ~shas dockerfile_path =
+  Oi.Say.step "Wrote";
+  Fmt.kstr
+    (Oi.Say.info "%s  %a" dockerfile_path Oi.Style.pp_dim_string)
+    "(plan: %d nodes, %d unique archives)" merged_nodes (List.length shas)
 
 let emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
     ~platform ~refresh ~registry ~distro ~oi_version ~no_cache_mount ~output
@@ -696,31 +716,7 @@ let emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
     solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
       ~session ~platform ~refresh ~cwd
   in
-  let merged =
-    match solved.merged with
-    | Some m -> m
-    | None ->
-        let msgs =
-          List.filter_map
-            (fun (gr : Oi.Build_pipeline.group_result) ->
-              match gr.error with
-              | Ok () -> None
-              | Error e ->
-                  let kind =
-                    match e with
-                    | Solve_failed { msg; _ } -> Fmt.str "solve: %s" msg
-                    | Cycle _ -> "cycle"
-                    | Empty_after_strip -> "empty"
-                    | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
-                    | Emit_failed { msg } -> Fmt.str "emit: %s" msg
-                  in
-                  Fmt.kstr (fun s -> Some s) "%s — %s" gr.group.label kind)
-            solved.groups
-        in
-        Oi.Error.fail_config_error
-          "oi docker: project produced no executable plan:@\n  %s"
-          (String.concat "\n  " msgs)
-  in
+  let merged = merged_or_fail ~what:"project" solved in
   let shas = unique_archive_shas merged in
   let project_label = Filename.basename cwd in
   let dockerfile_body =
@@ -733,23 +729,31 @@ let emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
   in
   let dockerfile_name = Fmt.str "Dockerfile.oi-project.%s" distro_tag in
   let dst_dir, dockerfile_path =
-    match output with
-    | None -> (cwd, cwd / dockerfile_name)
-    | Some p ->
-        if Sys.file_exists p && Sys.is_directory p then (p, p / dockerfile_name)
-        else (Filename.dirname p, p)
+    resolve_output_path ~output ~default_dir:cwd ~default_name:dockerfile_name
   in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dst_dir);
   Registry_docker.write_file dockerfile_path dockerfile_body;
-  Oi.Say.step "Wrote";
-  Fmt.kstr
-    (Oi.Say.info "%s  %a" dockerfile_path Oi.Style.pp_dim_string)
-    "(plan: %d nodes, %d unique archives)" (List.length merged.nodes)
-    (List.length shas);
+  print_wrote ~merged_nodes:(List.length merged.nodes) ~shas dockerfile_path;
   Oi.Say.newline ();
   Oi.Say.step "Build with";
   Oi.Say.info "docker build -t %s -f %s %s" project_label dockerfile_path
     dst_dir
+
+(* Pick the [(body, filename)] pair for an emit target run: obuilder spec
+   vs Dockerfile, with the right filename naming. *)
+let target_body_and_filename ~obuilder ~distro ~oi_version ~registry ~shas
+    ~target_label ~recipe_node_count ~no_cache_mount ~slug ~distro_tag =
+  if obuilder then
+    ( render_obuilder_spec ~distro ~oi_version_default:oi_version
+        ~registry_default:registry ~depexts:[] ~shas ~target_label
+        ~recipe_node_count,
+      Fmt.str "oi-%s.%s.spec" slug distro_tag )
+  else
+    ( render_dockerfile ~distro ~oi_version_default:oi_version
+        ~registry_default:registry
+        ~depexts:[] (* TODO target-scoped depexts; for now base set only *)
+        ~shas ~target_label ~recipe_node_count ~no_cache_mount,
+      Fmt.str "Dockerfile.oi-%s.%s" slug distro_tag )
 
 let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
     ~refresh ~registry ~distro ~oi_version ~no_cache_mount ~obuilder ~output
@@ -762,67 +766,25 @@ let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
     solve_targets ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
       ~platform ~refresh targets
   in
-  let merged =
-    match solved.merged with
-    | Some m -> m
-    | None ->
-        let msgs =
-          List.filter_map
-            (fun (gr : Oi.Build_pipeline.group_result) ->
-              match gr.error with
-              | Ok () -> None
-              | Error e ->
-                  let kind =
-                    match e with
-                    | Solve_failed { msg; _ } -> Fmt.str "solve: %s" msg
-                    | Cycle _ -> "cycle"
-                    | Empty_after_strip -> "empty"
-                    | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
-                    | Emit_failed { msg } -> Fmt.str "emit: %s" msg
-                  in
-                  Fmt.kstr (fun s -> Some s) "%s — %s" gr.group.label kind)
-            solved.groups
-        in
-        Oi.Error.fail_config_error
-          "oi docker: target produced no executable plan:@\n  %s"
-          (String.concat "\n  " msgs)
-  in
+  let merged = merged_or_fail ~what:"target" solved in
   let shas = unique_archive_shas merged in
   let target_label = String.concat " " targets in
+  let slug = targets |> List.map slug_of_target |> String.concat "-" in
+  let distro_tag =
+    Distro.tag_of_distro (Distro.resolve_alias distro :> Distro.t)
+  in
   let body, filename =
-    let slug = targets |> List.map slug_of_target |> String.concat "-" in
-    let distro_tag =
-      Distro.tag_of_distro (Distro.resolve_alias distro :> Distro.t)
-    in
-    if obuilder then
-      ( render_obuilder_spec ~distro ~oi_version_default:oi_version
-          ~registry_default:registry ~depexts:[] ~shas ~target_label
-          ~recipe_node_count:(List.length merged.nodes),
-        Fmt.str "oi-%s.%s.spec" slug distro_tag )
-    else
-      ( render_dockerfile ~distro ~oi_version_default:oi_version
-          ~registry_default:registry
-          ~depexts:[] (* TODO target-scoped depexts; for now base set only *)
-          ~shas ~target_label ~recipe_node_count:(List.length merged.nodes)
-          ~no_cache_mount,
-        Fmt.str "Dockerfile.oi-%s.%s" slug distro_tag )
+    target_body_and_filename ~obuilder ~distro ~oi_version ~registry ~shas
+      ~target_label ~recipe_node_count:(List.length merged.nodes)
+      ~no_cache_mount ~slug ~distro_tag
   in
   let cwd_s, _ = Workspace.resolved_cwd fs in
   let dst_dir, dockerfile_path =
-    match output with
-    | None -> (cwd_s, cwd_s / filename)
-    | Some p ->
-        if Sys.file_exists p && Sys.is_directory p then (p, p / filename)
-        else (Filename.dirname p, p)
+    resolve_output_path ~output ~default_dir:cwd_s ~default_name:filename
   in
-  let slug = targets |> List.map slug_of_target |> String.concat "-" in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dst_dir);
   Registry_docker.write_file dockerfile_path body;
-  Oi.Say.step "Wrote";
-  Fmt.kstr
-    (Oi.Say.info "%s  %a" dockerfile_path Oi.Style.pp_dim_string)
-    "(plan: %d nodes, %d unique archives)" (List.length merged.nodes)
-    (List.length shas);
+  print_wrote ~merged_nodes:(List.length merged.nodes) ~shas dockerfile_path;
   Oi.Say.newline ();
   Oi.Say.step "Build with";
   if obuilder then Oi.Say.info "obuilder build -f %s --store=…" dockerfile_path

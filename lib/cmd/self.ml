@@ -12,6 +12,31 @@ let dev_url () =
   | Some s when s <> "" -> s
   | _ -> "git+https://github.com/avsm/oi#main"
 
+(* Copy [in_ch] into [out_ch] verbatim, 64KiB at a time. Pulled out so
+   {!install_binary} doesn't nest a [Fun.protect] inside a [Fun.protect]
+   inside a [rec loop]. *)
+let copy_channel ~in_ch ~out_ch =
+  let buf = Bytes.create 65536 in
+  let rec loop () =
+    let n = input in_ch buf 0 (Bytes.length buf) in
+    if n > 0 then begin
+      output_bytes out_ch buf;
+      if n = Bytes.length buf then loop ()
+    end
+  in
+  loop ()
+
+(* Copy [src] verbatim into a freshly-created file at [tmp]. *)
+let copy_file_to ~src ~tmp =
+  let in_ch = open_in_bin src in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr in_ch)
+    (fun () ->
+      let out_ch = open_out_bin tmp in
+      Fun.protect
+        ~finally:(fun () -> close_out_noerr out_ch)
+        (fun () -> copy_channel ~in_ch ~out_ch))
+
 (* Atomic-replace a binary at [dst] with the contents of [src]. Writes
    to a sibling [.tmp] file in the same directory (so [rename] is
    guaranteed atomic), [chmod 0755], then renames over the target.
@@ -24,23 +49,7 @@ let install_binary ~fs ~src ~dst =
     Eio.Path.(fs / Filename.dirname dst);
   let tmp = Fmt.str "%s.%d.tmp" dst (Unix.getpid ()) in
   (try Unix.unlink tmp with Unix.Unix_error _ -> ());
-  let in_ch = open_in_bin src in
-  Fun.protect
-    ~finally:(fun () -> close_in_noerr in_ch)
-    (fun () ->
-      let out_ch = open_out_bin tmp in
-      Fun.protect
-        ~finally:(fun () -> close_out_noerr out_ch)
-        (fun () ->
-          let buf = Bytes.create 65536 in
-          let rec loop () =
-            let n = input in_ch buf 0 (Bytes.length buf) in
-            if n > 0 then begin
-              output_bytes out_ch buf;
-              if n = Bytes.length buf then loop ()
-            end
-          in
-          loop ()));
+  copy_file_to ~src ~tmp;
   Unix.chmod tmp 0o755;
   Unix.rename tmp dst
 
@@ -237,188 +246,236 @@ let pick_update ~current available =
   | [] -> None
   | hd :: _ -> Some hd
 
-let update_cmd =
-  let run (c : Terms.common) registry use_registry jobs dev =
-    Harness.run @@ fun ~sw env ->
-    let {
-      Harness.proc_mgr;
-      fs;
-      clock;
-      sys;
-      platform;
-      os_key;
-      cache;
-      http_session;
-      _;
-    } =
-      Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
-        c.cache_dir
-    in
-    let data_dir = c.data_dir in
-    (* Always refresh on self-update. A bare [oi self update] right
-       after a schema bump (which clears the cache via {!Oi.Stamp})
-       leaves the reporepo's pin set untouched on disk but the
-       cache-side downloads gone — the solver then sees stale pin
-       material and fails with "no solution found". Forcing refresh
-       costs a few seconds of repo pull and matches what every user
-       was already doing manually. *)
-    let refresh = true in
-    let target = Oi.Selfexe.resolve_target () in
-    let oi_dst, oix_dst =
-      match target with
-      | In_place path ->
-          Oi.Say.step "Updating in-place: %s" path;
-          (path, Filename.dirname path / "oix")
-      | Fallback { current; install_dir } ->
-          Oi.Say.warn
-            "%s is not writable; installing into %s/oi (and oi/oix) instead"
-            current install_dir;
-          (install_dir / "oi", install_dir / "oix")
-    in
-    let conf =
-      Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
-    in
-    let { Terms.layer_remote; source_remote } =
-      Terms.remotes_of ~url:registry ~mode:use_registry
-    in
-    Oi.Pipeline.init_opam_root ~fs ~data_dir;
-    ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
-    (* In release mode, walk the freshly-refreshed reporepo for oi
-       releases newer than the running binary. If nothing strictly
-       newer (excluding [oi.dev]) is published, exit early — no point
-       solving and compiling just to reinstall the same version. *)
-    let pinned_update =
-      if dev then None
-      else
-        let current = oi_version () in
-        let available =
-          list_oi_versions ~reporepo_path:(Terms.reporepo_path ())
-        in
-        match pick_update ~current available with
-        | None ->
-            Oi.Say.ok "oi %s is up to date (no newer release in @avsm)" current;
-            exit 0
-        | Some v ->
-            Oi.Say.step "Updating oi %s -> %s" current v;
-            Some v
-    in
-    (* [--dev] overrides the reporepo's [@avsm/oi] pin with HEAD of
-       upstream main, materialised as a [--with=git+URL] dep. The pinned
-       URL contributes its own [*.opam] files as solver roots, which is
-       what we want — building exactly that tree. *)
-    let with_deps = if dev then [ dev_url () ] else [] in
-    let extra_deps, url_project =
-      Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
-    in
-    let extra_constraints =
-      let base = Oi.Project.Script.constraints extra_deps in
-      match pinned_update with
-      | None -> base
-      | Some v ->
-          OpamPackage.Name.Map.add
-            (OpamPackage.Name.of_string "oi")
-            (`Eq, OpamPackage.Version.of_string v)
-            base
-    in
-    let url_overlays =
-      Oi.Pipeline.filter_compatible_overlays
-        ~reporepo_path:(Terms.reporepo_path ()) ~toolchain:None
-        url_project.overlays
-    in
-    let with_repos =
-      if dev then url_overlays
-        (* TODO: drop the hardcoded [@avsm] overlay once [oi] is published
-           to opam-repository or to its own first-class overlay. Until
-           then, [@avsm/oi] is where the release pin lives — see
-           {!list_oi_versions} for the matching enumeration. *)
-      else [ "avsm" ]
-    in
-    let cli_extras =
-      Target.cli_extra_repos ~fs ~sys ?toolchain:None with_repos
-    in
-    let all_extras =
-      Target.merge_extras ~cli:cli_extras ~project:url_project.extra_repos
-    in
-    let tc_handles = with_repos |> List.sort_uniq String.compare in
-    let toolchain =
-      Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
-        ~override:None ~handles:tc_handles ()
-    in
-    let names =
-      if dev then
-        (* From the cloned URL: take every *.opam at the repo root as a
-           solver root. [oi] is the one we care about, but its sibling
-           libraries (d10, osrel) need to come along for the build. *)
-        List.map OpamPackage.Name.of_string url_project.roots
-      else [ OpamPackage.Name.of_string "oi" ]
-    in
-    let names =
-      Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain
-        names
-    in
-    let pipeline_env : Oi.Build_pipeline.env =
-      { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
-    in
-    let req : Oi.Build_pipeline.request =
-      {
-        targets =
-          [
-            Group
-              {
-                tokens = List.map OpamPackage.Name.to_string names;
-                handles = [];
-              };
-          ];
-        (* The [@avsm] overlay (or [url_overlays] in dev mode) carries
-           the [oi] pin, so the handle must reach
-           [packages_dirs_for_group] via [with_repos]. *)
-        with_repos;
-        pins = url_project.pins;
-        extra_repos = all_extras;
-        constraints = extra_constraints;
-        toolchain_override = None;
-        toolchain;
-        conf;
-        local_packages_dir = url_project.packages_dir;
-        project_root = None;
-        force_source = false;
-        refresh;
-      }
-    in
-    let layer_hashes =
-      Progress_ui.with_ui ~target:"oi"
-        ~clock:(clock :> _ Eio.Resource.t)
-        ~enabled:(Tty.is_tty ())
-      @@ fun reporter ->
-      let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
-      let _ : D10ir.Direct.result option =
-        Oi.Build_pipeline.build pipeline_env ~reporter
-          {
-            solved;
-            layer_remote;
-            source_remote;
-            jobs;
-            upload_archive_url = None;
-          }
-      in
-      Oi.Build_pipeline.layer_hashes solved
-    in
-    let prefix =
-      Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
-    in
-    Oi.Say.progress_clear ();
-    let new_oi = prefix / "bin" / "oi" in
-    let new_oix = prefix / "bin" / "oix" in
-    if not (Sys.file_exists new_oi) then
-      Oi.Error.fail_msg "build succeeded but %s is missing" new_oi;
-    install_binary ~fs ~src:new_oi ~dst:oi_dst;
-    Oi.Say.ok "installed oi → %s" oi_dst;
-    if Sys.file_exists new_oix then begin
-      install_binary ~fs ~src:new_oix ~dst:oix_dst;
-      Oi.Say.ok "installed oix → %s" oix_dst
-    end
-    else Oi.Say.warn "oix not found in built prefix (%s); skipping" new_oix
+(* Where do we land the new [oi] and [oix]? In-place when the currently
+   running binary is writable; otherwise warn and fall back to a writable
+   location under [$HOME]. *)
+let resolve_update_targets () =
+  let target = Oi.Selfexe.resolve_target () in
+  match target with
+  | Oi.Selfexe.In_place path ->
+      Oi.Say.step "Updating in-place: %s" path;
+      (path, Filename.dirname path / "oix")
+  | Fallback { current; install_dir } ->
+      Oi.Say.warn
+        "%s is not writable; installing into %s/oi (and oi/oix) instead"
+        current install_dir;
+      (install_dir / "oi", install_dir / "oix")
+
+(* In release mode, walk the freshly-refreshed reporepo for oi releases
+   newer than the running binary. If nothing strictly newer (excluding
+   [oi.dev]) is published, exit early — no point solving and compiling
+   just to reinstall the same version. *)
+let resolve_pinned_update ~dev =
+  if dev then None
+  else
+    let current = oi_version () in
+    let available = list_oi_versions ~reporepo_path:(Terms.reporepo_path ()) in
+    match pick_update ~current available with
+    | None ->
+        Oi.Say.ok "oi %s is up to date (no newer release in @avsm)" current;
+        exit 0
+    | Some v ->
+        Oi.Say.step "Updating oi %s -> %s" current v;
+        Some v
+
+(* Merge the static constraints from [--with]-derived deps with the
+   pinned update version (when [pinned_update] is set) so the solver is
+   nailed down to that exact [oi.<v>]. *)
+let constraints_with_pin ~pinned_update extra_deps =
+  let base = Oi.Project.Script.constraints extra_deps in
+  match pinned_update with
+  | None -> base
+  | Some v ->
+      OpamPackage.Name.Map.add
+        (OpamPackage.Name.of_string "oi")
+        (`Eq, OpamPackage.Version.of_string v)
+        base
+
+(* Solver roots: in [--dev] mode, every [*.opam] at the URL repo root
+   ([oi], [d10], [osrel] today); otherwise the single [oi] package. *)
+let root_names ~dev ~(url_project : Oi.Project.Url.t) ~toolchain =
+  let names =
+    if dev then List.map OpamPackage.Name.of_string url_project.roots
+    else [ OpamPackage.Name.of_string "oi" ]
   in
+  Oi.Pipeline.strip_compiler_roots_for_override ~override:None ~toolchain
+    names
+
+(* Everything the build_pipeline solve+build needs, computed up-front so
+   the solve helper is straight-line. *)
+type build_inputs = {
+  pipeline_env : Oi.Build_pipeline.env;
+  req : Oi.Build_pipeline.request;
+  layer_remote : D10.Layer.remote option;
+  source_remote : D10.Layer.remote option;
+  jobs : int option;
+  clock : float Eio.Time.clock_ty Eio.Resource.t;
+}
+
+let run_solve_build (b : build_inputs) =
+  Progress_ui.with_ui ~target:"oi"
+    ~clock:(b.clock :> _ Eio.Resource.t)
+    ~enabled:(Tty.is_tty ())
+  @@ fun reporter ->
+  let solved = Oi.Build_pipeline.solve b.pipeline_env ~reporter b.req in
+  let _ : D10ir.Direct.result option =
+    Oi.Build_pipeline.build b.pipeline_env ~reporter
+      {
+        solved;
+        layer_remote = b.layer_remote;
+        source_remote = b.source_remote;
+        jobs = b.jobs;
+        upload_archive_url = None;
+      }
+  in
+  Oi.Build_pipeline.layer_hashes solved
+
+(* Promote the freshly-built [oi] / [oix] binaries out of [prefix/bin]
+   into their final destinations, atomically. [oix] is best-effort: a
+   minimal build may not include it, in which case we warn and move on. *)
+let promote_binaries ~fs ~prefix ~oi_dst ~oix_dst =
+  Oi.Say.progress_clear ();
+  let new_oi = prefix / "bin" / "oi" in
+  let new_oix = prefix / "bin" / "oix" in
+  if not (Sys.file_exists new_oi) then
+    Oi.Error.fail_msg "build succeeded but %s is missing" new_oi;
+  install_binary ~fs ~src:new_oi ~dst:oi_dst;
+  Oi.Say.ok "installed oi → %s" oi_dst;
+  if Sys.file_exists new_oix then begin
+    install_binary ~fs ~src:new_oix ~dst:oix_dst;
+    Oi.Say.ok "installed oix → %s" oix_dst
+  end
+  else Oi.Say.warn "oix not found in built prefix (%s); skipping" new_oix
+
+(* Project / overlay context for the self-update solve: with_repos
+   handle list, merged extra_repos, pin constraints, [classify_with_args]
+   product, and the resolved toolchain. *)
+type update_ctx = {
+  with_repos : string list;
+  all_extras : Oi.Project.extra_repo list;
+  extra_constraints :
+    (OpamFormula.relop * OpamPackage.Version.t) OpamPackage.Name.Map.t;
+  url_project : Oi.Project.Url.t;
+  toolchain : Oi.Toolchain.info option;
+  conf : Oi.Solver.Ctx.conf;
+}
+
+(* Resolve the with-repo handles, overlays, extras, and toolchain for the
+   self-update solve. Pure book-keeping over [classify_with_args] +
+   [filter_compatible_overlays] + [pick_toolchain]; pulled out so
+   {!prepare_request} stays short enough for the [E005] limit. *)
+let resolve_update_ctx ~harness ~refresh ~dev ~pinned_update : update_ctx =
+  let { Harness.fs; sys; cache; platform; data_dir; _ } = harness in
+  let conf =
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
+  in
+  Oi.Pipeline.init_opam_root ~fs ~data_dir;
+  ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
+  (* [--dev] overrides the reporepo's [@avsm/oi] pin with HEAD of
+     upstream main, materialised as a [--with=git+URL] dep. The pinned
+     URL contributes its own [*.opam] files as solver roots, which is
+     what we want — building exactly that tree. *)
+  let with_deps = if dev then [ dev_url () ] else [] in
+  let extra_deps, url_project =
+    Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
+  in
+  let extra_constraints = constraints_with_pin ~pinned_update extra_deps in
+  let url_overlays =
+    Oi.Pipeline.filter_compatible_overlays
+      ~reporepo_path:(Terms.reporepo_path ()) ~toolchain:None
+      url_project.overlays
+  in
+  (* TODO: drop the hardcoded [@avsm] overlay once [oi] is published to
+     opam-repository or to its own first-class overlay. Until then,
+     [@avsm/oi] is where the release pin lives — see
+     {!list_oi_versions} for the matching enumeration. *)
+  let with_repos = if dev then url_overlays else [ "avsm" ] in
+  let cli_extras =
+    Target.cli_extra_repos ~fs ~sys ?toolchain:None with_repos
+  in
+  let all_extras =
+    Target.merge_extras ~cli:cli_extras ~project:url_project.extra_repos
+  in
+  let tc_handles = with_repos |> List.sort_uniq String.compare in
+  let toolchain =
+    Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
+      ~override:None ~handles:tc_handles ()
+  in
+  { with_repos; all_extras; extra_constraints; url_project; toolchain; conf }
+
+(* Build the [Build_pipeline.request] that drives the actual solve. Pulls
+   together the toolchain pick, with-repo / overlay handling, pin
+   metadata from [classify_with_args], and the [--dev] root expansion. *)
+let prepare_request ~harness ~refresh ~dev ~pinned_update =
+  let { Harness.proc_mgr; fs; clock; sys; os_key; cache; http_session;
+        data_dir; _ } = harness in
+  let ctx = resolve_update_ctx ~harness ~refresh ~dev ~pinned_update in
+  let names =
+    root_names ~dev ~url_project:ctx.url_project ~toolchain:ctx.toolchain
+  in
+  let pipeline_env : Oi.Build_pipeline.env =
+    { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
+  in
+  let req : Oi.Build_pipeline.request =
+    {
+      targets =
+        [
+          Group
+            {
+              tokens = List.map OpamPackage.Name.to_string names;
+              handles = [];
+            };
+        ];
+      (* The [@avsm] overlay (or [url_overlays] in dev mode) carries the
+         [oi] pin, so the handle must reach [packages_dirs_for_group]
+         via [with_repos]. *)
+      with_repos = ctx.with_repos;
+      pins = ctx.url_project.pins;
+      extra_repos = ctx.all_extras;
+      constraints = ctx.extra_constraints;
+      toolchain_override = None;
+      toolchain = ctx.toolchain;
+      conf = ctx.conf;
+      local_packages_dir = ctx.url_project.packages_dir;
+      project_root = None;
+      force_source = false;
+      refresh;
+    }
+  in
+  (pipeline_env, req)
+
+let update_run (c : Terms.common) ~registry ~use_registry ~jobs ~dev =
+  Harness.run @@ fun ~sw env ->
+  let harness =
+    Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
+      c.cache_dir
+  in
+  let { Harness.fs; sys; clock; cache; os_key; _ } = harness in
+  (* Always refresh on self-update. A bare [oi self update] right after
+     a schema bump (which clears the cache via {!Oi.Stamp}) leaves the
+     reporepo's pin set untouched on disk but the cache-side downloads
+     gone — the solver then sees stale pin material and fails with "no
+     solution found". Forcing refresh costs a few seconds of repo pull
+     and matches what every user was already doing manually. *)
+  let refresh = true in
+  let oi_dst, oix_dst = resolve_update_targets () in
+  let { Terms.layer_remote; source_remote } =
+    Terms.remotes_of ~url:registry ~mode:use_registry
+  in
+  let pinned_update = resolve_pinned_update ~dev in
+  let pipeline_env, req =
+    prepare_request ~harness ~refresh ~dev ~pinned_update
+  in
+  let layer_hashes =
+    run_solve_build
+      { pipeline_env; req; layer_remote; source_remote; jobs; clock }
+  in
+  let prefix =
+    Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
+  in
+  promote_binaries ~fs ~prefix ~oi_dst ~oix_dst
+
+let update_cmd =
   let dev =
     Arg.(
       value & flag
@@ -444,9 +501,12 @@ let update_cmd =
           `S "OPTIONS";
         ]
   in
+  let go c registry use_registry jobs dev =
+    update_run c ~registry ~use_registry ~jobs ~dev
+  in
   Cmd.v info
     Term.(
-      const run $ Terms.common $ Terms.registry $ Terms.use_registry
+      const go $ Terms.common $ Terms.registry $ Terms.use_registry
       $ Terms.jobs $ dev)
 
 let cmd =

@@ -160,54 +160,76 @@ let short_hash h =
    each hash expands; later occurrences render as a dim back-reference
    (the leading [\u{21B0}] arrow) with no children, so the tree stays
    small even with shared deps. *)
+let branch_str ~is_root ~is_last =
+  if is_root then "" else if is_last then "└── " else "├── "
+
+let node_label ~repeated (n : D10ir.Plan.node) =
+  if repeated then Fmt.str "\u{21B0} %s.%s" n.package.name n.package.version
+  else
+    Fmt.str "%s.%s  %s" n.package.name n.package.version
+      (short_hash n.layer_hash)
+
+let walk_kids ~parent_indent ~is_root ~is_last ~walk kids =
+  let n_kids = List.length kids in
+  let child_indent =
+    if is_root then ""
+    else parent_indent ^ if is_last then "    " else "│   "
+  in
+  List.iteri
+    (fun i child ->
+      walk ~parent_indent:child_indent ~is_last:(i = n_kids - 1) ~is_root:false
+        child)
+    kids
+
 let render_dep_tree (plan : D10ir.Plan.t) =
   let producers = D10ir.Plan.producers_table plan in
   let expanded : (string, unit) Hashtbl.t = Hashtbl.create 64 in
+  let kids_of (n : D10ir.Plan.node) =
+    List.filter_map (fun h -> Hashtbl.find_opt producers h) n.dep_layer_hashes
+  in
   let rec walk ~parent_indent ~is_last ~is_root (n : D10ir.Plan.node) =
     let key = D10ir.Layer_hash.to_string n.layer_hash in
     let repeated = Hashtbl.mem expanded key in
-    let branch = if is_root then "" else if is_last then "└── " else "├── " in
-    let label =
-      if repeated then Fmt.str "\u{21B0} %s.%s" n.package.name n.package.version
-      else
-        Fmt.str "%s.%s  %s" n.package.name n.package.version
-          (short_hash n.layer_hash)
-    in
+    let branch = branch_str ~is_root ~is_last in
+    let label = node_label ~repeated n in
     Fmt.pr "%s%s%s@." parent_indent branch label;
     if not repeated then begin
       Hashtbl.add expanded key ();
-      let kids =
-        List.filter_map
-          (fun h -> Hashtbl.find_opt producers h)
-          n.dep_layer_hashes
-      in
-      let n_kids = List.length kids in
-      let child_indent =
-        if is_root then ""
-        else parent_indent ^ if is_last then "    " else "│   "
-      in
-      List.iteri
-        (fun i child ->
-          walk ~parent_indent:child_indent
-            ~is_last:(i = n_kids - 1)
-            ~is_root:false child)
-        kids
+      walk_kids ~parent_indent ~is_root ~is_last ~walk (kids_of n)
     end
   in
   let roots =
     List.filter_map (fun h -> Hashtbl.find_opt producers h) plan.roots
   in
+  let render_roots rs =
+    let n_roots = List.length rs in
+    let render_one i r =
+      walk ~parent_indent:"" ~is_last:true ~is_root:true r;
+      if i < n_roots - 1 then Fmt.pr "@."
+    in
+    List.iteri render_one rs
+  in
   match roots with
   | [] -> Fmt.pr "  (no roots)@."
-  | rs ->
-      let n_roots = List.length rs in
-      List.iteri
-        (fun i r ->
-          walk ~parent_indent:"" ~is_last:true ~is_root:true r;
-          if i < n_roots - 1 then Fmt.pr "@.")
-        rs
+  | rs -> render_roots rs
 
-let render_recipe_summary (plan : D10ir.Plan.t) =
+let render_mount (m : D10ir.Plan.mount) =
+  let mode = match m.mode with `Ro -> "ro" | `Rw -> "rw" in
+  Fmt.pr "  %s [%s]@.    source : %s@.    target : %s@." m.name mode m.source
+    m.target;
+  if m.env <> [] then begin
+    Fmt.pr "    env    :@.";
+    List.iter (fun e -> Fmt.pr "      %s@." e) m.env
+  end
+
+let render_node (n : D10ir.Plan.node) =
+  Fmt.pr "  %s.%s @.    layer    : %s@.    deps     : %d@." n.package.name
+    n.package.version (short_hash n.layer_hash)
+    (List.length n.dep_layer_hashes);
+  Fmt.pr "    archive  : %s (sha=%s..)@." n.archive.path
+    (String.sub n.archive.sha256 0 8)
+
+let render_recipe_header (plan : D10ir.Plan.t) =
   Fmt.pr "Recipe@.@.";
   Fmt.pr "  schema_version : %d@." plan.schema_version;
   Fmt.pr "  os_key         : %s@." plan.os_key;
@@ -216,29 +238,19 @@ let render_recipe_summary (plan : D10ir.Plan.t) =
   Fmt.pr "  archive_root   : %s@." plan.archive_root;
   Fmt.pr "  nodes          : %d@." (List.length plan.nodes);
   Fmt.pr "  roots          : %d@." (List.length plan.roots);
-  Fmt.pr "  mounts         : %d@." (List.length plan.mounts);
-  if plan.mounts <> [] then begin
+  Fmt.pr "  mounts         : %d@." (List.length plan.mounts)
+
+let render_mounts_section mounts =
+  if mounts <> [] then begin
     Fmt.pr "@.Mounts@.@.";
-    List.iter
-      (fun (m : D10ir.Plan.mount) ->
-        let mode = match m.mode with `Ro -> "ro" | `Rw -> "rw" in
-        Fmt.pr "  %s [%s]@.    source : %s@.    target : %s@." m.name mode
-          m.source m.target;
-        if m.env <> [] then begin
-          Fmt.pr "    env    :@.";
-          List.iter (fun e -> Fmt.pr "      %s@." e) m.env
-        end)
-      plan.mounts
-  end;
+    List.iter render_mount mounts
+  end
+
+let render_recipe_summary (plan : D10ir.Plan.t) =
+  render_recipe_header plan;
+  render_mounts_section plan.mounts;
   Fmt.pr "@.Nodes@.@.";
-  List.iter
-    (fun (n : D10ir.Plan.node) ->
-      Fmt.pr "  %s.%s @.    layer    : %s@.    deps     : %d@." n.package.name
-        n.package.version (short_hash n.layer_hash)
-        (List.length n.dep_layer_hashes);
-      Fmt.pr "    archive  : %s (sha=%s..)@." n.archive.path
-        (String.sub n.archive.sha256 0 8))
-    plan.nodes
+  List.iter render_node plan.nodes
 
 let show_run dir plan_view =
   let plan = load_recipe_dir dir in

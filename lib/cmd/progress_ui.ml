@@ -90,6 +90,30 @@ let bar_with_color_bytes ~inner = 3 + ansi_byte_overhead + (inner * 3) + 3
    one cell behind it. The body is solid "█" in full camel; the
    empty trailing portion is "░" in dim camel. At [filled = inner]
    the gradient is suppressed for a clean 100% block. *)
+(* Unicode block characters used by [render_bar]. Defined once so the
+   helper functions can reference them without the rendering body
+   re-declaring them on every call. *)
+let block_full = "\226\150\136" (* "█" U+2588 *)
+let block_dark = "\226\150\147" (* "▓" U+2593 *)
+let block_mid = "\226\150\146" (* "▒" U+2592 *)
+let block_shade = "\226\150\145" (* "░" U+2591 *)
+
+(* Compute how many cells in the bar take each of the four shades, given
+   the [filled] count out of [inner]. The leading edge is a 2-cell
+   gradient ([dark] + [mid]) for a softer tip; [filled = 0] / [filled =
+   inner] / [filled = 1] are special-cased so the gradient never spills
+   past the bar ends. *)
+let bar_segment_counts ~inner ~filled =
+  if filled = 0 then (0, 0, 0, inner)
+  else if filled = inner then (inner, 0, 0, 0)
+  else if filled = 1 then (0, 0, 1, inner - 1)
+  else (filled - 2, 1, 1, inner - filled)
+
+let add_n buf s n =
+  for _ = 1 to n do
+    Buffer.add_string buf s
+  done
+
 let render_bar ~width (current : int) (total : int) =
   if width <= 2 then String.make width ' '
   else
@@ -100,46 +124,19 @@ let render_bar ~width (current : int) (total : int) =
         let f = current * inner / max 1 total in
         if f < 0 then 0 else if f > inner then inner else f
     in
-    let block =
-      "\226\150\136"
-      (* "█" U+2588 *)
-    in
-    let dark =
-      "\226\150\147"
-      (* "▓" U+2593 *)
-    in
-    let mid =
-      "\226\150\146"
-      (* "▒" U+2592 *)
-    in
-    let shade =
-      "\226\150\145"
-      (* "░" U+2591 *)
-    in
     let n_solid, n_dark, n_mid, n_empty =
-      if filled = 0 then (0, 0, 0, inner)
-      else if filled = inner then (inner, 0, 0, 0)
-      else if filled = 1 then (0, 0, 1, inner - 1)
-      else (filled - 2, 1, 1, inner - filled)
+      bar_segment_counts ~inner ~filled
     in
     let buf = Buffer.create (bar_with_color_bytes ~inner) in
     Buffer.add_string buf "│";
     Buffer.add_string buf ansi_camel_full;
-    for _ = 1 to n_solid do
-      Buffer.add_string buf block
-    done;
+    add_n buf block_full n_solid;
     Buffer.add_string buf ansi_camel_mid;
-    for _ = 1 to n_dark do
-      Buffer.add_string buf dark
-    done;
+    add_n buf block_dark n_dark;
     Buffer.add_string buf ansi_camel_glow;
-    for _ = 1 to n_mid do
-      Buffer.add_string buf mid
-    done;
+    add_n buf block_mid n_mid;
     Buffer.add_string buf ansi_camel_dim;
-    for _ = 1 to n_empty do
-      Buffer.add_string buf shade
-    done;
+    add_n buf block_shade n_empty;
     Buffer.add_string buf ansi_reset;
     Buffer.add_string buf "│";
     Buffer.contents buf
@@ -861,205 +858,220 @@ let recompute_phase_bytes_done s =
   let in_flight = Hashtbl.fold (fun _ b acc -> Int64.add acc b) s.fetches 0L in
   s.phase_bytes_done <- Int64.add s.phase_bytes_done_base in_flight
 
+(* Drop every entry from [tbl], finalising each reporter and removing
+   its line from the display. Used at phase boundaries to clear orphan
+   fetch / solve rows. *)
+let drop_rows s ~get_reporter tbl =
+  Hashtbl.iter
+    (fun _ r ->
+      let rep = get_reporter r in
+      (try Progress.Reporter.finalise rep
+       with Sys_error _ | Failure _ -> ());
+      try Progress.Display.remove_line s.display rep
+      with Sys_error _ | Failure _ -> ())
+    tbl;
+  Hashtbl.clear tbl
+
+(* A new phase clears the per-phase status text and any in-flight fetch
+   state, but does NOT reset the count fractions: the bar's [N/T] is the
+   sum of fetch + build tasks across the whole pipeline, so the user
+   sees one smooth progression instead of a denominator jump on every
+   phase transition. *)
+let on_phase_started s ~phase =
+  let new_id = phase_short phase in
+  s.phase_label <- new_id;
+  if s.phase_id <> new_id then begin
+    s.phase_id <- new_id;
+    Hashtbl.clear s.fetches;
+    (* In-flight fetch-row state clears at phase boundaries (orphan rows
+       from a previous fetch phase shouldn't bleed into the next), but
+       we deliberately do NOT reset [phase_bytes_total /
+       phase_bytes_done / fetch_sizes] here — for [oi build --all] / [oi
+       build @overlay] flows that bracket multiple per-group fetch
+       phases inside one invocation, the user wants to see a cumulative
+       byte total across all groups, not a fresh counter every time
+       another group's fetch begins. *)
+    drop_rows s
+      ~get_reporter:(fun (r : fetch_row) -> r.fetch_reporter)
+      s.fetch_rows;
+    drop_rows s ~get_reporter:(fun (r : row) -> r.reporter) s.solve_rows
+  end;
+  s.status_msg <- "";
+  push_agg s
+
+let on_total_estimate s ~fetches ~builds ~fetch_bytes =
+  let first_lock = not s.totals_locked in
+  s.fetch_total <- fetches;
+  s.build_total <- builds;
+  if first_lock then begin
+    (* Initial lock: reset bases + done counters so the upfront values
+       are authoritative and subsequent per-task events drive
+       [fetch_done] / [build_done] from zero. Re-fires (cmdliner
+       refining the totals once exact figures are known) leave the
+       in-flight counters alone. *)
+    s.fetch_total_base <- 0;
+    s.build_total_base <- 0;
+    s.fetch_done_base <- 0;
+    s.build_done_base <- 0;
+    s.fetch_done <- 0;
+    s.build_done <- 0;
+    s.totals_locked <- true
+  end;
+  (* Pin the byte denominator to the upfront sum so the [X MB / Y MB]
+     readout stops creeping as each per-group fetch phase emits its
+     [Fetch_started] events. A re-fire with [fetch_bytes = 0L] leaves
+     the existing total alone (callers use that to refine [builds]
+     only). *)
+  if Int64.compare fetch_bytes 0L > 0 then s.phase_bytes_total <- fetch_bytes;
+  push_agg s
+
+let on_aggregate s ~phase ~current ~total =
+  (match (phase : Oi.Build_progress.phase) with
+  | Solving ->
+      s.solve_total <- total;
+      s.solve_done <- current
+  | Fetching ->
+      (* Once totals are locked the agg denominator is authoritative;
+         ignore per-group [total] updates, but still let [current] drive
+         the done count if no upfront pre-pass produced finer per-task
+         events. *)
+      if not s.totals_locked then begin
+        s.fetch_total <- total;
+        s.fetch_done <- current
+      end
+  | Building ->
+      if not s.totals_locked then begin
+        s.build_total <- total;
+        s.build_done <- current
+      end
+  | Baking | Assembling -> ());
+  push_agg s
+
+let on_fetch_started s ~key ~pkg ~size =
+  let now = Eio.Time.now s.clock in
+  let new_key = not (Hashtbl.mem s.fetches key) in
+  Hashtbl.replace s.fetches key 0L;
+  if not (Hashtbl.mem s.fetch_sizes key) then begin
+    Hashtbl.replace s.fetch_sizes key size;
+    (* When [totals_locked], an upfront [Total_estimate] already pinned
+       [phase_bytes_total]; per-fetch sizes accumulate into the per-row
+       reporters but don't grow the agg denominator. *)
+    if (not s.totals_locked) && Int64.compare size 0L > 0 then
+      s.phase_bytes_total <- Int64.add s.phase_bytes_total size
+  end;
+  if new_key then s.running <- s.running + 1;
+  add_fetch_row s ~now ~key ~pkg ~size;
+  recompute_phase_bytes_done s;
+  push_agg s
+
+(* Refine per-fetch declared size if [total] is now known and we
+   previously didn't have one. Counts toward the phase byte total too so
+   the agg bar's bytes-based fill stays accurate. *)
+let refine_fetch_size s ~key ~total =
+  if Int64.compare total 0L > 0 then
+    match Hashtbl.find_opt s.fetch_sizes key with
+    | Some t when Int64.compare t 0L > 0 -> ()
+    | _ ->
+        Hashtbl.replace s.fetch_sizes key total;
+        if not s.totals_locked then
+          s.phase_bytes_total <- Int64.add s.phase_bytes_total total
+
+let on_fetch_progress s ~key ~bytes ~total =
+  if Hashtbl.mem s.fetches key then begin
+    Hashtbl.replace s.fetches key bytes;
+    refine_fetch_size s ~key ~total;
+    update_fetch_row s ~key ~bytes;
+    recompute_phase_bytes_done s;
+    push_agg s
+  end
+
+let on_fetch_finished s ~key =
+  (* Fold the in-flight bytes into the baseline so subsequent
+     [recompute_phase_bytes_done] still includes them after the entry is
+     dropped. If the declared size is known and larger, prefer that as
+     the baseline contribution. *)
+  let final_bytes =
+    match Hashtbl.find_opt s.fetches key with Some b -> b | None -> 0L
+  in
+  let declared =
+    match Hashtbl.find_opt s.fetch_sizes key with
+    | Some s when Int64.compare s 0L > 0 -> s
+    | _ -> final_bytes
+  in
+  let contribution =
+    if Int64.compare declared final_bytes > 0 then declared else final_bytes
+  in
+  s.phase_bytes_done_base <-
+    Int64.add s.phase_bytes_done_base contribution;
+  if Hashtbl.mem s.fetches key then s.running <- max 0 (s.running - 1);
+  Hashtbl.remove s.fetches key;
+  drop_fetch_row s ~key;
+  recompute_phase_bytes_done s;
+  (* When totals are locked by an upfront [Total_estimate], [fetch_done]
+     climbs from per-task completion events; otherwise it's driven by
+     the [Aggregate] events that fetch loops emit alongside each
+     [Fetch_finished]. *)
+  if s.totals_locked then s.fetch_done <- s.fetch_done + 1;
+  push_agg s
+
+let on_solve_started s ~label =
+  if not (Hashtbl.mem s.solve_rows label) then begin
+    let now = Eio.Time.now s.clock in
+    let r =
+      Progress.Display.add_line s.display
+        (row_line ~init_phase:"solving" ~pkg:label ())
+    in
+    let row = { started_at = now; phase = "solving"; reporter = r } in
+    Hashtbl.add s.solve_rows label row;
+    push_row row ~now "solving";
+    s.running <- s.running + 1;
+    push_agg s
+  end
+
+let on_solve_finished s ~label =
+  match Hashtbl.find_opt s.solve_rows label with
+  | None -> ()
+  | Some r ->
+      Hashtbl.remove s.solve_rows label;
+      (try Progress.Reporter.finalise r.reporter
+       with Sys_error _ | Failure _ -> ());
+      (try Progress.Display.remove_line s.display r.reporter
+       with Sys_error _ | Failure _ -> ());
+      s.running <- max 0 (s.running - 1);
+      push_agg s
+
+let on_plan_ready s (plan : D10ir.Plan.t) =
+  (* Seed the build denominator early so the agg bar shows the combined
+     fetch + build total even before D10ir's [Plan_started] arrives.
+     With locked totals (upfront [Total_estimate]) the value is already
+     authoritative, so don't override. *)
+  if not s.totals_locked then s.build_total <- List.length plan.nodes;
+  push_agg s
+
 let handle_event s (e : Oi.Build_progress.event) =
   match e with
   | Phase_started { phase; label = _ } ->
-      with_lock s (fun () ->
-          let new_id = phase_short phase in
-          s.phase_label <- new_id;
-          (* A new phase clears the per-phase status text and any
-             in-flight fetch state, but does NOT reset the count
-             fractions: the bar's [N/T] is the sum of fetch + build
-             tasks across the whole pipeline, so the user sees one
-             smooth progression instead of a denominator jump on
-             every phase transition. *)
-          if s.phase_id <> new_id then begin
-            s.phase_id <- new_id;
-            Hashtbl.clear s.fetches;
-            (* In-flight fetch-row state clears at phase boundaries
-               (orphan rows from a previous fetch phase shouldn't
-               bleed into the next), but we deliberately do NOT
-               reset [phase_bytes_total / phase_bytes_done /
-               fetch_sizes] here — for [oi build --all] / [oi build
-               @overlay] flows that bracket multiple per-group fetch
-               phases inside one invocation, the user wants to see a
-               cumulative byte total across all groups, not a fresh
-               counter every time another group's fetch begins. *)
-            let drop ~get_reporter tbl =
-              Hashtbl.iter
-                (fun _ r ->
-                  let rep = get_reporter r in
-                  (try Progress.Reporter.finalise rep
-                   with Sys_error _ | Failure _ -> ());
-                  try Progress.Display.remove_line s.display rep
-                  with Sys_error _ | Failure _ -> ())
-                tbl;
-              Hashtbl.clear tbl
-            in
-            drop
-              ~get_reporter:(fun (r : fetch_row) -> r.fetch_reporter)
-              s.fetch_rows;
-            drop ~get_reporter:(fun (r : row) -> r.reporter) s.solve_rows
-          end;
-          s.status_msg <- "";
-          push_agg s)
+      with_lock s (fun () -> on_phase_started s ~phase)
   | Phase_done _ -> ()
   | Status msg ->
       with_lock s (fun () ->
           s.status_msg <- msg;
           push_agg s)
   | Total_estimate { fetches; builds; fetch_bytes } ->
-      with_lock s (fun () ->
-          let first_lock = not s.totals_locked in
-          s.fetch_total <- fetches;
-          s.build_total <- builds;
-          if first_lock then begin
-            (* Initial lock: reset bases + done counters so the
-               upfront values are authoritative and subsequent
-               per-task events drive [fetch_done] / [build_done]
-               from zero. Re-fires (cmdliner refining the totals
-               once exact figures are known) leave the in-flight
-               counters alone. *)
-            s.fetch_total_base <- 0;
-            s.build_total_base <- 0;
-            s.fetch_done_base <- 0;
-            s.build_done_base <- 0;
-            s.fetch_done <- 0;
-            s.build_done <- 0;
-            s.totals_locked <- true
-          end;
-          (* Pin the byte denominator to the upfront sum so the
-             [X MB / Y MB] readout stops creeping as each per-group
-             fetch phase emits its [Fetch_started] events. A re-fire
-             with [fetch_bytes = 0L] leaves the existing total
-             alone (callers use that to refine [builds] only). *)
-          if Int64.compare fetch_bytes 0L > 0 then
-            s.phase_bytes_total <- fetch_bytes;
-          push_agg s)
+      with_lock s (fun () -> on_total_estimate s ~fetches ~builds ~fetch_bytes)
   | Aggregate { phase; current; total } ->
-      with_lock s (fun () ->
-          (match phase with
-          | Solving ->
-              s.solve_total <- total;
-              s.solve_done <- current
-          | Fetching ->
-              (* Once totals are locked the agg denominator is
-                  authoritative; ignore per-group [total] updates,
-                  but still let [current] drive the done count if no
-                  upfront pre-pass produced finer per-task events. *)
-              if not s.totals_locked then begin
-                s.fetch_total <- total;
-                s.fetch_done <- current
-              end
-          | Building ->
-              if not s.totals_locked then begin
-                s.build_total <- total;
-                s.build_done <- current
-              end
-          | Baking | Assembling -> ());
-          push_agg s)
+      with_lock s (fun () -> on_aggregate s ~phase ~current ~total)
   | Fetch_started { key; pkg; size; _ } ->
-      with_lock s (fun () ->
-          let now = Eio.Time.now s.clock in
-          let new_key = not (Hashtbl.mem s.fetches key) in
-          Hashtbl.replace s.fetches key 0L;
-          if not (Hashtbl.mem s.fetch_sizes key) then begin
-            Hashtbl.replace s.fetch_sizes key size;
-            (* When [totals_locked], an upfront [Total_estimate]
-               already pinned [phase_bytes_total]; per-fetch sizes
-               accumulate into the per-row reporters but don't grow
-               the agg denominator. *)
-            if (not s.totals_locked) && Int64.compare size 0L > 0 then
-              s.phase_bytes_total <- Int64.add s.phase_bytes_total size
-          end;
-          if new_key then s.running <- s.running + 1;
-          add_fetch_row s ~now ~key ~pkg ~size;
-          recompute_phase_bytes_done s;
-          push_agg s)
+      with_lock s (fun () -> on_fetch_started s ~key ~pkg ~size)
   | Fetch_progress { key; bytes; total; _ } ->
-      with_lock s (fun () ->
-          if Hashtbl.mem s.fetches key then begin
-            Hashtbl.replace s.fetches key bytes;
-            (* Refine per-fetch declared size if [total] is now known
-               and we previously didn't have one. Counts toward the
-               phase byte total too so the agg bar's bytes-based
-               fill stays accurate. *)
-            (if Int64.compare total 0L > 0 then
-               match Hashtbl.find_opt s.fetch_sizes key with
-               | Some t when Int64.compare t 0L > 0 -> ()
-               | _ ->
-                   Hashtbl.replace s.fetch_sizes key total;
-                   if not s.totals_locked then
-                     s.phase_bytes_total <- Int64.add s.phase_bytes_total total);
-            update_fetch_row s ~key ~bytes;
-            recompute_phase_bytes_done s;
-            push_agg s
-          end)
+      with_lock s (fun () -> on_fetch_progress s ~key ~bytes ~total)
   | Fetch_finished { key; _ } ->
-      with_lock s (fun () ->
-          (* Fold the in-flight bytes into the baseline so subsequent
-             [recompute_phase_bytes_done] still includes them after
-             the entry is dropped. If the declared size is known and
-             larger, prefer that as the baseline contribution. *)
-          let final_bytes =
-            match Hashtbl.find_opt s.fetches key with Some b -> b | None -> 0L
-          in
-          let declared =
-            match Hashtbl.find_opt s.fetch_sizes key with
-            | Some s when Int64.compare s 0L > 0 -> s
-            | _ -> final_bytes
-          in
-          let contribution =
-            if Int64.compare declared final_bytes > 0 then declared
-            else final_bytes
-          in
-          s.phase_bytes_done_base <-
-            Int64.add s.phase_bytes_done_base contribution;
-          if Hashtbl.mem s.fetches key then s.running <- max 0 (s.running - 1);
-          Hashtbl.remove s.fetches key;
-          drop_fetch_row s ~key;
-          recompute_phase_bytes_done s;
-          (* When totals are locked by an upfront [Total_estimate],
-             [fetch_done] climbs from per-task completion events;
-             otherwise it's driven by the [Aggregate] events that
-             fetch loops emit alongside each [Fetch_finished]. *)
-          if s.totals_locked then s.fetch_done <- s.fetch_done + 1;
-          push_agg s)
+      with_lock s (fun () -> on_fetch_finished s ~key)
   | Solve_started { label } ->
-      with_lock s (fun () ->
-          if not (Hashtbl.mem s.solve_rows label) then begin
-            let now = Eio.Time.now s.clock in
-            let r =
-              Progress.Display.add_line s.display
-                (row_line ~init_phase:"solving" ~pkg:label ())
-            in
-            let row = { started_at = now; phase = "solving"; reporter = r } in
-            Hashtbl.add s.solve_rows label row;
-            push_row row ~now "solving";
-            s.running <- s.running + 1;
-            push_agg s
-          end)
+      with_lock s (fun () -> on_solve_started s ~label)
   | Solve_finished { label } ->
-      with_lock s (fun () ->
-          match Hashtbl.find_opt s.solve_rows label with
-          | None -> ()
-          | Some r ->
-              Hashtbl.remove s.solve_rows label;
-              (try Progress.Reporter.finalise r.reporter
-               with Sys_error _ | Failure _ -> ());
-              (try Progress.Display.remove_line s.display r.reporter
-               with Sys_error _ | Failure _ -> ());
-              s.running <- max 0 (s.running - 1);
-              push_agg s)
-  | Plan_ready plan ->
-      with_lock s (fun () ->
-          (* Seed the build denominator early so the agg bar shows
-             the combined fetch + build total even before D10ir's
-             [Plan_started] arrives. With locked totals (upfront
-             [Total_estimate]) the value is already authoritative,
-             so don't override. *)
-          if not s.totals_locked then s.build_total <- List.length plan.nodes;
-          push_agg s)
+      with_lock s (fun () -> on_solve_finished s ~label)
+  | Plan_ready plan -> with_lock s (fun () -> on_plan_ready s plan)
   | Build e -> handle_build_event s e
   | Build_summary _ -> ()
 
@@ -1071,72 +1083,189 @@ let handle_event s (e : Oi.Build_progress.event) =
    the standard [Log.app] / [Log.info] sinks so the transcript shows
    progress. *)
 
+let plain_phase_label = function
+  | Oi.Build_progress.Solving -> "solving"
+  | Fetching -> "fetching"
+  | Baking -> "baking"
+  | Building -> "building"
+  | Assembling -> "assembling"
+
+let plain_log_build (module L : Logs.LOG) (de : D10ir.Direct.event) =
+  match de with
+  | Plan_started { total } ->
+      L.app (fun m -> m "▸ Building %d package(s)" total)
+  | Node_started { node } ->
+      L.info (fun m -> m "  → %s.%s" node.package.name node.package.version)
+  | Node_phase _ -> ()
+  | Node_queued _ -> ()
+  | Node_cached { node } ->
+      L.info (fun m ->
+          m "  ✓ %s.%s cached" node.package.name node.package.version)
+  | Node_built { node; duration_s; _ } ->
+      L.app (fun m ->
+          m "  ✓ %s.%s built (%.1fs)" node.package.name node.package.version
+            duration_s)
+  | Node_failed { node; phase; log_path; _ } ->
+      L.app (fun m ->
+          m "  ✗ %s.%s failed in phase %s — see %s" node.package.name
+            node.package.version
+            (D10ir.Direct.string_of_phase phase)
+            log_path)
+  | Node_skipped { node; reason } ->
+      L.info (fun m ->
+          m "  ⊘ %s.%s skipped (%s)" node.package.name node.package.version
+            reason)
+  | Plan_done { built; cached; failed; skipped } ->
+      L.app (fun m ->
+          m "▸ Built %d  Cached %d  Failed %d  Skipped %d" built cached failed
+            skipped)
+
+let plain_log_event (module L : Logs.LOG) (e : Oi.Build_progress.event) =
+  match e with
+  | Phase_started { phase; label } ->
+      L.app (fun m -> m "▸ %s: %s" (plain_phase_label phase) label)
+  | Phase_done phase ->
+      L.info (fun m -> m "✓ %s done" (plain_phase_label phase))
+  | Status msg when msg <> "" -> L.info (fun m -> m "  %s" msg)
+  | Status _ -> ()
+  | Total_estimate { fetches; builds; _ } ->
+      L.app (fun m -> m "▸ Plan: %d fetches, %d builds" fetches builds)
+  | Solve_started { label } -> L.info (fun m -> m "  solving %s" label)
+  | Solve_finished { label } -> L.info (fun m -> m "  solved %s" label)
+  | Fetch_started { key; pkg; _ } ->
+      L.info (fun m -> m "  fetch %s (%s)" pkg key)
+  | Fetch_finished { key; _ } -> L.info (fun m -> m "  fetched %s" key)
+  | Plan_ready _ -> ()
+  | Aggregate _ -> ()
+  | Fetch_progress _ -> ()
+  | Build de -> plain_log_build (module L) de
+  | Build_summary _ -> ()
+
 let plain_reporter () : Oi.Build_progress.reporter =
   let log_src = Logs.Src.create "oi.build" in
   let module L = (val Logs.src_log log_src : Logs.LOG) in
-  let phase_label = function
-    | Oi.Build_progress.Solving -> "solving"
-    | Fetching -> "fetching"
-    | Baking -> "baking"
-    | Building -> "building"
-    | Assembling -> "assembling"
-  in
-  let event (e : Oi.Build_progress.event) =
-    match e with
-    | Phase_started { phase; label } ->
-        L.app (fun m -> m "▸ %s: %s" (phase_label phase) label)
-    | Phase_done phase -> L.info (fun m -> m "✓ %s done" (phase_label phase))
-    | Status msg when msg <> "" -> L.info (fun m -> m "  %s" msg)
-    | Status _ -> ()
-    | Total_estimate { fetches; builds; _ } ->
-        L.app (fun m -> m "▸ Plan: %d fetches, %d builds" fetches builds)
-    | Solve_started { label } -> L.info (fun m -> m "  solving %s" label)
-    | Solve_finished { label } -> L.info (fun m -> m "  solved %s" label)
-    | Fetch_started { key; pkg; _ } ->
-        L.info (fun m -> m "  fetch %s (%s)" pkg key)
-    | Fetch_finished { key; _ } -> L.info (fun m -> m "  fetched %s" key)
-    | Plan_ready _ -> ()
-    | Aggregate _ -> ()
-    | Fetch_progress _ -> ()
-    | Build de -> (
-        match de with
-        | Plan_started { total } ->
-            L.app (fun m -> m "▸ Building %d package(s)" total)
-        | Node_started { node } ->
-            L.info (fun m ->
-                m "  → %s.%s" node.package.name node.package.version)
-        | Node_phase _ -> ()
-        | Node_queued _ -> ()
-        | Node_cached { node } ->
-            L.info (fun m ->
-                m "  ✓ %s.%s cached" node.package.name node.package.version)
-        | Node_built { node; duration_s; _ } ->
-            L.app (fun m ->
-                m "  ✓ %s.%s built (%.1fs)" node.package.name
-                  node.package.version duration_s)
-        | Node_failed { node; phase; log_path; _ } ->
-            L.app (fun m ->
-                m "  ✗ %s.%s failed in phase %s — see %s" node.package.name
-                  node.package.version
-                  (D10ir.Direct.string_of_phase phase)
-                  log_path)
-        | Node_skipped { node; reason } ->
-            L.info (fun m ->
-                m "  ⊘ %s.%s skipped (%s)" node.package.name
-                  node.package.version reason)
-        | Plan_done { built; cached; failed; skipped } ->
-            L.app (fun m ->
-                m "▸ Built %d  Cached %d  Failed %d  Skipped %d" built cached
-                  failed skipped))
-    | Build_summary _ -> ()
-  in
-  { event }
+  { event = plain_log_event (module L) }
 
 (* -- Lifecycle --------------------------------------------------------- *)
 
+(* Initial bar state. All counters start at zero; the various
+   [Phase_started] / [Total_estimate] / [Aggregate] events ratchet them
+   up over the course of a build. *)
+let fresh_state ~display ~clock ~agg ~target : state =
+  {
+    display;
+    clock;
+    agg;
+    mutex = Mutex.create ();
+    rows = Hashtbl.create 16;
+    solve_rows = Hashtbl.create 16;
+    fetches = Hashtbl.create 16;
+    fetch_sizes = Hashtbl.create 16;
+    fetch_rows = Hashtbl.create 16;
+    solve_total = 0;
+    solve_done = 0;
+    fetch_total = 0;
+    fetch_done = 0;
+    build_total = 0;
+    build_done = 0;
+    solve_total_base = 0;
+    solve_done_base = 0;
+    fetch_total_base = 0;
+    fetch_done_base = 0;
+    build_total_base = 0;
+    build_done_base = 0;
+    totals_locked = false;
+    running = 0;
+    running_hist = Array.make agg_spark_w 0;
+    (* Empty phase_label until the first [Phase_started] fires;
+       [composed_label] then renders just the target name. *)
+    phase_label = "";
+    phase_id = "";
+    status_msg = "";
+    phase_bytes_total = 0L;
+    phase_bytes_done = 0L;
+    phase_bytes_done_base = 0L;
+    target_label = target;
+  }
+
+(* Tear down the live display when the body of {!with_ui} returns or
+   raises. Removes every dynamic sub-row (per-build, per-solve,
+   per-fetch) but leaves the aggregate row in place: when the display
+   has no rows left, [Progress.Display.finalise] computes [move_up
+   (n-1) = move_up -1] and emits a malformed [\x1b[-1A] escape that
+   some terminals render literally as "[-1A". Letting [finalise] tear
+   down the one remaining agg row keeps the count non-negative. *)
+let cleanup_ui (s : state) =
+  let display = s.display in
+  with_lock s (fun () ->
+      let drop_reporter rep =
+        (try Progress.Reporter.finalise rep
+         with Sys_error _ | Failure _ -> ());
+        try Progress.Display.remove_line display rep
+        with Sys_error _ | Failure _ -> ()
+      in
+      let drop_table ~get_reporter tbl =
+        Hashtbl.iter (fun _ r -> drop_reporter (get_reporter r)) tbl;
+        Hashtbl.clear tbl
+      in
+      drop_table ~get_reporter:(fun (r : row) -> r.reporter) s.rows;
+      drop_table ~get_reporter:(fun (r : row) -> r.reporter) s.solve_rows;
+      drop_table
+        ~get_reporter:(fun (r : fetch_row) -> r.fetch_reporter)
+        s.fetch_rows;
+      Hashtbl.clear s.fetches;
+      Hashtbl.clear s.fetch_sizes;
+      try Progress.Reporter.finalise s.agg
+      with Sys_error _ | Failure _ -> ());
+  Logs_progress.clear_active ();
+  Oi.Say.set_around_emit (fun f -> f ());
+  try Progress.Display.finalise display with Sys_error _ | Failure _ -> ()
+
+(* One iteration of the bar refresh loop: advance per-row clocks and
+   resample the sparkline every ~5 ticks (~500ms); [push_agg] so the new
+   sparkline frame paints. Errors from the underlying progress display
+   are swallowed so a transient I/O issue doesn't kill the bar. *)
+let tick_once s ~tick_count =
+  try
+    with_lock s (fun () ->
+        tick_rows s;
+        if tick_count mod 5 = 0 then begin
+          sample_running s;
+          push_agg s
+        end)
+  with Sys_error _ | Failure _ -> ()
+
+(* Background tick fiber: while [done_p] is unresolved, sleep ~100ms,
+   advance per-row clocks, and resample the sparkline every ~500ms. *)
+let tick_fiber s ~clock ~done_p =
+  let tick_count = ref 0 in
+  let rec loop () =
+    if Eio.Promise.is_resolved done_p then ()
+    else begin
+      (try Eio.Time.sleep clock 0.1 with Eio.Cancel.Cancelled _ -> ());
+      incr tick_count;
+      tick_once s ~tick_count:!tick_count;
+      loop ()
+    end
+  in
+  loop ()
+
+let run_ui (s : state) ~reporter ~clock f =
+  let done_p, done_r = Eio.Promise.create () in
+  let result = ref None in
+  Eio.Fiber.both
+    (fun () -> tick_fiber s ~clock ~done_p)
+    (fun () ->
+      (try result := Some (f reporter)
+       with exn ->
+         Eio.Promise.resolve done_r ();
+         raise exn);
+      Eio.Promise.resolve done_r ());
+  match !result with Some r -> r | None -> assert false
+
 let with_ui ?(target = "") ~clock ~enabled f =
   if not enabled then f (plain_reporter ())
-  else begin
+  else
     let cfg =
       Progress.Config.v ~ppf:Format.err_formatter ~persistent:false ()
     in
@@ -1146,109 +1275,10 @@ let with_ui ?(target = "") ~clock ~enabled f =
     Logs_progress.set_active display;
     Oi.Say.set_around_emit Logs_progress.interject;
     let agg = Progress.Display.add_line display (agg_line ~target) in
-    let s =
-      {
-        display;
-        clock;
-        agg;
-        mutex = Mutex.create ();
-        rows = Hashtbl.create 16;
-        solve_rows = Hashtbl.create 16;
-        fetches = Hashtbl.create 16;
-        fetch_sizes = Hashtbl.create 16;
-        fetch_rows = Hashtbl.create 16;
-        solve_total = 0;
-        solve_done = 0;
-        fetch_total = 0;
-        fetch_done = 0;
-        build_total = 0;
-        build_done = 0;
-        solve_total_base = 0;
-        solve_done_base = 0;
-        fetch_total_base = 0;
-        fetch_done_base = 0;
-        build_total_base = 0;
-        build_done_base = 0;
-        totals_locked = false;
-        running = 0;
-        running_hist = Array.make agg_spark_w 0;
-        (* Empty phase_label until the first [Phase_started] fires;
-           [composed_label] then renders just the target name. *)
-        phase_label = "";
-        phase_id = "";
-        status_msg = "";
-        phase_bytes_total = 0L;
-        phase_bytes_done = 0L;
-        phase_bytes_done_base = 0L;
-        target_label = target;
-      }
-    in
+    let s = fresh_state ~display ~clock ~agg ~target in
     push_agg s;
     let reporter : Oi.Build_progress.reporter =
       { event = (fun e -> handle_event s e) }
     in
-    let cleanup () =
-      with_lock s (fun () ->
-          (* Remove every dynamic sub-row (per-build, per-solve, per-
-             fetch) but leave the aggregate row in place: when the
-             display has no rows left, [Progress.Display.finalise]
-             computes [move_up (n-1) = move_up -1] and emits a
-             malformed [\x1b[-1A] escape that some terminals render
-             literally as "[-1A". Letting [finalise] tear down the
-             one remaining agg row keeps the count non-negative. *)
-          let drop_reporter rep =
-            (try Progress.Reporter.finalise rep
-             with Sys_error _ | Failure _ -> ());
-            try Progress.Display.remove_line display rep
-            with Sys_error _ | Failure _ -> ()
-          in
-          let drop_table ~get_reporter tbl =
-            Hashtbl.iter (fun _ r -> drop_reporter (get_reporter r)) tbl;
-            Hashtbl.clear tbl
-          in
-          drop_table ~get_reporter:(fun (r : row) -> r.reporter) s.rows;
-          drop_table ~get_reporter:(fun (r : row) -> r.reporter) s.solve_rows;
-          drop_table
-            ~get_reporter:(fun (r : fetch_row) -> r.fetch_reporter)
-            s.fetch_rows;
-          Hashtbl.clear s.fetches;
-          Hashtbl.clear s.fetch_sizes;
-          try Progress.Reporter.finalise s.agg
-          with Sys_error _ | Failure _ -> ());
-      Logs_progress.clear_active ();
-      Oi.Say.set_around_emit (fun f -> f ());
-      try Progress.Display.finalise display with Sys_error _ | Failure _ -> ()
-    in
-    Fun.protect ~finally:cleanup @@ fun () ->
-    let done_p, done_r = Eio.Promise.create () in
-    let result = ref None in
-    Eio.Fiber.both
-      (fun () ->
-        let tick_count = ref 0 in
-        let rec loop () =
-          if Eio.Promise.is_resolved done_p then ()
-          else begin
-            (try Eio.Time.sleep clock 0.1 with Eio.Cancel.Cancelled _ -> ());
-            incr tick_count;
-            (try
-               with_lock s (fun () ->
-                   tick_rows s;
-                   (* Sample sparkline history every ~5 ticks (~500ms);
-                    push_agg so the new sparkline frame paints. *)
-                   if !tick_count mod 5 = 0 then begin
-                     sample_running s;
-                     push_agg s
-                   end)
-             with Sys_error _ | Failure _ -> ());
-            loop ()
-          end
-        in
-        loop ())
-      (fun () ->
-        (try result := Some (f reporter)
-         with exn ->
-           Eio.Promise.resolve done_r ();
-           raise exn);
-        Eio.Promise.resolve done_r ());
-    match !result with Some r -> r | None -> assert false
-  end
+    Fun.protect ~finally:(fun () -> cleanup_ui s) (fun () ->
+        run_ui s ~reporter ~clock f)

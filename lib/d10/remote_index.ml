@@ -22,6 +22,35 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
    this cache and skip the HTTP fetch + sqlite open entirely. *)
 let cache : (string, Layer.remote_index) Hashtbl.t = Hashtbl.create 4
 
+let load_from_db (c : Config.t) ~url ~tmp ~(idx : Layer.remote_index) =
+  let path = Eio.Path.native_exn tmp in
+  let read_rows () =
+    let db = Index.open_ ~fs:c.fs ~path in
+    Fun.protect
+      ~finally:(fun () -> Index.close db)
+      (fun () ->
+        let rows = Index.all_tarballs db ~os_key:c.os_key in
+        List.iter
+          (fun (hash, sha, size) ->
+            Hashtbl.replace idx hash { Layer.sha256 = sha; size })
+          rows;
+        Log.info (fun m ->
+            m "Loaded %d tarball entries from %s" (List.length rows) url))
+  in
+  (try read_rows ()
+   with exn ->
+     Log.info (fun m -> m "Could not read %s: %s" url (Printexc.to_string exn)));
+  try Eio.Path.unlink tmp with Eio.Exn.Io _ -> ()
+
+let fetch_uncached (c : Config.t) ~session ~url =
+  let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
+  let tmp = Eio.Path.(os_layer_dir / ".remote-index.db.tmp") in
+  let idx : Layer.remote_index = Hashtbl.create 64 in
+  if Sysops.Http.fetch_session session ~url ~dst:tmp then
+    load_from_db c ~url ~tmp ~idx;
+  idx
+
 let fetch (c : Config.t) ~session ~remote =
   let url =
     match remote with
@@ -30,28 +59,6 @@ let fetch (c : Config.t) ~session ~remote =
   match Hashtbl.find_opt cache url with
   | Some cached -> cached
   | None ->
-      let os_layer_dir = Eio.Path.(c.root / "layers" / c.os_key) in
-      Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 os_layer_dir;
-      let tmp = Eio.Path.(os_layer_dir / ".remote-index.db.tmp") in
-      let idx : Layer.remote_index = Hashtbl.create 64 in
-      if Sysops.Http.fetch_session session ~url ~dst:tmp then begin
-        let path = Eio.Path.native_exn tmp in
-        (try
-           let db = Index.open_ ~fs:c.fs ~path in
-           Fun.protect
-             ~finally:(fun () -> Index.close db)
-             (fun () ->
-               let rows = Index.all_tarballs db ~os_key:c.os_key in
-               List.iter
-                 (fun (hash, sha, size) ->
-                   Hashtbl.replace idx hash { Layer.sha256 = sha; size })
-                 rows;
-               Log.info (fun m ->
-                   m "Loaded %d tarball entries from %s" (List.length rows) url))
-         with exn ->
-           Log.info (fun m ->
-               m "Could not read %s: %s" url (Printexc.to_string exn)));
-        try Eio.Path.unlink tmp with Eio.Exn.Io _ -> ()
-      end;
+      let idx = fetch_uncached c ~session ~url in
       Hashtbl.replace cache url idx;
       idx
