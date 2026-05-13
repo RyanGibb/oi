@@ -14,7 +14,6 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 module Dir_context = struct
   type rejection =
     | User_constraint of OpamFormula.atom
-    | Unavailable [@warning "-37"]
 
   let with_dir path fn =
     let ch = Unix.opendir path in
@@ -39,47 +38,6 @@ module Dir_context = struct
     prefer_oldest : bool;
   }
 
-  (* Temporary opam-file rewrites applied just before the solver sees
-     each candidate. Every quirk is a workaround for a specific
-     upstream issue; each one carries a TODO so audits surface it
-     when the cause is gone. The on-disk opam file is untouched —
-     layer hashes and [Plan.elaborate] keep seeing the canonical file.
-
-     - [graphics] (global): the legacy [graphics] package is almost
-       always listed by upstream packages as an optional plotting /
-       demo dep, but pulls in X11 + cairo on systems that don't have
-       them and breaks the solve. Strip it from every package's
-       [depends:]. TODO(remove-quirk): drop this once upstreams move
-       their graphics deps under [depopts:] (where they belong).
-     - [odoc] / [bisect_ppx]: as of 2026-05, [odoc.3.x] depends on
-       [bisect_ppx], whose latest release has no version compatible
-       with OCaml 5.4.x — the solver rejects the whole odoc subtree.
-       Strip [bisect_ppx] from odoc's [depends:]. odoc itself only
-       uses bisect_ppx for coverage during its own dev, so dropping
-       it is safe. TODO(remove-quirk): once a [bisect_ppx] release
-       supports OCaml 5.4 (or odoc relaxes the constraint), delete
-       the odoc branch. *)
-  let stripped_deps =
-    let global = [ "graphics" ] in
-    let per_pkg = function "odoc" -> [ "bisect_ppx" ] | _ -> [] in
-    fun consumer ->
-      List.map OpamPackage.Name.of_string
-        (global @ per_pkg (OpamPackage.Name.to_string consumer))
-
-  let quirk_filter_depends pkg opam =
-    let strip = stripped_deps (OpamPackage.name pkg) in
-    if strip = [] then opam
-    else
-      let drop n = List.exists (OpamPackage.Name.equal n) strip in
-      let depends = OpamFile.OPAM.depends opam in
-      let depends' =
-        OpamFormula.map
-          (fun ((n, _) as atom) ->
-            if drop n then OpamFormula.Empty else Atom atom)
-          depends
-      in
-      OpamFile.OPAM.with_depends depends' opam
-
   let load t pkg =
     let { OpamPackage.name; version = _ } = pkg in
     let raw =
@@ -98,7 +56,7 @@ module Dir_context = struct
           |> Option.get |> OpamFilename.raw |> OpamFile.make
           |> OpamFile.OPAM.read
     in
-    quirk_filter_depends pkg raw
+    raw
 
   let user_restrictions t name =
     OpamPackage.Name.Map.find_opt name t.constraints
@@ -189,7 +147,6 @@ module Dir_context = struct
     | User_constraint x ->
         Fmt.pf f "Rejected by user-specified constraint %s"
           (OpamFormula.string_of_atom x)
-    | Unavailable -> Fmt.string f "Availability condition not satisfied"
 
   let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty)
       ?(doc = OpamPackage.Name.Set.empty) ?(pins = OpamPackage.Name.Map.empty)
