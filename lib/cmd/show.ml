@@ -751,7 +751,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
       divergent
   end
 
-let show_overlay ~cache_root ~os_key ~handle =
+let show_overlay ~fs ~cache_root ~os_key ~handle =
   let reporepo = Terms.reporepo_path () in
   let pkgs_dir =
     Oi.Source.Reporepo.overlay_packages_dir ~path:reporepo ~handle
@@ -781,7 +781,7 @@ let show_overlay ~cache_root ~os_key ~handle =
   let index_path = cache_root / "layers" / "index.db" in
   let db =
     if Sys.file_exists index_path then
-      try Some (D10.Index.open_ ~path:index_path) with _ -> None
+      try Some (D10.Index.open_ ~fs ~path:index_path) with _ -> None
     else None
   in
   let rows, cached, declared =
@@ -954,7 +954,7 @@ let cmd =
         show_cache ~fs ~sys ~cache_root ~os_key ~handle:h;
         exit 0
     | Some [ h ], false, true ->
-        show_overlay ~cache_root ~os_key ~handle:h;
+        show_overlay ~fs ~cache_root ~os_key ~handle:h;
         exit 0
     | Some _, false, true ->
         Oi.Error.config_error

@@ -23,7 +23,7 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
     0
   end
   else begin
-    let db = D10.Index.open_ ~path:index_path in
+    let db = D10.Index.open_ ~fs ~path:index_path in
     let direct =
       match version_opt with
       | Some v -> (

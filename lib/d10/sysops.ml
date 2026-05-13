@@ -361,7 +361,7 @@ module Http = struct
      a synchronous ANSI write that's expensive on slow terminals).
      The final tick fires unconditionally so the bar always settles
      at 100% / total. *)
-  let copy_with_progress ?on_progress ?total src sink =
+  let copy_with_progress ~clock ?on_progress ?total src sink =
     match on_progress with
     | None -> Eio.Flow.copy src sink
     | Some on_progress ->
@@ -370,7 +370,7 @@ module Http = struct
         let last_tick = ref 0.0 in
         let throttle_s = 0.05 in
         let maybe_tick () =
-          let now = Unix.gettimeofday () in
+          let now = Eio.Time.now clock in
           if now -. !last_tick >= throttle_s then begin
             last_tick := now;
             on_progress ~received:!received ~total
@@ -418,7 +418,7 @@ module Http = struct
         let total = Requests.Response.content_length resp in
         let body = Requests.Response.body resp in
         Eio.Path.with_open_out ~create:(`Or_truncate 0o644) dst (fun out ->
-            copy_with_progress ?on_progress ?total body out);
+            copy_with_progress ~clock:t.clock ?on_progress ?total body out);
         true
       end
     with exn ->

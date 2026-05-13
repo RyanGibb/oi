@@ -39,9 +39,11 @@
 type db
 (** An open SQLite database handle. *)
 
-val open_ : path:string -> db
-(** [open_ ~path] opens (or creates) the index database at [path]. Tables are
-    created if they don't already exist. *)
+val open_ : fs:Eio.Fs.dir_ty Eio.Path.t -> path:string -> db
+(** [open_ ~fs ~path] opens (or creates) the index database at [path]. Tables
+    are created if they don't already exist. [fs] is the Eio filesystem
+    capability, used to create the parent directory of [path] if it doesn't
+    already exist. *)
 
 val close : db -> unit
 (** [close db] closes the database handle. *)

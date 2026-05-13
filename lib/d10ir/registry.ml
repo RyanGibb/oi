@@ -16,8 +16,6 @@ let url_of ~remote ~sha =
   let (`Http_remote base) = remote in
   Fmt.str "%s/d10ir-archives/%s.tar.zst" (trim_trailing_slash base) sha
 
-let unique_tmp dst = Fmt.str "%s.%d.tmp" dst (Unix.getpid ())
-
 (* In-process single-flight tracker keyed by sha. Two fibers asking for
    the same archive used to race on a shared tmp path: the loser would
    [sha256_of_file] a tmp the winner had already renamed away, get [""],
@@ -62,23 +60,29 @@ let sha256_of_file path =
 let do_fetch ~fs ~session ~cache_root ~remote ~sha ~dst =
   let dst_dir = archives_dir ~cache_root in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dst_dir);
-  let tmp = unique_tmp dst in
+  (* Stage into a sibling tmp file so the rename to [dst] stays on the
+     same filesystem and is atomic. [Filename.temp_file] creates via
+     [O_EXCL] so two processes (or two retries in the same process)
+     can't collide on the staging name. *)
+  let tmp = Filename.temp_file ~temp_dir:dst_dir (sha ^ ".") ".tar.zst.tmp" in
+  let tmp_p = Eio.Path.(fs / tmp) in
+  let unlink_tmp () = try Eio.Path.unlink tmp_p with _ -> () in
   let url = url_of ~remote ~sha in
   Log.debug (fun m -> m "fetch %s -> %s" url dst);
-  if D10.Sysops.Http.fetch_session session ~url ~dst:Eio.Path.(fs / tmp) then
+  if D10.Sysops.Http.fetch_session session ~url ~dst:tmp_p then
     let actual = try sha256_of_file tmp with _ -> "" in
     if actual = sha then begin
-      (try Sys.rename tmp dst with _ -> ( try Unix.unlink tmp with _ -> ()));
+      (try Eio.Path.rename tmp_p Eio.Path.(fs / dst) with _ -> unlink_tmp ());
       true
     end
     else begin
       Log.warn (fun m ->
           m "sha mismatch for %s: declared %s, got %s" url sha actual);
-      (try Unix.unlink tmp with _ -> ());
+      unlink_tmp ();
       false
     end
   else begin
-    (try Unix.unlink tmp with _ -> ());
+    unlink_tmp ();
     false
   end
 
@@ -97,7 +101,7 @@ let max_attempts () =
       | _ -> default_max_attempts)
   | None -> default_max_attempts
 
-let do_fetch_with_retries ~fs ~session ~cache_root ~remote ~sha ~dst =
+let do_fetch_with_retries ~clock ~fs ~session ~cache_root ~remote ~sha ~dst =
   let attempts = max_attempts () in
   let rec loop attempt delay =
     if do_fetch ~fs ~session ~cache_root ~remote ~sha ~dst then begin
@@ -110,14 +114,14 @@ let do_fetch_with_retries ~fs ~session ~cache_root ~remote ~sha ~dst =
       Log.warn (fun m ->
           m "fetch %s failed (attempt %d/%d); retrying in %.0fs" sha attempt
             attempts delay);
-      Unix.sleepf delay;
+      Eio.Time.sleep clock delay;
       loop (attempt + 1) (delay *. 2.0)
     end
     else false
   in
   loop 1 2.0
 
-let pull ~fs ~session ~cache_root ~remote ~sha =
+let pull ~clock ~fs ~session ~cache_root ~remote ~sha =
   let dst = archive_path ~cache_root ~sha in
   if Sys.file_exists dst then true
   else
@@ -129,7 +133,8 @@ let pull ~fs ~session ~cache_root ~remote ~sha =
           ~finally:(fun () -> In_flight.release sha u !ok)
           (fun () ->
             let r =
-              do_fetch_with_retries ~fs ~session ~cache_root ~remote ~sha ~dst
+              do_fetch_with_retries ~clock ~fs ~session ~cache_root ~remote ~sha
+                ~dst
             in
             ok := r;
             r)
@@ -156,7 +161,6 @@ let env_max_fibers () =
   | None -> None
 
 let prefetch ~clock ~fs ~session ~cache_root ~remote ?max_fibers shas =
-  let _ = clock in
   let max_fibers =
     match max_fibers with
     | Some n -> n
@@ -171,7 +175,8 @@ let prefetch ~clock ~fs ~session ~cache_root ~remote ?max_fibers shas =
   let do_one sha =
     let dst = archive_path ~cache_root ~sha in
     if Sys.file_exists dst then Atomic.incr cached
-    else if pull ~fs ~session ~cache_root ~remote ~sha then Atomic.incr fetched
+    else if pull ~clock ~fs ~session ~cache_root ~remote ~sha then
+      Atomic.incr fetched
     else begin
       Atomic.incr failed;
       Mutex.lock mutex;

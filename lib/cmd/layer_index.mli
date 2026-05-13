@@ -41,7 +41,8 @@ val ensure_remote :
     supplied sink (e.g. a TTY progress bar). When omitted, the status is routed
     to [Logs.info] (visible only with [-v]). *)
 
-val merge_remote_into_local : index_path:string -> remote_path:string -> unit
+val merge_remote_into_local :
+  fs:Eio.Fs.dir_ty Eio.Path.t -> index_path:string -> remote_path:string -> unit
 (** Open [index_path] (the local index) and merge every row from [remote_path].
     A corrupt remote file is unlinked so the next call re-downloads it. *)
 

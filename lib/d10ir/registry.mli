@@ -15,6 +15,7 @@ type remote = [ `Http_remote of string ]
     [<base_url>/d10ir-archives/<sha>.tar.zst]. *)
 
 val pull :
+  clock:float Eio.Time.clock_ty Eio.Resource.t ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   session:D10.Sysops.Http.session ->
   cache_root:string ->

@@ -31,14 +31,14 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
   in
   let rebuild reason =
     Logs.info (fun m -> m "%s local index for %s" reason os_key);
-    let db = D10.Index.open_ ~path:index_path in
+    let db = D10.Index.open_ ~fs ~path:index_path in
     D10.Index.rebuild d10 ~overlay_for db;
     D10.Index.close db
   in
   if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then rebuild "Building"
   else begin
     let disk = count_on_disk_layers ~fs ~os_layer_dir:layers_dir in
-    let db = D10.Index.open_ ~path:index_path in
+    let db = D10.Index.open_ ~fs ~path:index_path in
     let s = D10.Index.stats db ~os_key in
     let stamp = D10.Index.indexer_stamp db ~os_key in
     D10.Index.close db;
@@ -120,8 +120,8 @@ let ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () =
       end
     end
 
-let merge_remote_into_local ~index_path ~remote_path =
-  let db = D10.Index.open_ ~path:index_path in
+let merge_remote_into_local ~fs ~index_path ~remote_path =
+  let db = D10.Index.open_ ~fs ~path:index_path in
   (try D10.Index.merge_remote db ~remote_path
    with Failure msg -> (
      Logs.warn (fun m ->
@@ -136,11 +136,11 @@ let binary_to_package ?on_phase ~sys ~fs ~clock ~cache ~os_key ~registry name =
   let clk = (clock :> D10.Config.clk) in
   let index_path = ensure_local ~sys ~fs ~clock:clk ~cache ~os_key in
   (match ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () with
-  | Some remote_path -> merge_remote_into_local ~index_path ~remote_path
+  | Some remote_path -> merge_remote_into_local ~fs ~index_path ~remote_path
   | None -> ());
   if not (Eio.Path.is_file Eio.Path.(fs / index_path)) then None
   else
-    let db = D10.Index.open_ ~path:index_path in
+    let db = D10.Index.open_ ~fs ~path:index_path in
     let results = D10.Index.find_binary db ~binary:name ~os_key in
     D10.Index.close db;
     match results with

@@ -37,7 +37,7 @@ let fetch (c : Config.t) ~session ~remote =
       if Sysops.Http.fetch_session session ~url ~dst:tmp then begin
         let path = Eio.Path.native_exn tmp in
         (try
-           let db = Index.open_ ~path in
+           let db = Index.open_ ~fs:c.fs ~path in
            Fun.protect
              ~finally:(fun () -> Index.close db)
              (fun () ->

@@ -444,7 +444,7 @@ let binaries_cmd =
     let index_present = Sys.file_exists index_path in
     let bins =
       if index_present then begin
-        let db = D10.Index.open_ ~path:index_path in
+        let db = D10.Index.open_ ~fs:d10.fs ~path:index_path in
         let raw = D10.Index.all_binaries db ~os_key:d10.os_key in
         D10.Index.close db;
         List.map
@@ -514,7 +514,7 @@ let index_cmd =
     let layers_root = Eio.Path.native_exn d10.root / "layers" in
     let index_path = layers_root / "index.db" in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(d10.fs / layers_root);
-    let db = D10.Index.open_ ~path:index_path in
+    let db = D10.Index.open_ ~fs:d10.fs ~path:index_path in
     let totals =
       ref
         D10.Index.
@@ -679,7 +679,7 @@ let stats_cmd =
     let index_present = Sys.file_exists index_path in
     let s =
       if index_present then begin
-        let db = D10.Index.open_ ~path:index_path in
+        let db = D10.Index.open_ ~fs:d10.fs ~path:index_path in
         let s = D10.Index.stats db ~os_key:d10.os_key in
         D10.Index.close db;
         s

@@ -103,34 +103,13 @@ let succeeded c ~hash =
 (* Streaming copy that preserves the source file's mode bits. Only used
    as the [EXDEV] fallback for [link_or_copy] below — for the same-FS
    common case, [Unix.link] is cheaper and avoids the byte-pump. *)
-let copy_file_preserve_mode ~src ~dst =
-  let st = Unix.lstat src in
-  let in_fd = Unix.openfile src [ Unix.O_RDONLY ] 0 in
-  Fun.protect
-    ~finally:(fun () -> try Unix.close in_fd with Unix.Unix_error _ -> ())
-    (fun () ->
-      let out_fd =
-        Unix.openfile dst
-          [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ]
-          st.Unix.st_perm
-      in
-      Fun.protect
-        ~finally:(fun () ->
-          try Unix.close out_fd with Unix.Unix_error _ -> ())
-        (fun () ->
-          let buf = Bytes.create 65536 in
-          let rec loop () =
-            let n = Unix.read in_fd buf 0 (Bytes.length buf) in
-            if n > 0 then begin
-              let written = ref 0 in
-              while !written < n do
-                written :=
-                  !written + Unix.write out_fd buf !written (n - !written)
-              done;
-              loop ()
-            end
-          in
-          loop ()))
+let copy_file_preserve_mode ~fs ~src ~dst =
+  let src_p = Eio.Path.(fs / src) in
+  let dst_p = Eio.Path.(fs / dst) in
+  let perm = (Eio.Path.stat ~follow:false src_p).perm in
+  Eio.Path.with_open_in src_p @@ fun i ->
+  Eio.Path.with_open_out ~create:(`Or_truncate perm) dst_p @@ fun o ->
+  Eio.Flow.copy i o
 
 (* Hardlink fast-path with a cross-device fallback. [Unix.link] fails with
    [EXDEV] when [src] and [dst] live on different filesystems — typical
@@ -138,38 +117,50 @@ let copy_file_preserve_mode ~src ~dst =
    the per-build prefix is on the image's overlay. Fall back to a
    streaming copy so the layer's [fs/] tree still gets populated.
    The fallback is per-file, not per-tree, so a single cross-mount build
-   doesn't disable hardlinks for the rest of the run. *)
-let link_or_copy ~src ~dst =
+   doesn't disable hardlinks for the rest of the run.
+
+   Eio has no hardlink primitive, so [Unix.link] stays here — the byte-pump
+   fallback is Eio-native. *)
+let link_or_copy ~fs ~src ~dst =
   try Unix.link src dst
-  with Unix.Unix_error (Unix.EXDEV, _, _) -> copy_file_preserve_mode ~src ~dst
+  with Unix.Unix_error (Unix.EXDEV, _, _) ->
+    copy_file_preserve_mode ~fs ~src ~dst
 
 let store (c : Config.t) ~hash ~prefix ~files ~package ~deps ~parent_hashes
     ~exit_status ?recipe_json () =
   let d = dir_s c ~hash in
   let fs_dir = d / "fs" in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(c.fs / fs_dir);
-  let replace_existing f dst =
-    try f dst
-    with Unix.Unix_error (Unix.EEXIST, _, _) ->
-      Sys.remove dst;
-      f dst
+  let replace_existing dst_p f =
+    try f ()
+    with
+    | Unix.Unix_error (Unix.EEXIST, _, _)
+    | Eio.Io (Eio.Fs.E (Eio.Fs.Already_exists _), _)
+    ->
+      (try Eio.Path.unlink dst_p with _ -> ());
+      f ()
   in
   List.iter
     (fun rel_path ->
       let src = prefix / rel_path in
       let dst = fs_dir / rel_path in
-      match
-        try Some (Unix.lstat src).Unix.st_kind with Unix.Unix_error _ -> None
-      with
-      | Some Unix.S_LNK ->
-          let target = Unix.readlink src in
+      let src_p = Eio.Path.(c.fs / src) in
+      let dst_p = Eio.Path.(c.fs / dst) in
+      let kind =
+        try Some (Eio.Path.stat ~follow:false src_p).kind
+        with Eio.Exn.Io _ -> None
+      in
+      match kind with
+      | Some `Symbolic_link ->
+          let target = Eio.Path.read_link src_p in
           Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
             Eio.Path.(c.fs / Filename.dirname dst);
-          replace_existing (Unix.symlink target) dst
-      | Some Unix.S_REG ->
+          replace_existing dst_p (fun () ->
+              Eio.Path.symlink ~link_to:target dst_p)
+      | Some `Regular_file ->
           Eio.Path.mkdirs ~exists_ok:true ~perm:0o755
             Eio.Path.(c.fs / Filename.dirname dst);
-          replace_existing (fun d -> link_or_copy ~src ~dst:d) dst
+          replace_existing dst_p (fun () -> link_or_copy ~fs:c.fs ~src ~dst)
       | _ -> ())
     files;
   save_meta (json_path c ~hash)

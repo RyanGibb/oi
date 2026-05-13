@@ -128,9 +128,9 @@ let cmd =
     in
     (match Layer_index.ensure_remote ~sys ~fs ~cache ~os_key ~registry () with
     | Some remote_path ->
-        Layer_index.merge_remote_into_local ~index_path ~remote_path
+        Layer_index.merge_remote_into_local ~fs ~index_path ~remote_path
     | None -> ());
-    let db = D10.Index.open_ ~path:index_path in
+    let db = D10.Index.open_ ~fs ~path:index_path in
     let d10 : D10.Config.t =
       { sys; fs; clock = clk; root = Oi.Cache.root cache; os_key }
     in

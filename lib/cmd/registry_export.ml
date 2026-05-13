@@ -75,7 +75,7 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / output / os_key);
   let index_path = output / os_key / "index.db" in
   (try Sys.remove index_path with Sys_error _ -> ());
-  let db = D10.Index.open_ ~path:index_path in
+  let db = D10.Index.open_ ~fs ~path:index_path in
   let cache_root = Oi.Cache.root_s cache in
   let overlay_for ~hash =
     Oi.Provenance.overlay_of_layer ~fs ~cache_root ~os_key ~hash

@@ -7,21 +7,7 @@ type t = {
 
 let domain_count_default () =
   try int_of_string (Sys.getenv "OI_DOMAINS")
-  with Not_found ->
-    let cpu =
-      try
-        match Sys.os_type with
-        | "Unix" -> (
-            try
-              let ic = Unix.open_process_in "getconf _NPROCESSORS_ONLN" in
-              let s = input_line ic in
-              ignore (Unix.close_process_in ic);
-              int_of_string (String.trim s)
-            with _ -> 4)
-        | _ -> 4
-      with _ -> 4
-    in
-    cpu
+  with Not_found | Failure _ -> Domain.recommended_domain_count ()
 
 let default =
   let p = max 1 (min 8 (domain_count_default ())) in
