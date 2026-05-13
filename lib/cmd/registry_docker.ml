@@ -307,8 +307,8 @@ let build_sync_shell ?(s3 = default_s3_config) () =
      \"$ACCESS\" \"$SECRET\" > \"$S3CFG\"; chmod 600 \"$S3CFG\"; set +e; \
      OI_BUILD_PARALLELISM=$(nproc) oi build --refresh --all \
      --use-registry=archives --export /registry; RC=$?; [ $RC -eq 0 ] && { \
-     s3cmd -c \"$S3CFG\" put --recursive --skip-existing /registry/ %s; \
-     RC=$?; }; rm -f \"$S3CFG\"; exit $RC"
+     s3cmd -c \"$S3CFG\" put --recursive --skip-existing /registry/ %s; RC=$?; \
+     }; rm -f \"$S3CFG\"; exit $RC"
     s3_access_key_secret s3_secret_key_secret s3_access_key_secret
     s3_secret_key_secret s3.bucket_location s3.host_base s3.host_bucket
     enable_multipart s3.bucket

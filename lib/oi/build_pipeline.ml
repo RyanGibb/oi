@@ -528,8 +528,7 @@ let add_target add t =
   match t with
   | Plain p -> add ("Plain:" ^ p)
   | Group { tokens = [ tok ]; handles = [] } -> add ("Plain:" ^ tok)
-  | Group { tokens = [ tok ]; handles = [ h ] } ->
-      add ("Pkg:" ^ h ^ "/" ^ tok)
+  | Group { tokens = [ tok ]; handles = [ h ] } -> add ("Pkg:" ^ h ^ "/" ^ tok)
   | Group { tokens; handles } ->
       add "Group:";
       List.iter add tokens;
