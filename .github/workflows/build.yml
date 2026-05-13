@@ -49,7 +49,12 @@ jobs:
           "$HOME/.local/bin/oi" config
 
       - name: Install Depexts
-        run: brew install $(oi build --depext)
+        run: |
+          case "${{ runner.os }}" in
+            macOS) brew install $(oi build --depext) ;;
+            Linux) sudo apt-get update && sudo apt-get install -y $(oi build --depext) ;;
+            *) echo "unsupported: ${{ runner.os }}"; exit 1 ;;
+          esac
 
       - name: Build the PR/changeset with bootstrap oi
         run: oi build -v
