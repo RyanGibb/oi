@@ -92,7 +92,13 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
         let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
         let _ : D10ir.Direct.result option =
           Oi.Build_pipeline.build pipeline_env ~reporter
-            { solved; layer_remote; source_remote; jobs }
+            {
+              solved;
+              layer_remote;
+              source_remote;
+              jobs;
+              upload_archive_url = None;
+            }
         in
         Oi.Build_pipeline.layer_hashes solved
       in
@@ -367,7 +373,7 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
     let build_result =
       Oi.Build_pipeline.build pipeline_env ~reporter
-        { solved; layer_remote; source_remote; jobs }
+        { solved; layer_remote; source_remote; jobs; upload_archive_url = None }
     in
     (* Surface solve/build failures: a discarded build result lets a
        failed solve fall through to [Prefix.assemble ~layer_hashes:[]],

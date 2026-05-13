@@ -355,7 +355,13 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
             solved.groups);
       let build_result =
         Oi.Build_pipeline.build pipeline_env ~reporter
-          { solved; layer_remote; source_remote; jobs }
+          {
+            solved;
+            layer_remote;
+            source_remote;
+            jobs;
+            upload_archive_url = None;
+          }
       in
       (* Surface build outcomes: previously [_ = build …] discarded
          this, so a failed [D10ir.Direct.run] (or one that returned
@@ -389,17 +395,60 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
              --verbosity=debug for the per-group trace."
             (String.concat ", " group_msgs)
       | Some r when r.failed = 0 && r.skipped = 0 && r.built = 0 && r.cached = 0
-        ->
-          (* Direct.run was handed an empty plan. Likely cause: every
-             package was filtered out of the d10ir recipe (e.g. all
-             marked Binary against a stale d10 cache, or recipe emit
-             skipped them silently). Without this guard we'd assemble
-             an empty prefix and report a misleading "no bin/<X>". *)
-          Oi.Error.config_error
-            "build pipeline ran with an empty d10ir plan: solver picked \
-             packages but the d10ir executor saw 0 nodes. The most likely \
-             cause is a stale d10 layer cache; try [oi clean --layers] and \
-             re-run."
+        -> (
+          (* Direct.run was handed an empty plan. Two possibilities:
+             (a) Warm cache — every solved package was marked [Binary] by
+                 [Plan.elaborate] because its layer is already in the
+                 local d10 cache, so recipe emit produced zero source
+                 nodes. Nothing wrong; let the binary lookup proceed
+                 (which will exec the right bin/ or surface a clear
+                 "package solved but installs no bin/<X>"). This is the
+                 dominant case once a package has been built once.
+             (b) Recipe emit dropped packages whose layers don't
+                 actually exist on disk. Real bug; surface a precise
+                 diagnostic instead of letting [assemble_prefix]
+                 silently produce an incomplete prefix.
+             Distinguish by probing every package the solve claims via
+             [D10.Layer.succeeded]. *)
+          let d10_cfg =
+            Oi.Pipeline.make_d10 ~sys ~fs
+              ~clock:(clock :> D10.Config.clk)
+              ~cache ~os_key
+          in
+          let missing =
+            List.concat_map
+              (fun (gr : Oi.Build_pipeline.group_result) ->
+                match gr.exec_plan with
+                | None -> []
+                | Some (p : Oi.Plan.t) ->
+                    List.filter_map
+                      (fun (pp : Oi.Plan.package_plan) ->
+                        if D10.Layer.succeeded d10_cfg ~hash:pp.layer_hash then
+                          None
+                        else Some (pp.pkg, pp.layer_hash))
+                      p.packages)
+              solved.groups
+          in
+          match missing with
+          | [] -> ()
+          | xs ->
+              let summary =
+                List.map
+                  (fun (pkg, h) ->
+                    Fmt.str "  %s (%s)" pkg
+                      (String.sub h 0 (min 12 (String.length h))))
+                  xs
+                |> String.concat "\n"
+              in
+              Oi.Error.config_error
+                "build pipeline ran with an empty d10ir plan, but %d \
+                 package(s) claim cached layers that aren't in the local d10 \
+                 cache:@\n\
+                 %s@\n\
+                 Likely a recipe-emit bug. Re-run with $(b,--refresh) to force \
+                 a fresh solve, or $(b,oi clean --layers) followed by a normal \
+                 build to repopulate them."
+                (List.length xs) summary)
       | Some r when r.failed = 0 && r.skipped = 0 -> ()
       | Some r ->
           let pp_fail (f : D10ir.Direct.failure) =
@@ -580,7 +629,13 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
               solved.groups);
         let _ : D10ir.Direct.result option =
           Oi.Build_pipeline.build pipeline_env ~reporter
-            { solved; layer_remote; source_remote; jobs }
+            {
+              solved;
+              layer_remote;
+              source_remote;
+              jobs;
+              upload_archive_url = None;
+            }
         in
         Oi.Build_pipeline.layer_hashes solved
     in

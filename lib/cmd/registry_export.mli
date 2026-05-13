@@ -26,7 +26,12 @@ val run :
       [<cache>/d10ir/archives/] (baked by [oi repo bump]). The only
       source-tarball channel — [oi build] hard-errors when a needed sha isn't
       available locally and not on the remote. No opam source-mirror fallback.
-    - [<os_key>/logs/manifest.json] + [<os_key>/audit.jsonl] +
-      [handles/<handle>.md].
+    - [<os_key>/logs/manifest.json] + [<os_key>/audit.jsonl].
+
+    Note: the cross-distro [handles/<handle>.md] report is not written here.
+    Each export only sees its own oskey, so a per-distro write would race with
+    parallel exports and [s3cmd sync --skip-existing] would pin the first
+    distro's incomplete view in S3. The handle report belongs in a server-side
+    process that scans the merged bucket.
 
     Idempotent on repeat invocations. *)

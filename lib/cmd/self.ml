@@ -393,7 +393,13 @@ let update_cmd =
       let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
       let _ : D10ir.Direct.result option =
         Oi.Build_pipeline.build pipeline_env ~reporter
-          { solved; layer_remote; source_remote; jobs }
+          {
+            solved;
+            layer_remote;
+            source_remote;
+            jobs;
+            upload_archive_url = None;
+          }
       in
       Oi.Build_pipeline.layer_hashes solved
     in

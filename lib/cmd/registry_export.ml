@@ -141,13 +141,9 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
       Oi.Say.field "audit" "%d event(s) at %s/audit.jsonl" (List.length events)
         (output / os_key)
     end
-  end;
-  let handles_written =
-    Oi.Handle_report.write_all ~fs ~output_dir:output
-      ~generated_at:(Unix.gettimeofday ())
-  in
-  match handles_written with
-  | [] -> ()
-  | hs ->
-      Oi.Say.field "handles" "%d failure report(s) at %s/handles/"
-        (List.length hs) output
+  end
+(* No per-distro [handles/] report. Each export only sees its own
+     oskey's slice of the build, so the report would be incomplete and
+     [s3cmd sync --skip-existing] would pin the first distro's slice in
+     S3 forever. The cross-distro view belongs in a server-side process
+     that scans the merged bucket. *)

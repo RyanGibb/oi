@@ -582,7 +582,13 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
       let solved = Oi.Build_pipeline.solve pipeline_env ~reporter req in
       let _ : D10ir.Direct.result option =
         Oi.Build_pipeline.build pipeline_env ~reporter
-          { solved; layer_remote; source_remote; jobs }
+          {
+            solved;
+            layer_remote;
+            source_remote;
+            jobs;
+            upload_archive_url = None;
+          }
       in
       Oi.Build_pipeline.layer_hashes solved
     in
@@ -684,7 +690,8 @@ let mirror_archives ~fs ~cache ~label archives =
 let cmd =
   let run (c : Terms.common) refresh locked skip_local all only skip registry
       use_registry with_repos with_deps jobs toolchain_override depext_only
-      export envrc_mode archives_only every_version save_d10ir dist targets =
+      export envrc_mode archives_only every_version save_d10ir dist
+      upload_archive targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.proc_mgr;
@@ -1488,7 +1495,13 @@ let cmd =
          failed solve / cycle / emit). *)
             let result_opt =
               Oi.Build_pipeline.build pipeline_env ~reporter:ui_reporter
-                { solved; layer_remote; source_remote; jobs }
+                {
+                  solved;
+                  layer_remote;
+                  source_remote;
+                  jobs;
+                  upload_archive_url = upload_archive;
+                }
             in
             (* Map per-node failures back to per-group [group_results]. *)
             let failed_layers : (string, string) Hashtbl.t =
@@ -1598,20 +1611,24 @@ let cmd =
                [DIR/{bin,sbin,share}/]. Skips roots whose layer never
                materialised (solve / build failure); silently no-ops
                when [dist] is unset. *)
-            (match (dist, result_opt, solved.merged) with
-            | Some dir, Some _, Some merged ->
+            (* Roots = user-requested packages. Sourced from
+               [exec_plan.packages] filtered by [group.names], not from
+               [merged.roots] — the d10ir plan goes empty whenever every
+               requested package is already binary-cached, so a warm-cache
+               [oi build --dist=DIR] would otherwise produce nothing. *)
+            (match (dist, result_opt) with
+            | Some dir, Some _ ->
                 (try Unix.mkdir dir 0o755
                  with Unix.Unix_error (EEXIST, _, _) -> ());
                 List.iter
-                  (fun root_hash ->
-                    let h = D10ir.Layer_hash.to_string root_hash in
+                  (fun h ->
                     let layer_fs = cache_root / "layers" / os_key / h / "fs" in
                     if Sys.file_exists layer_fs then
                       let added =
                         Dist.collect_install ~root:layer_fs ~dst:dir
                       in
                       dist_mapping := !dist_mapping @ added)
-                  merged.roots
+                  (Oi.Build_pipeline.root_layer_hashes solved)
             | _ -> ());
             gi_offset_ref := !gi_offset_ref + List.length solved.groups)
           buckets);
@@ -1758,6 +1775,21 @@ let cmd =
              stage's $(b,COPY --from=build)."
           [ "dist" ])
   in
+  let upload_archive =
+    Arg.(
+      value
+      & opt (some string) None
+      & info ~docv:"URL"
+          ~doc:
+            "After the build, mirror every freshly built layer to \
+             $(i,URL)/$(b,<os_key>/<hash>.tar.zst) (plus the matching \
+             $(b,.txt.zst) listing) via $(b,s3cmd put). Only layers actually \
+             built locally are uploaded — anything restored from the local \
+             cache or pulled from $(b,--use-registry) is skipped. Assumes a \
+             working $(b,~/.s3cfg). Typical use: \
+             $(b,--upload-archive=s3://oiu/)."
+          [ "upload-archive" ])
+  in
   let info =
     Cmd.info "build" ~doc:"Build a project, package, overlay, or every overlay"
       ~man:
@@ -1798,7 +1830,7 @@ let cmd =
       $ all $ only $ skip $ Terms.registry $ Terms.use_registry
       $ Terms.with_repos $ Terms.with_deps $ Terms.jobs $ Terms.toolchain
       $ depext_only $ export $ Sync.envrc_mode_arg $ archives_only
-      $ every_version $ save_d10ir $ dist $ targets)
+      $ every_version $ save_d10ir $ dist $ upload_archive $ targets)
 
 (* -- oi test ------------------------------------------------------------ *)
 

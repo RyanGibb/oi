@@ -164,6 +164,7 @@ let () =
         Oi_cmd.Run.cmd;
         Oi_cmd.Build.cmd;
         Oi_cmd.Build.test_cmd;
+        Oi_cmd.Install.cmd;
         Oi_cmd.Ir.cmd;
         Oi_cmd.Docker.cmd;
         Oi_cmd.Add.cmd;

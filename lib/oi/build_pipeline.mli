@@ -181,6 +181,14 @@ type build_inputs = {
           needed archive to already exist locally (produced by [oi repo bump]);
           a missing archive is a hard error. *)
   jobs : int option;  (** Build parallelism. [None] uses the d10ir default. *)
+  upload_archive_url : string option;
+      (** [Some "s3://oiu/"]: after the build completes, mirror every
+          {b freshly built} layer (those reported via [Direct.Node_built], which
+          excludes layers restored from local cache or pulled from
+          [layer_remote]) to [<URL>/<os_key>/<hash>.{tar,txt}.zst] via
+          [s3cmd put]. [None] disables the upload entirely. Per-layer failures
+          are logged via the reporter but do not abort the build — the layer is
+          already in the local cache regardless of upload outcome. *)
 }
 
 val build :
@@ -209,3 +217,16 @@ val layer_hashes : solved -> string list
     successful entry. The shape every single-target caller ([oi env], [oi run],
     [oi self], [oi sync], [Script_runner]) uses to feed
     {!Pipeline.assemble_prefix}. *)
+
+val root_layer_hashes : solved -> string list
+(** Layer hashes of the user-requested packages across every successful group,
+    deduped. Differs from {!layer_hashes} by filtering [exec_plan.packages] down
+    to the names listed in each group's [group.names] — i.e. the seed packages
+    the solver was asked about, not the transitive closure.
+
+    Use this (not [solved.merged.roots]) anywhere you want "the binaries the
+    user actually asked for": [oi install] copies them to a prefix;
+    [oi build --dist=DIR] does the same into [DIR]. [solved.merged.roots] would
+    under-report here because the d10ir merge only carries [Source]-mode
+    packages, so it goes empty whenever every requested package is already in
+    the local layer cache. *)

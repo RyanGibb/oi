@@ -794,7 +794,35 @@ type build_inputs = {
   layer_remote : D10.Layer.remote option;
   source_remote : D10.Layer.remote option;
   jobs : int option;
+  upload_archive_url : string option;
 }
+
+(* Upload one freshly built layer to S3 via [s3cmd put]. Stages a
+   [.tar.zst] + [.txt.zst] under [<cache>/upload-staging/<os_key>/]
+   via {!D10.Layer.export} (idempotent — repeated stagings of the
+   same hash skip if the dst already exists), then puts both files
+   under [<url_base>/<os_key>/<hash>.*]. Failures log a warning and
+   otherwise do nothing — the layer is already in the local cache,
+   so the build outcome doesn't depend on the upload succeeding. *)
+let upload_one_layer ~sys ~(d10 : D10.Config.t) ~staging ~url_base hash =
+  let os_key = d10.os_key in
+  let put rel =
+    let src = Filename.concat (Filename.concat staging os_key) (hash ^ rel) in
+    if not (Sys.file_exists src) then ()
+    else
+      let dst = Fmt.str "%s%s/%s%s" url_base os_key hash rel in
+      try D10.Sysops.Cmd.run sys [ "s3cmd"; "put"; "--quiet"; src; dst ]
+      with exn ->
+        Logs.warn (fun m ->
+            m "upload-archive: %s: %s" dst (Printexc.to_string exn))
+  in
+  let staged =
+    try D10.Layer.export d10 ~hash ~dst:Eio.Path.(d10.fs / staging)
+    with _ -> false
+  in
+  ignore (staged : bool);
+  put ".tar.zst";
+  put ".txt.zst"
 
 (* Provenance is written here rather than inside [D10ir.Direct] because the
    richer [Plan.package_plan] (opam_path, pkgs_dir, source, depexts, dep_layers
@@ -936,8 +964,22 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
         }
       in
       let plan_dir = Eio.Path.native_exn d10_cfg.root in
+      (* Track every layer that {!D10ir.Direct} reports as freshly built
+         (i.e. [Node_built]) so the post-run upload step knows what to
+         mirror. Cached / fetched / failed / skipped layers are skipped
+         — those are already in the remote (or shouldn't be there). *)
+      let built_layers : string list ref = ref [] in
       let direct_reporter : D10ir.Direct.reporter =
-        { event = (fun e -> reporter.event (Build e)) }
+        {
+          event =
+            (fun e ->
+              (match e with
+              | D10ir.Direct.Node_built { node; _ } ->
+                  built_layers :=
+                    D10ir.Layer_hash.to_string node.layer_hash :: !built_layers
+              | _ -> ());
+              reporter.event (Build e));
+        }
       in
       reporter.event
         (Phase_started { phase = Fetching; label = "build inputs" });
@@ -1033,6 +1075,30 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
       in
       write_provenance_for_solved ~fs:env.fs ~cache_root ~os_key:env.os_key
         ~d10:d10_cfg inp.solved;
+      (* Mirror freshly built layers to S3 (or any [s3cmd put]-reachable
+         URL prefix) when [--upload-archive=URL] is set. Sequential
+         uploads keep the chatty output predictable and avoid stampeding
+         the remote endpoint; the per-layer payload is small (a single
+         already-zstd-compressed tarball + listing) so wall-clock cost
+         is dominated by network latency, not parallelism. *)
+      (match inp.upload_archive_url with
+      | None -> ()
+      | Some url_base when !built_layers = [] -> ignore url_base
+      | Some raw_url ->
+          let url_base =
+            if
+              String.length raw_url = 0
+              || raw_url.[String.length raw_url - 1] = '/'
+            then raw_url
+            else raw_url ^ "/"
+          in
+          let staging = Filename.concat cache_root "upload-staging" in
+          let hashes = List.sort_uniq String.compare !built_layers in
+          Say.step "Uploading %d freshly built layer(s) to %s"
+            (List.length hashes) url_base;
+          List.iter
+            (upload_one_layer ~sys:env.sys ~d10:d10_cfg ~staging ~url_base)
+            hashes);
       reporter.event (Build_summary result);
       Some result
 
@@ -1046,3 +1112,26 @@ let layer_hashes (s : solved) : string list =
       | None -> []
       | Some p ->
           List.map (fun (pp : Plan.package_plan) -> pp.layer_hash) p.packages)
+
+let root_layer_hashes (s : solved) : string list =
+  List.concat_map
+    (fun (gr : group_result) ->
+      match gr.exec_plan with
+      | None -> []
+      | Some (ep : Plan.t) ->
+          let wanted =
+            List.map OpamPackage.Name.to_string gr.group.names
+            |> List.sort_uniq String.compare
+          in
+          List.filter_map
+            (fun (pp : Plan.package_plan) ->
+              match OpamPackage.of_string_opt pp.pkg with
+              | Some p
+                when List.mem
+                       (OpamPackage.Name.to_string (OpamPackage.name p))
+                       wanted ->
+                  Some pp.layer_hash
+              | _ -> None)
+            ep.packages)
+    s.groups
+  |> List.sort_uniq String.compare

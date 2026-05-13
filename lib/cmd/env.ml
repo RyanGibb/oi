@@ -100,7 +100,13 @@ let cmd =
         let solved = Oi.Build_pipeline.solve pipeline_env req in
         let _ : D10ir.Direct.result option =
           Oi.Build_pipeline.build pipeline_env
-            { solved; layer_remote = None; source_remote = None; jobs }
+            {
+              solved;
+              layer_remote = None;
+              source_remote = None;
+              jobs;
+              upload_archive_url = None;
+            }
         in
         Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key
           ~layer_hashes:(Oi.Build_pipeline.layer_hashes solved)

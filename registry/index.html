@@ -829,13 +829,20 @@ main { padding: 0.75rem 1rem 2rem; max-width: 1400px; }
 
 // Probe these os_keys at <root>/<os_key>/logs/manifest.json. Ones that
 // 404 are silently skipped. Matches the default_distros list emitted by
-// `oi docker --all`.
+// `oi docker --all` (see lib/cmd/docker.ml). Keep this in sync when that
+// list changes; arm64 variants appear here too once ocluster submits
+// them to the linux-arm64 pool.
 const PROBE_OS_KEYS = [
   "alpine~3.23~x86_64",
+  "alpine~3.23~aarch64",
   "debian~13~x86_64",
+  "debian~13~aarch64",
   "ubuntu~24.04~x86_64",
-  "ubuntu~25.10~x86_64",
+  "ubuntu~24.04~aarch64",
+  "ubuntu~26.04~x86_64",
+  "ubuntu~26.04~aarch64",
   "fedora~43~x86_64",
+  "fedora~43~aarch64",
 ];
 
 // headline_outcome -> visual group. Mirrors the producer-side
