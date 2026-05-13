@@ -621,9 +621,11 @@ module Bump = struct
 
   (* Walk v2/<handle>/ and fetch+tar every package whose opam still
      lacks x-d10-archive (i.e. wasn't restored from the snapshot).
-     Returns (baked, failed) counts. *)
-  let bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform ~reporepo
-      ~handle =
+     Returns (baked, failed) counts. [?on_baked] fires for each
+     successful bake with the resulting sha + on-disk path, so callers
+     can mirror the archive (e.g. [s3cmd put]) without re-walking. *)
+  let bake_changed_archives ?on_baked ~proc_mgr ~fs ~d10 ~cache_root ~platform
+      ~reporepo ~handle () =
     let baked = ref 0 in
     let failed = ref 0 in
     iter_handle_opams ~reporepo ~handle
@@ -641,7 +643,11 @@ module Bump = struct
                with
               | `Added | `Already -> ());
               incr baked;
-              Fmt.pr "  %a %s.%s@." Oi.Style.ok_string "baked" pkg version
+              Fmt.pr "  %a %s.%s@." Oi.Style.ok_string "baked" pkg version;
+              match on_baked with
+              | None -> ()
+              | Some f ->
+                  f ~name:pkg ~version ~sha:built.sha256 ~path:built.path
             with exn ->
               incr failed;
               Fmt.pr "  %a %s.%s: %s@." Oi.Style.warn_string "skip" pkg version
@@ -741,7 +747,8 @@ module Bump = struct
 
   let cmd =
     let run (c : Terms.common) reporepo reporepo_url handle_opt all url ref_
-        toolchain depend_specs default no_bake rebake =
+        toolchain depend_specs default no_bake rebake upload_archives
+        archives_url =
       Harness.run @@ fun ~sw env ->
       let { Harness.proc_mgr; fs; clock; sys; platform; os_key; cache; _ } =
         Harness.bootstrap ~sw ~data_dir:c.data_dir ~format:c.format env
@@ -751,6 +758,37 @@ module Bump = struct
         Fmt.epr "oi repo bump: --rebake and --no-bake are mutually exclusive.@.";
         exit 1
       end;
+      if upload_archives && no_bake then begin
+        Fmt.epr
+          "oi repo bump: --upload-archives requires baking; drop --no-bake.@.";
+        exit 1
+      end;
+      (* Build the upload callback up front when [--upload-archives] is
+         set. Each fresh bake invokes [s3cmd put <path> <url>/<sha>.tar.zst];
+         per-file failures print a warning but don't abort the bump. The
+         destination URL is normalised so [<url>/<sha>] never grows a
+         double slash. *)
+      let upload_on_baked =
+        if not upload_archives then None
+        else
+          let base =
+            let u = archives_url in
+            if String.length u > 0 && u.[String.length u - 1] = '/' then
+              String.sub u 0 (String.length u - 1)
+            else u
+          in
+          Some
+            (fun ~name ~version ~sha ~path ->
+              let url = Fmt.str "%s/%s.tar.zst" base sha in
+              try
+                D10.Sysops.Cmd.run sys [ "s3cmd"; "put"; "--quiet"; path; url ];
+                Fmt.pr "    %a %s -> %s@." Oi.Style.ok_string "uploaded"
+                  (Fmt.str "%s.%s" name version)
+                  url
+              with exn ->
+                Fmt.pr "    %a upload %s.%s: %s@." Oi.Style.warn_string "skip"
+                  name version (Printexc.to_string exn))
+      in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url ();
       let depends =
@@ -793,9 +831,10 @@ module Bump = struct
           end;
           if not no_bake then begin
             Fmt.pr "Baking x-d10-archive for new or changed sources ...@.";
+            let on_baked = upload_on_baked in
             let baked, failed =
-              bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform
-                ~reporepo ~handle
+              bake_changed_archives ?on_baked ~proc_mgr ~fs ~d10 ~cache_root
+                ~platform ~reporepo ~handle ()
             in
             Fmt.pr "  %d baked, %d failed@." baked failed
           end
@@ -945,11 +984,32 @@ module Bump = struct
                Mutually exclusive with $(b,--no-bake)."
             [ "rebake" ])
     in
+    let upload_archives =
+      Arg.(
+        value & flag
+        & info
+            ~doc:
+              "Upload each freshly baked $(b,x-d10-archive) tarball to \
+               $(b,--archives-url) via $(b,s3cmd put). Requires a working \
+               $(b,~/.s3cfg). Already-present archives are not re-uploaded (we \
+               only upload what was freshly baked this run)."
+            [ "upload-archives" ])
+    in
+    let archives_url =
+      Arg.(
+        value
+        & opt string "s3://oiu/d10ir-archives/"
+        & info ~docv:"URL"
+            ~doc:
+              "Destination URL prefix for $(b,--upload-archives). The full \
+               object key for each archive is $(b,<URL>/<sha>.tar.zst)."
+            [ "archives-url" ])
+    in
     Cmd.v info
       Term.(
         const run $ Terms.common $ reporepo_term $ reporepo_url_term $ handle
         $ all $ url $ ref_term $ toolchain_repo_term $ depend_term $ default
-        $ no_bake $ rebake)
+        $ no_bake $ rebake $ upload_archives $ archives_url)
 end
 
 module Bake = struct
@@ -995,7 +1055,7 @@ module Bake = struct
             Oi.Style.info_string "▸" handle missing;
           let baked, failed =
             Bump.bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform
-              ~reporepo ~handle
+              ~reporepo ~handle ()
           in
           Fmt.pr "  %d baked, %d failed@." baked failed
         end;

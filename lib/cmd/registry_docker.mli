@@ -17,8 +17,30 @@ val dockerfile_oi : src_context:string -> Dockerfile.t
     musl-linked [oi] binary from the source tree at [src_context] (relative to
     the build context) and exports it as a scratch image at [/oi]. *)
 
+type s3_config = {
+  bucket : string;
+      (** Target URI for the final [s3cmd sync] (e.g. [s3://oiu/]). *)
+  host_base : string;  (** [s3cmd] [host_base] endpoint. *)
+  host_bucket : string;
+      (** [s3cmd] [host_bucket] endpoint (typically the same as [host_base] for
+          path-style addressing). *)
+  bucket_location : string;
+      (** [s3cmd] [bucket_location] hint (e.g. [auto], [us-east-1]). *)
+  enable_multipart : bool;
+      (** Whether to set [enable_multipart = True] in the generated config. *)
+}
+(** Static (non-secret) s3cmd configuration baked into the generated
+    [/tmp/oi-s3cfg] file at build time. Only the access / secret keys come
+    through BuildKit / obuilder secrets at runtime; every field here is visible
+    in the spec and image history, so prefer the [oi docker] CLI flags
+    ([--s3-bucket], [--s3-host-base], …) over editing the defaults. *)
+
+val default_s3_config : s3_config
+(** Defaults baked into the emitter when no overrides are supplied. Matches the
+    oi maintainers' [~/.s3cfg]: Cloudflare R2 in front of [s3://oiu/]. *)
+
 val dockerfile_one_distro :
-  ?overlay_depexts:string list -> Distro.t -> Dockerfile.t
+  ?s3:s3_config -> ?overlay_depexts:string list -> Distro.t -> Dockerfile.t
 (** Per-distro build image. Installs the generic build toolchain (compilers,
     headers, [curl], [s3cmd]) together with [overlay_depexts] (the union of
     [depexts:] declared across every reporepo handle: solved root closures for
@@ -33,7 +55,7 @@ val dockerfile_one_distro :
     via [docker build --secret] or compose's [secrets:] block. *)
 
 val obuilder_spec_one_distro :
-  ?overlay_depexts:string list -> Distro.t -> string
+  ?s3:s3_config -> ?overlay_depexts:string list -> Distro.t -> string
 (** Per-distro obuilder spec parallel to {!dockerfile_one_distro}. Returns the
     spec body as an s-expression string; emit via {!write_file}. Same flow:
     install depexts + s3cmd, fetch the static oi binary, then one [(run …)] that
@@ -74,7 +96,8 @@ val one_distro_filename : Distro.t -> string
 (** Filename (without directory) for a per-distro Dockerfile, e.g.
     [Dockerfile.alpine-3.23]. *)
 
-val docker_compose_yaml : distros:Distro.t list -> unit -> string
+val docker_compose_yaml :
+  ?s3:s3_config -> distros:Distro.t list -> unit -> string
 (** [docker_compose_yaml ~distros ()] emits a compose file whose per-distro
     services drive the registry build entirely at image-build time. Each
     service's [build:] block references the per-distro Dockerfile and lists the

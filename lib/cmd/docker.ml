@@ -48,8 +48,8 @@ let emit_project ~cmd ~suffix ~tag_label ~generator ~cwd_s ~distro ~output =
    target distribution, plus [Dockerfile.oi] (static oi builder) and
    [docker-compose.yml]. Each service runs [oi build --all --export
    /out]. *)
-let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
-    () =
+let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~s3
+    ~output () =
   (try Unix.mkdir output 0o755 with Unix.Unix_error (EEXIST, _, _) -> ());
   let df_oi = Registry_docker.dockerfile_oi ~src_context in
   let oi_path = output / "Dockerfile.oi" in
@@ -69,11 +69,11 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
           Stdlib.Option.value (List.assoc_opt d per_distro_depexts) ~default:[]
         in
         let df_path = output / Registry_docker.one_distro_filename d in
-        let df = Registry_docker.dockerfile_one_distro ~overlay_depexts d in
+        let df = Registry_docker.dockerfile_one_distro ~s3 ~overlay_depexts d in
         Registry_docker.write_dockerfile df_path df;
         let spec_path = output / Registry_docker.one_distro_spec_filename d in
         let spec_body =
-          Registry_docker.obuilder_spec_one_distro ~overlay_depexts d
+          Registry_docker.obuilder_spec_one_distro ~s3 ~overlay_depexts d
         in
         Registry_docker.write_file spec_path spec_body;
         (d, df_path, spec_path, List.length overlay_depexts))
@@ -81,7 +81,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
   in
   let compose_path = output / "docker-compose.yml" in
   let compose_yaml =
-    Registry_docker.docker_compose_yaml ~distros:default_distros ()
+    Registry_docker.docker_compose_yaml ~s3 ~distros:default_distros ()
   in
   Registry_docker.write_file compose_path compose_yaml;
   Oi.Say.step "Wrote";
@@ -104,7 +104,9 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~output
 
 let cmd =
   let run (c : Terms.common) refresh registry oi_version no_recipe
-      no_cache_mount obuilder test_mode all distro src_context output targets =
+      no_cache_mount obuilder test_mode all distro src_context s3_bucket
+      s3_host_base s3_host_bucket s3_bucket_location s3_enable_multipart output
+      targets =
     Harness.run @@ fun ~sw env ->
     let {
       Harness.fs;
@@ -137,10 +139,19 @@ let cmd =
       Oi.Say.info
         "--obuilder is implied by --all (both Dockerfiles and obuilder specs \
          are emitted unconditionally).";
+    let s3 : Registry_docker.s3_config =
+      {
+        bucket = s3_bucket;
+        host_base = s3_host_base;
+        host_bucket = s3_host_bucket;
+        bucket_location = s3_bucket_location;
+        enable_multipart = s3_enable_multipart;
+      }
+    in
     let cwd_s, _ = Workspace.resolved_cwd fs in
     if all then
       let dir = Stdlib.Option.value output ~default:cwd_s in
-      emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context
+      emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~s3
         ~output:dir ()
     else if targets <> [] then
       if no_recipe then
@@ -268,6 +279,57 @@ let cmd =
              $(b,--all)/$(b,--test)/$(b,--no-recipe)/project-mode errors out."
           [ "obuilder" ])
   in
+  let s3_docs = "S3 / s3cmd configuration (only used with $(b,--all))" in
+  let s3_bucket =
+    Arg.(
+      value
+      & opt string Registry_docker.default_s3_config.bucket
+      & info ~docv:"URI" ~docs:s3_docs
+          ~doc:
+            "Target URI passed to the final $(b,s3cmd sync) (e.g. \
+             $(b,s3://my-bucket/))."
+          [ "s3-bucket" ])
+  in
+  let s3_host_base =
+    Arg.(
+      value
+      & opt string Registry_docker.default_s3_config.host_base
+      & info ~docv:"HOST" ~docs:s3_docs
+          ~doc:
+            "$(b,s3cmd) $(b,host_base) endpoint written to the generated \
+             $(b,/tmp/oi-s3cfg)."
+          [ "s3-host-base" ])
+  in
+  let s3_host_bucket =
+    Arg.(
+      value
+      & opt string Registry_docker.default_s3_config.host_bucket
+      & info ~docv:"HOST" ~docs:s3_docs
+          ~doc:
+            "$(b,s3cmd) $(b,host_bucket) endpoint (typically equal to \
+             $(b,--s3-host-base) for path-style addressing)."
+          [ "s3-host-bucket" ])
+  in
+  let s3_bucket_location =
+    Arg.(
+      value
+      & opt string Registry_docker.default_s3_config.bucket_location
+      & info ~docv:"LOC" ~docs:s3_docs
+          ~doc:
+            "$(b,s3cmd) $(b,bucket_location) hint (e.g. $(b,auto), \
+             $(b,us-east-1))."
+          [ "s3-bucket-location" ])
+  in
+  let s3_enable_multipart =
+    Arg.(
+      value & flag
+      & info ~docs:s3_docs
+          ~doc:
+            "Set $(b,enable_multipart = True) in the generated $(b,s3cmd) \
+             config (default: off, matching the $(i,oi) maintainers' \
+             $(b,~/.s3cfg))."
+          [ "s3-enable-multipart" ])
+  in
   let info =
     Cmd.info "docker" ~doc:"Generate Dockerfiles for project builds and CI."
       ~man:
@@ -297,4 +359,5 @@ let cmd =
     Term.(
       const run $ Terms.common $ Terms.refresh $ Terms.registry $ oi_version
       $ no_recipe $ no_cache_mount $ obuilder $ test_mode $ all $ distro
-      $ src_context $ output $ targets)
+      $ src_context $ s3_bucket $ s3_host_base $ s3_host_bucket
+      $ s3_bucket_location $ s3_enable_multipart $ output $ targets)
