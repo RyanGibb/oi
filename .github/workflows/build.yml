@@ -48,6 +48,9 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/oi" config
 
+      - name: Install Depexts
+        run: brew install $(oi build --depext)
+
       - name: Build the PR/changeset with bootstrap oi
         run: oi build -v
 
