@@ -12,7 +12,6 @@ depends: [
   "dune-build-info"
   "eio_main" {>= "1.0"}
   "d10" {= version}
-  "d10ir" {= version}
   "osrel" {= version}
   "opam-format" {>= "2.2.0"}
   "opam-state" {>= "2.2.0"}
