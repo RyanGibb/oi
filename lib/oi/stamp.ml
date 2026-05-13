@@ -32,7 +32,9 @@ let render ~schema =
 let read ~fs ~root =
   let path = Filename.concat root filename in
   if not (Sys.file_exists path) then None
-  else try parse_schema (Eio.Path.load Eio.Path.(fs / path)) with Eio.Exn.Io _ -> None
+  else
+    try parse_schema (Eio.Path.load Eio.Path.(fs / path))
+    with Eio.Exn.Io _ -> None
 
 let write ~fs ~root ~schema =
   let path = Filename.concat root filename in
@@ -51,7 +53,8 @@ let write ~fs ~root ~schema =
 let any_present (items : Cache.item list) =
   List.exists
     (fun (item : Cache.item) ->
-      try Sys.file_exists (Eio.Path.native_exn item.path) with Eio.Exn.Io _ | Sys_error _ -> false)
+      try Sys.file_exists (Eio.Path.native_exn item.path)
+      with Eio.Exn.Io _ | Sys_error _ -> false)
     items
 
 let check ~fs ~root ~current ~items =

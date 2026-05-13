@@ -41,8 +41,7 @@ let copy_resolved ~src ~dst =
     ~finally:(fun () ->
       (try Unix.close ic with Unix.Unix_error _ -> ());
       (try Unix.close oc with Unix.Unix_error _ -> ());
-      if not !committed then
-        try Unix.unlink tmp with Unix.Unix_error _ -> ())
+      if not !committed then try Unix.unlink tmp with Unix.Unix_error _ -> ())
     (fun () ->
       loop ();
       Unix.chmod tmp perm;

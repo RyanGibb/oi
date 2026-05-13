@@ -378,7 +378,8 @@ let store_layer ~d10 (n : Plan.node) ~staging ~files =
 
 let cleanup_staging ~fs ~(config : Config.t) staging build_dir =
   if not config.keep_staging then begin
-    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / staging) with Eio.Exn.Io _ -> ());
+    (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / staging)
+     with Eio.Exn.Io _ -> ());
     try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / build_dir)
     with Eio.Exn.Io _ -> ()
   end

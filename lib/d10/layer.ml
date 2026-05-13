@@ -234,7 +234,9 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
     let ok =
       Sysops.Http.fetch_session ?on_progress session ~url ~dst:tmp_file
     in
-    let cleanup_tmp () = try Eio.Path.unlink tmp_file with Eio.Exn.Io _ -> () in
+    let cleanup_tmp () =
+      try Eio.Path.unlink tmp_file with Eio.Exn.Io _ -> ()
+    in
     let cleanup_staging () =
       try Eio.Path.rmtree ~missing_ok:true staging_dir with Eio.Exn.Io _ -> ()
     in
@@ -274,7 +276,8 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
              destination is a non-empty directory, so blow away any
              pre-existing [<hash>/] (which we already proved is not
              [succeeded] above) before publishing the staging dir. *)
-          (try Eio.Path.rmtree ~missing_ok:true layer_dir with Eio.Exn.Io _ -> ());
+          (try Eio.Path.rmtree ~missing_ok:true layer_dir
+           with Eio.Exn.Io _ -> ());
           try
             Eio.Path.rename staging_dir layer_dir;
             succeeded c ~hash

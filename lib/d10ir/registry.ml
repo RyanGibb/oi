@@ -70,11 +70,10 @@ let do_fetch ~fs ~session ~cache_root ~remote ~sha ~dst =
   let url = url_of ~remote ~sha in
   Log.debug (fun m -> m "fetch %s -> %s" url dst);
   if D10.Sysops.Http.fetch_session session ~url ~dst:tmp_p then
-    let actual =
-      try sha256_of_file tmp with Failure _ | Sys_error _ -> ""
-    in
+    let actual = try sha256_of_file tmp with Failure _ | Sys_error _ -> "" in
     if actual = sha then begin
-      (try Eio.Path.rename tmp_p Eio.Path.(fs / dst) with Eio.Exn.Io _ -> unlink_tmp ());
+      (try Eio.Path.rename tmp_p Eio.Path.(fs / dst)
+       with Eio.Exn.Io _ -> unlink_tmp ());
       true
     end
     else begin

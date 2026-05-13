@@ -136,7 +136,7 @@ module Preflight = struct
             stopped := true;
             Logs_progress.clear_active ();
             try Progress.Display.finalise display
-          with Sys_error _ | Failure _ -> ()
+            with Sys_error _ | Failure _ -> ()
           end)
         (fun () ->
           f ~on_phase ~on_text ~preflight_done ~shared_display:(Some display))

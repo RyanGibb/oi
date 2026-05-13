@@ -135,7 +135,8 @@ module Summary = struct
                     && Sys.file_exists log_path
                   then begin
                     Hashtbl.replace seen log_path ();
-                    match Oi.Audit.tail_of_file ~lines:100 ~path:log_path ()
+                    match
+                      Oi.Audit.tail_of_file ~lines:100 ~path:log_path ()
                     with
                     | None -> ()
                     | Some tail ->
@@ -302,8 +303,7 @@ let gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf
   Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh ~path
     ~url:(Terms.reporepo_url ()) ();
   let reporepo_entries =
-    try Oi.Source.Reporepo.load ~path
-    with Sys_error _ | Failure _ -> []
+    try Oi.Source.Reporepo.load ~path with Sys_error _ | Failure _ -> []
   in
   let inputs =
     let all = overlay_inputs reporepo_entries in

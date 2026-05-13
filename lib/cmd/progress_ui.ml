@@ -733,8 +733,10 @@ let drop_row s n =
   | None -> ()
   | Some r ->
       Hashtbl.remove s.rows k;
-      (try Progress.Reporter.finalise r.reporter with Sys_error _ | Failure _ -> ());
-      (try Progress.Display.remove_line s.display r.reporter with Sys_error _ | Failure _ -> ());
+      (try Progress.Reporter.finalise r.reporter
+       with Sys_error _ | Failure _ -> ());
+      (try Progress.Display.remove_line s.display r.reporter
+       with Sys_error _ | Failure _ -> ());
       s.running <- max 0 (s.running - 1)
 
 let current_fetch_size s key fallback =
@@ -761,8 +763,10 @@ let drop_fetch_row s ~key =
   | None -> ()
   | Some r -> (
       Hashtbl.remove s.fetch_rows key;
-      (try Progress.Reporter.finalise r.fetch_reporter with Sys_error _ | Failure _ -> ());
-      try Progress.Display.remove_line s.display r.fetch_reporter with Sys_error _ | Failure _ -> ())
+      (try Progress.Reporter.finalise r.fetch_reporter
+       with Sys_error _ | Failure _ -> ());
+      try Progress.Display.remove_line s.display r.fetch_reporter
+      with Sys_error _ | Failure _ -> ())
 
 let update_fetch_row s ~key ~bytes =
   match Hashtbl.find_opt s.fetch_rows key with
@@ -885,8 +889,10 @@ let handle_event s (e : Oi.Build_progress.event) =
               Hashtbl.iter
                 (fun _ r ->
                   let rep = get_reporter r in
-                  (try Progress.Reporter.finalise rep with Sys_error _ | Failure _ -> ());
-                  try Progress.Display.remove_line s.display rep with Sys_error _ | Failure _ -> ())
+                  (try Progress.Reporter.finalise rep
+                   with Sys_error _ | Failure _ -> ());
+                  try Progress.Display.remove_line s.display rep
+                  with Sys_error _ | Failure _ -> ())
                 tbl;
               Hashtbl.clear tbl
             in
@@ -1039,7 +1045,8 @@ let handle_event s (e : Oi.Build_progress.event) =
           | None -> ()
           | Some r ->
               Hashtbl.remove s.solve_rows label;
-              (try Progress.Reporter.finalise r.reporter with Sys_error _ | Failure _ -> ());
+              (try Progress.Reporter.finalise r.reporter
+               with Sys_error _ | Failure _ -> ());
               (try Progress.Display.remove_line s.display r.reporter
                with Sys_error _ | Failure _ -> ());
               s.running <- max 0 (s.running - 1);
@@ -1190,8 +1197,10 @@ let with_ui ?(target = "") ~clock ~enabled f =
              literally as "[-1A". Letting [finalise] tear down the
              one remaining agg row keeps the count non-negative. *)
           let drop_reporter rep =
-            (try Progress.Reporter.finalise rep with Sys_error _ | Failure _ -> ());
-            try Progress.Display.remove_line display rep with Sys_error _ | Failure _ -> ()
+            (try Progress.Reporter.finalise rep
+             with Sys_error _ | Failure _ -> ());
+            try Progress.Display.remove_line display rep
+            with Sys_error _ | Failure _ -> ()
           in
           let drop_table ~get_reporter tbl =
             Hashtbl.iter (fun _ r -> drop_reporter (get_reporter r)) tbl;
@@ -1204,7 +1213,8 @@ let with_ui ?(target = "") ~clock ~enabled f =
             s.fetch_rows;
           Hashtbl.clear s.fetches;
           Hashtbl.clear s.fetch_sizes;
-          try Progress.Reporter.finalise s.agg with Sys_error _ | Failure _ -> ());
+          try Progress.Reporter.finalise s.agg
+          with Sys_error _ | Failure _ -> ());
       Logs_progress.clear_active ();
       Oi.Say.set_around_emit (fun f -> f ());
       try Progress.Display.finalise display with Sys_error _ | Failure _ -> ()

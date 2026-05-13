@@ -77,9 +77,7 @@ let pp_depexts ~conf ~packages_dirs ~(plan : Oi.Plan.t) ~os_override =
    contribute one entry each so the info page shows every package's
    synopsis/license/etc., not just the first file's. *)
 let read_local_opams ~cwd =
-  let entries =
-    try Sys.readdir cwd |> Array.to_list with Sys_error _ -> []
-  in
+  let entries = try Sys.readdir cwd |> Array.to_list with Sys_error _ -> [] in
   entries
   |> List.filter (fun n ->
       Filename.check_suffix n ".opam" && Filename.chop_suffix n ".opam" <> "")
@@ -1191,8 +1189,7 @@ let cmd =
             else
               List.concat_map
                 (fun dir ->
-                  try Sys.readdir dir |> Array.to_list
-                  with Sys_error _ -> [])
+                  try Sys.readdir dir |> Array.to_list with Sys_error _ -> [])
                 group.pkgs_dir
               |> List.sort_uniq String.compare
               |> List.filter (fun name ->
