@@ -338,8 +338,16 @@ let cmd =
     let data_dir = c.data_dir in
     if output = "" then
       Oi.Error.fail_config_error "oi source: -o DIR is required";
+    (* Project mode: with no positional TARGET, fall back to the
+       cwd's [*.opam] project — vendor the closure of its direct
+       deps, the same trigger [oi build] uses. *)
+    let cwd_s, _ = Workspace.resolved_cwd fs in
+    let project = Oi.Project.load ~fs cwd_s in
+    let targets = if targets = [] then project.deps else targets in
     if targets = [] then
-      Oi.Error.fail_config_error "oi source: at least one TARGET is required";
+      Oi.Error.fail_config_error
+        "oi source: at least one TARGET is required (or run from a project \
+         dir with *.opam files)";
     (* [Eio.Path.mkdirs] mishandles relative paths whose split-parent
        is the empty string (it ends up calling [mkdirat] with [""]).
        Resolve to absolute against cwd before any filesystem op. *)
@@ -368,13 +376,14 @@ let cmd =
       with_repos
       @ Oi.Pipeline.filter_compatible_overlays
           ~reporepo_path:(Terms.reporepo_path ()) ~toolchain:None
-          url_project.overlays
+          (project.overlays @ url_project.overlays)
     in
     let cli_extras =
       Target.cli_extra_repos ~fs ~sys ?toolchain:None with_repos
     in
     let all_extras =
-      Target.merge_extras ~cli:cli_extras ~project:url_project.extra_repos
+      Target.merge_extras ~cli:cli_extras
+        ~project:(project.extra_repos @ url_project.extra_repos)
     in
     let toolchain =
       Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:false
@@ -384,8 +393,10 @@ let cmd =
     in
     let conf, tc_ctx = Oi.Pipeline.solver_inputs toolchain conf in
     let packages_dirs =
-      Stdlib.Option.to_list
-        (Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh url_project.pins)
+      Stdlib.Option.to_list project.packages_dir
+      @ Stdlib.Option.to_list
+          (Oi.Source.Pin.materialize ~fs ~sys ~cache ~refresh
+             (project.pins @ url_project.pins))
       @ Oi.Source.Repo.ensure_many ~fs ~data_dir ~refresh all_extras
       @
       match toolchain with
