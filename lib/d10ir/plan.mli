@@ -127,10 +127,23 @@ val current_schema_version : int
 (** {1 JSON codec} *)
 
 val codec : t Jsont.t
+(** [codec] decodes/encodes a plan as JSON. *)
+
 val to_string : t -> string
+(** [to_string t] is the indented JSON serialisation of [t]. *)
+
 val of_string : string -> (t, string) result
+(** [of_string s] parses a JSON-encoded plan; errors carry a human message. *)
+
 val save : _ Eio.Path.t -> t -> unit
+(** [save path t] writes [to_string t] to [path] atomically. *)
+
 val load : _ Eio.Path.t -> (t, string) result
+(** [load path] reads and decodes a plan from [path]. *)
+
+val pp : t Fmt.t
+(** [pp ppf t] renders a one-line summary: schema version, OS key, toolchain
+    name, root and node counts. *)
 
 (** {2 Single-node form}
 
@@ -142,7 +155,10 @@ val load : _ Eio.Path.t -> (t, string) result
     store recursively. *)
 
 val encode_node : node -> string
+(** [encode_node n] is the indented JSON serialisation of a single [node]. *)
+
 val decode_node : string -> (node, string) result
+(** [decode_node s] decodes the output of {!encode_node}. *)
 
 (** {1 Validation} *)
 
@@ -160,6 +176,7 @@ type validate_error =
     }
 
 val pp_validate_error : validate_error Fmt.t
+(** [pp_validate_error] renders a {!validate_error} as a one-line diagnostic. *)
 
 val validate :
   ?d10:D10.Config.t ->
@@ -183,7 +200,8 @@ val validate :
 (** {1 Schedule} *)
 
 val producers_table : t -> (Layer_hash.t, node) Hashtbl.t
-(** Map from a node's [layer_hash] to the node, for O(1) producer lookup. *)
+(** [producers_table] Map from a node's [layer_hash] to the node, for O(1)
+    producer lookup. *)
 
 val merge : t list -> (t, string) result
 (** [merge plans] folds a collection of plans into a single plan the executor

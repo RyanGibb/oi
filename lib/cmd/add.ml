@@ -28,17 +28,17 @@ let cmd =
     (* Fail fast before the sync's 10-second repo refresh. *)
     let dp = Oi.Project.Dune.load ~fs ~cwd in
     if not (Oi.Project.Dune.generate_opam_files dp) then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "dune-project does not have (generate_opam_files): oi add only \
          supports projects where dune owns the *.opam files";
     (match (package, Oi.Project.Dune.package_names dp) with
     | Some p, names when not (List.mem p names) ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "no (package (name %s) …) stanza in dune-project (declared: %s)" p
           (if names = [] then "none" else String.concat ", " names)
     | Some _, _ | _, [ _ ] | _, [] -> ()
     | None, many ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "multiple packages in dune-project (%s); re-run with -p PKG to pick \
            one"
           (String.concat ", " many));
@@ -85,11 +85,11 @@ let cmd =
       match Eio.Process.await child with
       | `Exited 0 -> ()
       | `Exited n ->
-          Oi.Error.msg
+          Oi.Error.fail_msg
             "dune build exited with code %d; dune-project was updated but \
              *.opam regeneration failed"
             n
-      | `Signaled n -> Oi.Error.msg "dune build killed by signal %d" n );
+      | `Signaled n -> Oi.Error.fail_msg "dune build killed by signal %d" n );
     (* Phase 4: re-sync so the prefix reflects the committed *.opam. *)
     Fmt.pr "Re-syncing to pick up regenerated *.opam...@.";
     ignore

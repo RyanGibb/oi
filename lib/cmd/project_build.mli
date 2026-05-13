@@ -34,10 +34,10 @@ val run :
   cwd:string ->
   unit ->
   int
-(** [run ~action ~cwd ()] sync's the project then runs the action's dune target
-    (or stops after sync for [`Deps_only]). Returns the dune invocation's exit
-    code (0 on success). Errors out via {!Oi.Error.E} when [cwd] has no [*.opam]
-    files or no [dune-project]. *)
+(** [run] sync's the project then runs the action's dune target (or stops after
+    sync for [`Deps_only]). Returns the dune invocation's exit code (0 on
+    success). Errors out via {!Oi.Error.E} when [cwd] has no [*.opam] files or
+    no [dune-project]. *)
 
 val depexts :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -52,6 +52,6 @@ val depexts :
   cwd:string ->
   unit ->
   int
-(** Solve the project's dep closure (no build), then print the union of
-    [depexts:] declared by the solved packages, one per line. Backs
+(** [depexts] Solve the project's dep closure (no build), then print the union
+    of [depexts:] declared by the solved packages, one per line. Backs
     [oi build --depext] in project mode. *)

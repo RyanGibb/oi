@@ -92,7 +92,7 @@ let is_failure_kind = function
   | K_depext_missing | K_solve_failed ->
       true
 
-let outcome_to_kind_string o = Outcome.kind_to_string (Outcome.kind_of o)
+let outcome_to_kind_string o = Outcome.string_of_kind (Outcome.kind_of o)
 
 let pp_outcome_detail buf (o : Outcome.t) =
   let p fmt = Fmt.kstr (Buffer.add_string buf) fmt in
@@ -262,7 +262,7 @@ let markdown ~handle ~generated_at slices =
         buf_add buf
           (String.concat ", "
              (List.map
-                (fun (k, n) -> Fmt.str "%d %s" n (Outcome.kind_to_string k))
+                (fun (k, n) -> Fmt.str "%d %s" n (Outcome.string_of_kind k))
                 kinds)));
     buf_add buf "\n\n";
     buf_add buf "## Reproduction\n\n";
@@ -283,7 +283,7 @@ let markdown ~handle ~generated_at slices =
         let kinds_for_pkg =
           List.map (fun (_, e) -> Outcome.kind_of (e : Audit.event).outcome) evs
           |> List.sort_uniq compare
-          |> List.map Outcome.kind_to_string
+          |> List.map Outcome.string_of_kind
           |> String.concat ", "
         in
         buf_addf buf "### `%s` — %s\n\n" pkg_label kinds_for_pkg;

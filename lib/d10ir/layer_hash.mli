@@ -8,7 +8,16 @@
 type t = private string
 
 val of_string : string -> t
+(** [of_string s] tags [s] as a layer hash. *)
+
 val to_string : t -> string
+(** [to_string h] is the underlying hex string. *)
+
 val equal : t -> t -> bool
+(** [equal a b] is byte-equality of the underlying hex strings. *)
+
 val compare : t -> t -> int
+(** [compare a b] orders layer hashes by string comparison. *)
+
 val pp : t Fmt.t
+(** [pp] renders the full hex string. *)

@@ -13,7 +13,7 @@ type phase =
   | Diff_layer
   | Store_layer
 
-let phase_to_string = function
+let string_of_phase = function
   | Stage_deps -> "stage-deps"
   | Unpack_archive -> "unpack"
   | Apply_substs -> "subst"
@@ -81,7 +81,7 @@ let tidy_error_string s =
 
 let pp_failure ppf (f : failure) =
   Fmt.pf ppf "%s.%s  phase=%s  log=%s@,    %s" f.package.name f.package.version
-    (phase_to_string f.phase) f.log_path f.error
+    (string_of_phase f.phase) f.log_path f.error
 
 let pp_failures ppf = function
   | [] -> ()
@@ -142,7 +142,7 @@ let succeeded d10 hash =
   D10.Layer.exists d10 ~hash:(Layer_hash.to_string hash)
   && D10.Layer.succeeded d10 ~hash:(Layer_hash.to_string hash)
 
-let make_skeleton ~fs staging =
+let skeleton ~fs staging =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / staging);
   List.iter
     (fun sub ->
@@ -181,7 +181,7 @@ let transitive_dep_layers ~producers d10 (n : Plan.node) =
 
 let stage_dependencies ~producers ~fs d10 (n : Plan.node) staging =
   Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / staging);
-  make_skeleton ~fs staging;
+  skeleton ~fs staging;
   let all = transitive_dep_layers ~producers d10 n in
   Log.debug (fun m ->
       m "%s.%s: staging %d transitive dep layers into %s" n.package.name

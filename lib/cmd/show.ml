@@ -1,5 +1,9 @@
 open Cmdliner
 
+let log_src = Logs.Src.create "oi.cmd.show" ~doc:"oi show command"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 
 (* -- plan ---------------------------------------------------------------- *)
@@ -10,7 +14,7 @@ let ( / ) = Filename.concat
    print it verbatim (e.g. "utop", "@avsm/tangled"); for the
    local-project case we show the package name (or count when there
    is more than one *.opam file). *)
-let show_target_label ~targets ~local_packages =
+let target_label_of ~targets ~local_packages =
   match targets with
   | [] -> (
       match local_packages with
@@ -23,14 +27,14 @@ let show_target_label ~targets ~local_packages =
    an overlay. CLI-supplied [@handle/pkg] shortcuts and project
    [x-repos:] both feed into [with_repos], so we take the first handle
    we see. *)
-let show_overlay_label ~with_repos =
+let overlay_label_of ~with_repos =
   match with_repos with
   | [] -> None
   | h :: _ when not (Target.is_url_like h) -> Some ("@" ^ h)
   | _ -> None
 
 (* Split the elaborated plan's packages into (cached, source) counts. *)
-let show_counts (plan : Oi.Plan.t) =
+let counts_of (plan : Oi.Plan.t) =
   List.fold_left
     (fun (c, s) (p : Oi.Plan.package_plan) ->
       match p.method_ with
@@ -52,7 +56,7 @@ let opam_pkg_of_package_plan (p : Oi.Plan.package_plan) =
    answer for scripting use ("what would this need from apt if I were
    building from scratch?"). When [--os] is set the host check isn't
    meaningful and we return [None] for the status. *)
-let show_depexts ~conf ~packages_dirs ~(plan : Oi.Plan.t) ~os_override =
+let pp_depexts ~conf ~packages_dirs ~(plan : Oi.Plan.t) ~os_override =
   let all_pkgs = List.map opam_pkg_of_package_plan plan.packages in
   let entries = Oi.Depexts.compute_for_conf ~conf ~packages_dirs all_pkgs in
   let all =
@@ -97,11 +101,11 @@ let read_local_opams ~cwd =
    directly (otherwise we'd show metadata for the first
    dependency, which is misleading). Anything else falls through to
    the first plan node as a last-ditch option. *)
-type show_meta_source =
+type meta_source =
   | From_pkg of Oi.Plan.package_plan
   | From_project_opams of (OpamPackage.t * OpamFile.OPAM.t) list
 
-let show_primary_meta ~(plan : Oi.Plan.t) ~targets ~project_deps ~cwd =
+let pp_primary_meta ~(plan : Oi.Plan.t) ~targets ~project_deps ~cwd =
   let find_name name =
     List.find_opt
       (fun (p : Oi.Plan.package_plan) ->
@@ -129,15 +133,17 @@ let first_line s =
 (* Print a single optional metadata field. Skipped silently when the
    value is absent or empty. The label column is fixed at 11
    characters so all rows on the info page line up. *)
-let show_meta_line label value =
+let pp_meta_line label value =
   match value with
   | "" -> ()
   | v ->
-      Fmt.pr "%a %s@," Oi.Style.header_string (Fmt.str "%-11s" (label ^ ":")) v
+      Fmt.pr "%a %s@," Oi.Style.pp_header_string
+        (Fmt.str "%-11s" (label ^ ":"))
+        v
 
 (* Extract a compact, user-facing snapshot of an opam file's
    descriptive metadata fields for the info page. *)
-let show_package_meta (_pkg : OpamPackage.t) (opam : OpamFile.OPAM.t) =
+let package_meta_text (_pkg : OpamPackage.t) (opam : OpamFile.OPAM.t) =
   let synopsis =
     Stdlib.Option.value (OpamFile.OPAM.synopsis opam) ~default:""
     |> String.trim |> first_line
@@ -164,7 +170,7 @@ let show_package_meta (_pkg : OpamPackage.t) (opam : OpamFile.OPAM.t) =
    index doesn't cover (fresh builds that haven't been re-indexed
    yet). Returns [[]] for a layer that hasn't been built, for a
    purely library package, or when the fs/ tree is missing. *)
-let show_package_binaries ~cache_root ~os_key ~layer_hash =
+let pp_package_binaries ~cache_root ~os_key ~layer_hash =
   let layer_dir = cache_root / "layers" / os_key / layer_hash / "fs" in
   let scan sub =
     let dir = layer_dir / sub in
@@ -180,7 +186,7 @@ let show_package_binaries ~cache_root ~os_key ~layer_hash =
    chain (relocatable / default). Plus any overlays named
    explicitly in [with_repos], in that order, deduplicated by
    handle. *)
-let show_repositories ?toolchain ~with_repos () =
+let pp_repositories ?toolchain ~with_repos () =
   let entries =
     try Oi.Source.Reporepo.load ~path:(Terms.reporepo_path ())
     with Oi.Error.E _ -> []
@@ -222,13 +228,13 @@ let show_repositories ?toolchain ~with_repos () =
           | None -> None))
     ordered
 
-(* Print one indented metadata line. Mirrors [show_meta_line]'s 11-char
+(* Print one indented metadata line. Mirrors [pp_meta_line]'s 11-char
    label column but at an arbitrary indent so per-package blocks line
    up under their package-name header. *)
-let show_indented_meta_line ~indent label = function
+let pp_indented_meta_line ~indent label = function
   | "" -> ()
   | v ->
-      Fmt.pr "%s%a %s@," (String.make indent ' ') Oi.Style.header_string
+      Fmt.pr "%s%a %s@," (String.make indent ' ') Oi.Style.pp_header_string
         (Fmt.str "%-11s" (label ^ ":"))
         v
 
@@ -236,11 +242,11 @@ let show_indented_meta_line ~indent label = function
    the caller can choose where to render it (today: at the bottom of
    the info page). [indent] is 0 for the legacy single-target layout
    and 2 for per-package blocks under a project-mode pkg header. *)
-let show_pkg_meta_block ~indent (pkg : OpamPackage.t) (opam : OpamFile.OPAM.t) =
+let pkg_meta_block ~indent (pkg : OpamPackage.t) (opam : OpamFile.OPAM.t) =
   let synopsis, license, homepage, dev_repo, maintainer, tags, description =
-    show_package_meta pkg opam
+    package_meta_text pkg opam
   in
-  let line = show_indented_meta_line ~indent in
+  let line = pp_indented_meta_line ~indent in
   line "Synopsis" synopsis;
   line "License" license;
   line "Homepage" homepage;
@@ -257,9 +263,9 @@ let show_pkg_meta_block ~indent (pkg : OpamPackage.t) (opam : OpamFile.OPAM.t) =
    single-package project (legacy inline layout), and length >=2 for a
    multi-package project (one indented block per package, headed by
    the package name). *)
-let show_render_info ~target_label ~target_version ~target_opams ~overlay
-    ~os_key ~ocaml_version ~n_cached ~n_source ~all_depexts ~dep_status
-    ~repositories ~binaries =
+let pp_render_info ~target_label ~target_version ~target_opams ~overlay ~os_key
+    ~ocaml_version ~n_cached ~n_source ~all_depexts ~dep_status ~repositories
+    ~binaries =
   let n_total = n_cached + n_source in
   Fmt.pr "@[<v>";
   let target_line =
@@ -267,12 +273,12 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
     | "" -> target_label
     | v -> Fmt.str "%s %s" target_label v
   in
-  show_meta_line "Target" target_line;
+  pp_meta_line "Target" target_line;
   let descriptions =
     match target_opams with
     | [] -> []
     | [ (pkg, opam) ] ->
-        let descr = show_pkg_meta_block ~indent:0 pkg opam in
+        let descr = pkg_meta_block ~indent:0 pkg opam in
         if descr = "" then [] else [ ("", descr) ]
     | many ->
         (* Multi-package project mode: render each package as its own
@@ -282,8 +288,8 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
           List.filter_map
             (fun (pkg, opam) ->
               let name = OpamPackage.Name.to_string (OpamPackage.name pkg) in
-              Fmt.pr "@,%a@," Oi.Style.header_string name;
-              let descr = show_pkg_meta_block ~indent:2 pkg opam in
+              Fmt.pr "@,%a@," Oi.Style.pp_header_string name;
+              let descr = pkg_meta_block ~indent:2 pkg opam in
               if descr = "" then None else Some (name, descr))
             many
         in
@@ -292,32 +298,33 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
   in
   (match binaries with
   | [] -> ()
-  | bs -> show_meta_line "Binaries" (String.concat ", " bs));
+  | bs -> pp_meta_line "Binaries" (String.concat ", " bs));
   (match overlay with
   | None -> ()
-  | Some tag -> show_meta_line "Overlay" (Fmt.str "%a" Oi.Style.info_string tag));
-  show_meta_line "Platform" os_key;
-  show_meta_line "OCaml" ocaml_version;
+  | Some tag ->
+      Fmt.kstr (pp_meta_line "Overlay") "%a" Oi.Style.pp_info_string tag);
+  pp_meta_line "Platform" os_key;
+  pp_meta_line "OCaml" ocaml_version;
   Fmt.pr "@,";
   if n_source = 0 then
-    show_meta_line "Packages" (Fmt.str "%d total, all cached locally." n_total)
+    Fmt.kstr (pp_meta_line "Packages") "%d total, all cached locally." n_total
   else begin
-    show_meta_line "Packages" (Fmt.str "%d total" n_total);
+    Fmt.kstr (pp_meta_line "Packages") "%d total" n_total;
     Fmt.pr "              cached: %d@," n_cached;
     Fmt.pr "              build:  %d  (from source)@," n_source
   end;
   Fmt.pr "@,";
   (match (dep_status : Oi.Depexts.status option) with
   | _ when OpamSysPkg.Set.is_empty all_depexts ->
-      show_meta_line "Depexts" "(no depexts declared)"
+      pp_meta_line "Depexts" "(no depexts declared)"
   | None ->
       (* [--os] set: can't tell what's installed on this host, so
          just list them all plain. *)
       let names =
         OpamSysPkg.Set.elements all_depexts |> List.map OpamSysPkg.to_string
       in
-      show_meta_line "Depexts" (String.concat ", " names);
-      Fmt.pr "            %a@," Oi.Style.dim_string
+      pp_meta_line "Depexts" (String.concat ", " names);
+      Fmt.pr "            %a@," Oi.Style.pp_dim_string
         "(host check skipped because --os is set)"
   | Some st ->
       (* Every depext declared, with the uninstalled ones marked.
@@ -326,36 +333,38 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
       let render p =
         let name = OpamSysPkg.to_string p in
         if OpamSysPkg.Set.mem p st.missing then
-          Fmt.str "%a" Oi.Style.warn_string (name ^ " (missing)")
+          Fmt.str "%a" Oi.Style.pp_warn_string (name ^ " (missing)")
         else name
       in
       let rendered =
         OpamSysPkg.Set.elements all_depexts
         |> List.map render |> String.concat ", "
       in
-      show_meta_line "Depexts" rendered;
+      pp_meta_line "Depexts" rendered;
       if not (OpamSysPkg.Set.is_empty st.missing) then
         let missing_names =
           OpamSysPkg.Set.elements st.missing |> List.map OpamSysPkg.to_string
         in
-        Fmt.pr "            %a@," Oi.Style.dim_string
-          (Fmt.str "Run: sudo apt install %s" (String.concat " " missing_names)));
+        Fmt.kstr
+          (Fmt.pr "            %a@," Oi.Style.pp_dim_string)
+          "Run: sudo apt install %s"
+          (String.concat " " missing_names));
   (match repositories with
   | [] -> ()
   | rows ->
-      Fmt.pr "@,%a@," Oi.Style.header_string "Repositories:";
+      Fmt.pr "@,%a@," Oi.Style.pp_header_string "Repositories:";
       (* Two columns: [@handle (version)] left-padded to the longest
          token so URLs line up. *)
       let left = List.map (fun (h, v, _) -> Fmt.str "@%s (%s)" h v) rows in
       let col = List.fold_left (fun m s -> max m (String.length s)) 0 left in
       List.iter2
         (fun (_, _, url) l ->
-          Fmt.pr "  %a  %s@," Oi.Style.info_string (Fmt.str "%-*s" col l) url)
+          Fmt.pr "  %a  %s@," Oi.Style.pp_info_string (Fmt.str "%-*s" col l) url)
         rows left);
   (match descriptions with
   | [] -> ()
   | [ ("", body) ] ->
-      Fmt.pr "@,%a@," Oi.Style.header_string "Description:";
+      Fmt.pr "@,%a@," Oi.Style.pp_header_string "Description:";
       String.split_on_char '\n' body
       |> List.iter (fun line -> Fmt.pr "  %s@," line)
   | many ->
@@ -365,7 +374,7 @@ let show_render_info ~target_label ~target_version ~target_opams ~overlay
             if name = "" then "Description:"
             else Fmt.str "Description (%s):" name
           in
-          Fmt.pr "@,%a@," Oi.Style.header_string label;
+          Fmt.pr "@,%a@," Oi.Style.pp_header_string label;
           String.split_on_char '\n' body
           |> List.iter (fun line -> Fmt.pr "  %s@," line))
         many);
@@ -463,7 +472,7 @@ let render_state =
    Per-group failures (solver errors etc.) are logged and the group
    is dropped from the merge — partial output is more useful than no
    output for a 50-root overlay where one root has a conflict. *)
-let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
+let merged_plan_cmd ~(harness : Harness.env) ~handles ~refresh =
   let {
     Harness.proc_mgr;
     fs;
@@ -482,7 +491,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
     { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
   in
   let conf_host =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let bar_label = String.concat " " (List.map (fun h -> "@" ^ h) handles) in
   let req : Oi.Build_pipeline.request =
@@ -522,7 +531,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
             | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
             | Emit_failed { msg } -> Fmt.str "recipe emit: %s" msg
           in
-          Logs.warn (fun m -> m "skip %s: %s" gr.group.label msg))
+          Log.warn (fun m -> m "skip %s: %s" gr.group.label msg))
     solved.groups;
   let all_plans =
     List.concat_map
@@ -579,8 +588,9 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
       (fun (d : Oi.Identity.dep) -> Hashtbl.find_opt by_hash d.hash)
       p.dep_layers
   in
-  Fmt.pr "%a@.@." Oi.Style.header_string
-    (Fmt.str "Merged plan for %s on %s" bar_label os_key);
+  Fmt.kstr
+    (Fmt.pr "%a@.@." Oi.Style.pp_header_string)
+    "Merged plan for %s on %s" bar_label os_key;
   Oi.Dep_tree.render ~label_first ~label_ref ~key_of ~children roots;
   let n_layers = Hashtbl.length by_hash in
   let n_source =
@@ -649,10 +659,11 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
       |> List.sort (fun (a : Oi.Plan.package_plan) b ->
           String.compare a.pkg b.pkg)
     in
-    Fmt.pr "@.%a@.@." Oi.Style.header_string
-      (Fmt.str "Divergent layers (%d package%s with multiple variants)"
-         (List.length divergent)
-         (if List.length divergent = 1 then "" else "s"));
+    Fmt.kstr
+      (Fmt.pr "@.%a@.@." Oi.Style.pp_header_string)
+      "Divergent layers (%d package%s with multiple variants)"
+      (List.length divergent)
+      (if List.length divergent = 1 then "" else "s");
     List.iter
       (fun (pkg, variants) ->
         let variants =
@@ -663,7 +674,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
               String.compare a.layer_hash b.layer_hash)
             variants
         in
-        Fmt.pr "%a (%d variants):@." Oi.Style.accent_string pkg
+        Fmt.pr "%a (%d variants):@." Oi.Style.pp_accent_string pkg
           (List.length variants);
         List.iter
           (fun (v : Oi.Plan.package_plan) ->
@@ -691,7 +702,7 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
                       (List.length names - max_inline)
             in
             Fmt.pr "  \u{25B8} %s [%s] used by %s@." (short_hash v.layer_hash)
-              (Oi.Identity.method_to_string v.method_)
+              (Oi.Identity.string_of_method v.method_)
               cons_label)
           variants;
         (* Pairwise dep diff between consecutive variants — for 2
@@ -751,15 +762,17 @@ let show_merged_plan ~(harness : Harness.env) ~handles ~refresh =
       divergent
   end
 
-let show_overlay ~fs ~cache_root ~os_key ~handle =
+let overlay_cmd ~fs ~cache_root ~os_key ~handle =
   let reporepo = Terms.reporepo_path () in
   let pkgs_dir =
     Oi.Source.Reporepo.overlay_packages_dir ~path:reporepo ~handle
   in
   if not (Sys.file_exists pkgs_dir) then begin
-    Fmt.pr "@[<v>Overlay %a is not materialised under %s.@,Run %a first.@]@."
-      Oi.Style.accent_string ("@" ^ handle) reporepo Oi.Style.header_string
-      (Fmt.str "oi repo bump %s" handle);
+    Fmt.kstr
+      (Fmt.pr "@[<v>Overlay %a is not materialised under %s.@,Run %a first.@]@."
+         Oi.Style.pp_accent_string ("@" ^ handle) reporepo
+         Oi.Style.pp_header_string)
+      "oi repo bump %s" handle;
     exit 1
   end;
   let latest =
@@ -773,7 +786,8 @@ let show_overlay ~fs ~cache_root ~os_key ~handle =
     |> List.sort (fun (a, _) (b, _) -> String.compare a b)
   in
   if latest = [] then begin
-    Fmt.pr "Overlay %a has no packages.@." Oi.Style.accent_string ("@" ^ handle);
+    Fmt.pr "Overlay %a has no packages.@." Oi.Style.pp_accent_string
+      ("@" ^ handle);
     exit 0
   end;
   (* Open the local index if present; absent index → every row is
@@ -803,8 +817,9 @@ let show_overlay ~fs ~cache_root ~os_key ~handle =
       latest ([], 0, 0)
   in
   Stdlib.Option.iter D10.Index.close db;
-  Fmt.pr "%a@.@." Oi.Style.header_string
-    (Fmt.str "Overlay @%s on %s" handle os_key);
+  Fmt.kstr
+    (Fmt.pr "%a@.@." Oi.Style.pp_header_string)
+    "Overlay @%s on %s" handle os_key;
   Oi.Style.pp_table Fmt.stdout
     (Tty.Table.of_rows ~header_style:Oi.Style.header
        [
@@ -814,8 +829,8 @@ let show_overlay ~fs ~cache_root ~os_key ~handle =
          Tty.Table.column ~max_width:48 "BINARIES";
        ]
        rows);
-  Fmt.pr "@.%a %d package(s) — %d cached, %d declared@." Oi.Style.header_string
-    "Total:" (List.length latest) cached declared
+  Fmt.pr "@.%a %d package(s) — %d cached, %d declared@."
+    Oi.Style.pp_header_string "Total:" (List.length latest) cached declared
 
 (* -- cache listing ------------------------------------------------------- *)
 
@@ -824,7 +839,7 @@ let show_overlay ~fs ~cache_root ~os_key ~handle =
    short hash, on-disk size. Sorted by handle then package name.
    Overlay attribution comes from each layer's [provenance.json] sidecar
    — [layer.json] no longer carries it. *)
-let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
+let cache_cmd ~fs ~sys ~cache_root ~os_key ~handle =
   let layers_dir = cache_root / "layers" / os_key in
   let overlay_of_hash hash =
     Oi.Provenance.overlay_of_layer ~fs ~cache_root ~os_key ~hash
@@ -866,7 +881,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
       | None -> ("the cache", "oi build --all")
     in
     Fmt.pr "(no cached layers in %s; run %a to populate)@." scope
-      Oi.Style.header_string suggest
+      Oi.Style.pp_header_string suggest
   else begin
     let handle_of (o : D10.Overlay.t option) =
       match o with Some o -> o.handle | None -> ""
@@ -888,7 +903,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
       | Some h -> Fmt.str "Cached layers for @%s on %s" h os_key
       | None -> Fmt.str "Cached layers on %s" os_key
     in
-    Fmt.pr "%a@.@." Oi.Style.header_string header;
+    Fmt.pr "%a@.@." Oi.Style.pp_header_string header;
     let total = ref 0L in
     let table_rows =
       List.map
@@ -899,7 +914,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
             Tty.Span.styled Oi.Style.info (handle_str overlay);
             Tty.Span.text m.package;
             Tty.Span.styled Oi.Style.dim short;
-            Tty.Span.text (Fmt.str "%a" Oi.Cache.pp_size sz);
+            Fmt.kstr Tty.Span.text "%a" Oi.Cache.pp_size sz;
           ])
         rows
     in
@@ -914,7 +929,7 @@ let show_cache ~fs ~sys ~cache_root ~os_key ~handle =
         table_rows
     in
     Oi.Style.pp_table Fmt.stdout table;
-    Fmt.pr "@.%a %d layer(s), %a total@." Oi.Style.header_string "Summary:"
+    Fmt.pr "@.%a %d layer(s), %a total@." Oi.Style.pp_header_string "Summary:"
       (List.length rows) Oi.Cache.pp_size !total
   end
 
@@ -951,22 +966,22 @@ let cmd =
     (match (bare_handles, show_all, show_cache_listing) with
     | _, true, _ ->
         let h = match bare_handles with Some [ h ] -> Some h | _ -> None in
-        show_cache ~fs ~sys ~cache_root ~os_key ~handle:h;
+        cache_cmd ~fs ~sys ~cache_root ~os_key ~handle:h;
         exit 0
     | Some [ h ], false, true ->
-        show_overlay ~fs ~cache_root ~os_key ~handle:h;
+        overlay_cmd ~fs ~cache_root ~os_key ~handle:h;
         exit 0
     | Some _, false, true ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi show --cache: pass exactly one bare @HANDLE to filter the listing"
     | Some handles, false, false ->
-        show_merged_plan ~harness ~handles ~refresh;
+        merged_plan_cmd ~harness ~handles ~refresh;
         exit 0
     | None, false, _ -> ());
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
     let conf_host =
-      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+      Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
     in
     let conf =
       match os_override with
@@ -1096,7 +1111,7 @@ let cmd =
            ~override:toolchain_override ~toolchain
     in
     if names = [] then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi show: nothing to show (no TARGET, no --with, and no *.opam files \
          in %s)"
         cwd_s;
@@ -1146,7 +1161,7 @@ let cmd =
     let group =
       match solved.groups with
       | [ gr ] -> gr
-      | _ -> Oi.Error.msg "oi show: unexpected solve group count"
+      | _ -> Oi.Error.fail_msg "oi show: unexpected solve group count"
     in
     let exec_plan =
       match group.error with
@@ -1197,14 +1212,14 @@ let cmd =
           in
           Oi.Error.no_solution (msg ^ hint)
       | Error (Cycle cycles) ->
-          Oi.Error.config_error "dependency cycle in solved packages:@\n%a"
+          Oi.Error.fail_config_error "dependency cycle in solved packages:@\n%a"
             Oi.Plan.pp_cycles cycles
       | Error (Empty_after_strip | Elaborate_failed _ | Emit_failed _) ->
-          Oi.Error.msg "oi show: solve produced no plan"
+          Oi.Error.fail_msg "oi show: solve produced no plan"
       | Ok () -> (
           match group.exec_plan with
           | Some xp -> xp
-          | None -> Oi.Error.msg "oi show: empty solve result")
+          | None -> Oi.Error.fail_msg "oi show: empty solve result")
     in
     let packages_dirs = group.pkgs_dir in
     let json_plan_node (p : Oi.Plan.package_plan) =
@@ -1213,7 +1228,7 @@ let cmd =
       let version =
         OpamPackage.Version.to_string (OpamPackage.version opam_pkg)
       in
-      let method_ = Oi.Identity.method_to_string p.method_ in
+      let method_ = Oi.Identity.string_of_method p.method_ in
       let deps =
         List.map (fun (d : Oi.Identity.dep) -> d.id.name) p.dep_layers
       in
@@ -1234,7 +1249,7 @@ let cmd =
     in
     let render_json_plan () =
       let all_depexts, _ =
-        show_depexts ~conf ~packages_dirs ~plan:exec_plan ~os_override
+        pp_depexts ~conf ~packages_dirs ~plan:exec_plan ~os_override
       in
       let depexts =
         OpamSysPkg.Set.fold
@@ -1294,7 +1309,7 @@ let cmd =
       | Ok s ->
           print_string s;
           print_newline ()
-      | Error e -> Oi.Error.config_error "json encode failed: %s" e
+      | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e
     in
     (match c.format with
     | Json ->
@@ -1325,7 +1340,7 @@ let cmd =
     if view = `Plan then
       begin match group.exec_plan with
       | Some plan -> Fmt.pr "%a@." Oi.Plan.pp plan
-      | None -> Oi.Error.msg "oi show --plan: no exec plan available"
+      | None -> Oi.Error.fail_msg "oi show --plan: no exec plan available"
       end
     else if view = `Tree then begin
       (* Render the elaborated plan as a Unicode dep tree. Each
@@ -1436,7 +1451,7 @@ let cmd =
           (fun (d : Oi.Identity.dep) -> Hashtbl.find_opt by_hash d.hash)
           p.dep_layers
       in
-      Fmt.pr "%a@.@." Oi.Style.header_string "Dependency tree";
+      Fmt.pr "%a@.@." Oi.Style.pp_header_string "Dependency tree";
       Oi.Dep_tree.render ~label_first ~label_ref ~key_of ~children roots;
       Fmt.pr
         "@.%d packages, %d root(s); \u{21B0} marks a back-reference to a layer \
@@ -1447,7 +1462,7 @@ let cmd =
       (* `Existing or `Summary — both fall through to the original
             metadata + depexts listing. *)
       let all_depexts, dep_status =
-        show_depexts ~conf ~packages_dirs ~plan:exec_plan ~os_override
+        pp_depexts ~conf ~packages_dirs ~plan:exec_plan ~os_override
       in
       if only_depexts then
         (* Always print every depext, one per line, with no status
@@ -1458,12 +1473,12 @@ let cmd =
           all_depexts
       else
         let target_label =
-          show_target_label ~targets ~local_packages:project_local_packages
+          target_label_of ~targets ~local_packages:project_local_packages
         in
-        let overlay = show_overlay_label ~with_repos in
-        let n_cached, n_source = show_counts exec_plan in
+        let overlay = overlay_label_of ~with_repos in
+        let n_cached, n_source = counts_of exec_plan in
         let primary =
-          show_primary_meta ~plan:exec_plan ~targets ~project_deps ~cwd:cwd_s
+          pp_primary_meta ~plan:exec_plan ~targets ~project_deps ~cwd:cwd_s
         in
         let target_version, target_opams, target_layer_hash =
           match primary with
@@ -1479,13 +1494,13 @@ let cmd =
                  suppress the version column here. *)
               ("", pkgs, None)
         in
-        let repositories = show_repositories ?toolchain ~with_repos () in
+        let repositories = pp_repositories ?toolchain ~with_repos () in
         let binaries =
           match target_layer_hash with
           | None -> []
-          | Some h -> show_package_binaries ~cache_root ~os_key ~layer_hash:h
+          | Some h -> pp_package_binaries ~cache_root ~os_key ~layer_hash:h
         in
-        show_render_info ~target_label ~target_version ~target_opams ~overlay
+        pp_render_info ~target_label ~target_version ~target_opams ~overlay
           ~os_key ~ocaml_version:conf.ocaml_version ~n_cached ~n_source
           ~all_depexts ~dep_status ~repositories ~binaries
   in

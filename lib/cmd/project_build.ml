@@ -81,9 +81,9 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
     Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh with_deps
   in
   if project.deps = [] && extra_cli = [] && url_project.roots = [] then
-    Oi.Error.config_error "oi build: no *.opam files in %s" cwd;
+    Oi.Error.fail_config_error "oi build: no *.opam files in %s" cwd;
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let candidate_overlays = project.overlays @ url_project.overlays in
   let tc_handles =
@@ -200,11 +200,11 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
   let label_lc = String.lowercase_ascii label in
   let opams = read_opams ~cwd in
   if opams = [] then
-    Oi.Error.config_error "oi %s: no *.opam files in %s" label_lc cwd;
+    Oi.Error.fail_config_error "oi %s: no *.opam files in %s" label_lc cwd;
   let dune_project = cwd / "dune-project" in
   let needs_dune = action <> `Deps_only in
   if needs_dune && not (Sys.file_exists dune_project) then
-    Oi.Error.config_error
+    Oi.Error.fail_config_error
       "oi %s: %s has no dune-project. Non-dune projects are not yet supported."
       label_lc cwd;
   let order = topo_sort_local opams in
@@ -215,8 +215,8 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
       | Some t -> Fmt.str "dune %s --profile=release" t
     in
     Fmt.pr "@[<v>%a@,@,  cd %s@,  %s@,@,%a packages: %s@,@]@."
-      Oi.Style.header_string "Would run:" cwd cmd_line Oi.Style.dim_string "→"
-      (String.concat ", " order);
+      Oi.Style.pp_header_string "Would run:" cwd cmd_line Oi.Style.pp_dim_string
+      "→" (String.concat ", " order);
     0
   end
   else
@@ -246,18 +246,18 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
         let env =
           Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
         in
-        Fmt.pr "@.%a %d package(s): %s@." Oi.Style.header_string (label ^ "ing")
-          (List.length opams) (String.concat ", " order);
+        Fmt.pr "@.%a %d package(s): %s@." Oi.Style.pp_header_string
+          (label ^ "ing") (List.length opams) (String.concat ", " order);
         let ec =
           Subprocess.run proc_mgr ~env [ "dune"; target; "--profile=release" ]
         in
         if ec <> 0 then begin
-          Fmt.epr "%a (dune %s exit %d)@." Oi.Style.error_string
+          Fmt.epr "%a (dune %s exit %d)@." Oi.Style.pp_error_string
             (label ^ " failed") target ec;
           ec
         end
         else begin
-          Fmt.pr "%a@." Oi.Style.ok_string (label ^ " successful");
+          Fmt.pr "%a@." Oi.Style.pp_ok_string (label ^ " successful");
           (* Only the [`Build] action produces installable binaries —
              [`Test] runs [dune runtest] which leaves [_build/install/]
              untouched, and [`Deps_only] returned earlier. *)
@@ -266,10 +266,10 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
               (match collect_dist ~cwd ~os_key with
               | [] -> ()
               | mapping ->
-                  Fmt.pr "@.%a@." Oi.Style.header_string "Dist artifacts:";
+                  Fmt.pr "@.%a@." Oi.Style.pp_header_string "Dist artifacts:";
                   List.iter
                     (fun (name, dst) ->
-                      Fmt.pr "  %s %a %s@." name Oi.Style.dim_string "→" dst)
+                      Fmt.pr "  %s %a %s@." name Oi.Style.pp_dim_string "→" dst)
                     mapping);
               (* [--dist=DIR] (passed through from the CLI): also mirror
                  the dune install tree into [DIR/{bin,sbin,share}/].
@@ -293,15 +293,16 @@ let run ~action ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache ~data_dir
                       (List.filter (fun (sub, _, _) -> sub = "share") extra)
                   in
                   if bin_sbin <> [] || share_count > 0 then begin
-                    Fmt.pr "@.%a (--dist):@." Oi.Style.header_string "Dist tree";
+                    Fmt.pr "@.%a (--dist):@." Oi.Style.pp_header_string
+                      "Dist tree";
                     List.iter
                       (fun (_, n, d) ->
-                        Fmt.pr "  %s %a %s@." n Oi.Style.dim_string "→" d)
+                        Fmt.pr "  %s %a %s@." n Oi.Style.pp_dim_string "→" d)
                       bin_sbin;
                     if share_count > 0 then
-                      Fmt.pr "  share/ %a %a@." Oi.Style.dim_string
+                      Fmt.pr "  share/ %a %a@." Oi.Style.pp_dim_string
                         (Fmt.str "(%d files)" share_count)
-                        Oi.Style.dim_string "—"
+                        Oi.Style.pp_dim_string "—"
                   end)
           | `Test | `Deps_only -> ());
           0

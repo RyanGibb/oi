@@ -6,11 +6,11 @@
     streamed copy when the dst is on a different filesystem. *)
 
 val local_dir : cache:Cache.t -> string
-(** [<cache>/d10ir/archives]. Where {!Archive_builder} writes baked archives and
-    where {!Source.Pin} / pull paths look them up. *)
+(** [local_dir] . Where {!Archive_builder} writes baked archives and where
+    {!Source.Pin} / pull paths look them up. *)
 
 val dst_dir : output:string -> string
-(** [<output>/d10ir-archives]. The published location. *)
+(** [dst_dir] . The published location. *)
 
 val list : cache:Cache.t -> (string * int) list
 (** [list ~cache] enumerates every [<sha>.tar.zst] under {!local_dir} as

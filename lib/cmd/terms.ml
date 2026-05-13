@@ -99,10 +99,11 @@ let cache_dir = Xdg_eio.Cmd.cache_term Workspace.app_name
 type format = Text | Json
 
 let format_conv =
+  let err_msg fmt = Fmt.kstr (fun s -> Error (`Msg s)) fmt in
   let parser = function
     | "text" -> Ok Text
     | "json" -> Ok Json
-    | s -> Error (`Msg (Fmt.str "expected 'text' or 'json', got %S" s))
+    | s -> err_msg "expected 'text' or 'json', got %S" s
   in
   let printer fmt = function
     | Text -> Fmt.string fmt "text"
@@ -241,7 +242,7 @@ let remotes_of ~url ~(mode : Oi.Use_registry.t) =
   | Never -> { layer_remote = None; source_remote = None }
   | All | Archives ->
       if url = "" then
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "--use-registry=%s requires a non-empty --registry URL (use \
            --use-registry=never for fully offline)"
           (Oi.Use_registry.to_string mode);

@@ -22,7 +22,7 @@ let of_packages_dir ~pkgs_dir ~name ~full =
       {
         kind = Reporepo;
         overlay = Some { handle; version = "" };
-        path_in_repo = path_in_repo (Fmt.str "v2/%s/packages" handle);
+        path_in_repo = Fmt.kstr path_in_repo "v2/%s/packages" handle;
       }
   | "sets", _ when grandparent = "pins" ->
       { kind = Pin; overlay = None; path_in_repo = path_in_repo "packages" }
@@ -46,3 +46,5 @@ let codec =
   |> Object.opt_mem "overlay" D10.Overlay.codec ~enc:(fun o -> o.overlay)
   |> Object.mem "path_in_repo" string ~enc:(fun o -> o.path_in_repo)
   |> Object.finish
+
+let pp ppf o = Fmt.pf ppf "@[<h>%a@%s@]" pp_kind o.kind o.path_in_repo

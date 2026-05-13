@@ -9,7 +9,7 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
 
 (* -- Platform / d10 wiring ----------------------------------------------- *)
 
-let make_conf ~platform:(p : Osrel.t) ~ocaml_version : Solver.Ctx.conf =
+let conf ~platform:(p : Osrel.t) ~ocaml_version : Solver.Ctx.conf =
   {
     arch = Osrel.Arch.to_string p.arch;
     os = Osrel.OS.to_string p.os;
@@ -20,7 +20,7 @@ let make_conf ~platform:(p : Osrel.t) ~ocaml_version : Solver.Ctx.conf =
     jobs = p.jobs;
   }
 
-let make_d10 ~sys ~fs ~clock ~cache ~os_key : D10.Config.t =
+let d10 ~sys ~fs ~clock ~cache ~os_key : D10.Config.t =
   { sys; fs; clock; root = Cache.root cache; os_key }
 
 let init_opam_root ~fs ~data_dir =
@@ -76,7 +76,7 @@ let pick_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles
             Log.debug (fun m -> m "Using toolchain %s from handle scope" n);
             n
         | many when many <> [] ->
-            Error.config_error
+            Error.fail_config_error
               "overlays in scope declare conflicting toolchains: %s — pass \
                --toolchain=NAME to disambiguate"
               (String.concat ", " many)
@@ -104,7 +104,7 @@ let pick_toolchain ~fs ~sys ~data_dir ~conf ~install ~override ~handles
                        toolchains: %s"
                       (String.concat ", " known)
                 in
-                Error.config_error
+                Error.fail_config_error
                   "no default toolchain set in reporepo at %s — %s. Or pass \
                    --toolchain=NAME explicitly."
                   path hint))
@@ -126,8 +126,9 @@ let strip_compiler_roots_for_override ~override ~toolchain names =
 let classify_with_args ~fs ~sys ~cache ?refresh
     ?(reporter = Build_progress.null) with_deps =
   if with_deps <> [] then
-    reporter.event
-      (Status (Fmt.str "Loading %d --with arg(s)" (List.length with_deps)));
+    Fmt.kstr
+      (fun s -> reporter.event (Status s))
+      "Loading %d --with arg(s)" (List.length with_deps);
   let urls, pkg_deps = Project.Url.classify_all with_deps in
   let url_project =
     Project.Url.materialize ~reporter ~fs ~sys ~cache ?refresh urls
@@ -270,5 +271,5 @@ let fetch_layer_hashes ?(reporter = Build_progress.null) ?jobs ~session ~remote
        ~pkg_of ())
 
 let assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes =
-  let d10 = make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key in
+  let d10 = d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key in
   D10.Prefix.assemble_cached d10 ~layer_hashes

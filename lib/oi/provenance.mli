@@ -50,32 +50,45 @@ type t = {
   build_env : build_env;
 }
 
+val pp : t Fmt.t
+(** [pp ppf t] renders a one-line summary: layer hash, OS key, package, and
+    build duration. *)
+
 (** {1 Codecs}
 
     Leaf codecs are exposed so {!Manifest} can re-encode the same shapes inside
     its own envelope without restating the schema. *)
 
 val codec : t Jsont.t
+(** [codec] (de)serialises a {!t} provenance record as JSON. *)
+
 val phases_codec : phases Jsont.t
+(** [phases_codec] (de)serialises a {!phases} sub-record. *)
+
 val opam_info_codec : opam_info Jsont.t
+(** [opam_info_codec] (de)serialises the {!opam_info} sub-record. *)
+
 val source_info_codec : source_info Jsont.t
+(** [source_info_codec] (de)serialises the {!source_info} sub-record. *)
+
 val build_env_codec : build_env Jsont.t
+(** [build_env_codec] (de)serialises the {!build_env} sub-record. *)
 
 (** {1 Storage} *)
 
 val path : cache_root:string -> os_key:string -> hash:string -> string
-(** [<cache_root>/layers/<os_key>/<hash>/provenance.json]. *)
+(** [path] . *)
 
 val write : fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> t -> unit
-(** Encode [r] and write to {!path}. The layer dir must already exist (committed
-    by [D10.Layer.store]); silently no-ops if it doesn't. Errors are logged and
-    swallowed: a logging failure must never abort the build. *)
+(** [write] Encode [r] and write to {!path}. The layer dir must already exist
+    (committed by [D10.Layer.store]); silently no-ops if it doesn't. Errors are
+    logged and swallowed: a logging failure must never abort the build. *)
 
 val read_all :
   fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> os_key:string -> t list
-(** Walk every [<cache>/layers/<os_key>/<hash>/provenance.json] and decode.
-    Layer dirs without a [provenance.json] are silently skipped. Files that fail
-    to decode are logged at debug and skipped. *)
+(** [read_all] Walk every [<cache>/layers/<os_key>/<hash>/provenance.json] and
+    decode. Layer dirs without a [provenance.json] are silently skipped. Files
+    that fail to decode are logged at debug and skipped. *)
 
 val read_one :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -93,12 +106,14 @@ val overlay_of_layer :
   os_key:string ->
   hash:string ->
   D10.Overlay.t option
-(** Convenience: project [load …] down to [opam.origin.overlay]. Used to feed
-    [D10.Index.rebuild]'s [?overlay_for] callback so the d10 layer index can
-    carry overlay attribution without [layer.json] carrying it. *)
+(** [overlay_of_layer] is a convenience that projects [load …] down to
+    [opam.origin.overlay]. Used to feed [D10.Index.rebuild]'s [?overlay_for]
+    callback so the d10 layer index can carry overlay attribution without
+    [layer.json] carrying it. *)
 
 (** {1 Helpers for producers} *)
 
 val hash_opam_file : path:string -> string
-(** Hex SHA-256 of [path]'s [effective_part]-equivalent bytes. Used by {!Plan}
-    to populate {!opam_info.sha256}. Returns [""] if the file can't be read. *)
+(** [hash_opam_file] Hex SHA-256 of [path]'s [effective_part]-equivalent bytes.
+    Used by {!Plan} to populate {!opam_info.sha256}. Returns [""] if the file
+    can't be read. *)

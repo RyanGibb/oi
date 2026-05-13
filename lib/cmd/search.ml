@@ -83,7 +83,7 @@ let trim_to_latest ~all_versions rows key version =
 
 (* One row of search output. Same shape for [bin] and [pkg] kinds so the
    caller can print them in a single uniform table. *)
-type search_row = {
+type row = {
   kind : [ `Bin | `Pkg | `Lib ];
   overlay : string; (* "@handle" or "-" *)
   binary : string option; (* filled for [Bin]; [None] for [Pkg] / [Lib] *)
@@ -336,7 +336,7 @@ let cmd =
         | Ok s ->
             print_string s;
             print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e);
+        | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e);
         D10.Index.close db;
         exit 0
     | Text -> ());
@@ -390,11 +390,11 @@ let cmd =
             | Some h ->
                 let deps = D10.Index.deps db ~hash:h in
                 if deps = [] then
-                  Fmt.pr "  %a@." Oi.Style.dim_string "(no deps)"
+                  Fmt.pr "  %a@." Oi.Style.pp_dim_string "(no deps)"
                 else
                   List.iter
                     (fun (dep_name, dep_ver, dep_hash) ->
-                      Fmt.pr "  %a %s.%s@." Oi.Style.dim_string
+                      Fmt.pr "  %a %s.%s@." Oi.Style.pp_dim_string
                         (String.sub dep_hash 0
                            (min 12 (String.length dep_hash)))
                         dep_name dep_ver)

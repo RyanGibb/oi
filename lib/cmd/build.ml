@@ -61,9 +61,9 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
   in
   let status_col r =
     match r with
-    | R.Ok _ -> Fmt.str "%a" Oi.Style.ok_string "ok"
-    | R.Failed _ -> Fmt.str "%a" Oi.Style.error_string "fail"
-    | R.Skipped _ -> Fmt.str "%a" Oi.Style.warn_string "skip"
+    | R.Ok _ -> Fmt.str "%a" Oi.Style.pp_ok_string "ok"
+    | R.Failed _ -> Fmt.str "%a" Oi.Style.pp_error_string "fail"
+    | R.Skipped _ -> Fmt.str "%a" Oi.Style.pp_warn_string "skip"
   in
   let first_line s =
     match String.split_on_char '\n' s with [] -> "" | h :: _ -> h
@@ -89,7 +89,7 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       (* [Fmt.str] with styling inflates the visible length with ANSI
          codes; pad first, then colour. *)
       let padded = Fmt.str "%-*s" handle_width h in
-      Fmt.str "%a" Oi.Style.info_string padded
+      Fmt.str "%a" Oi.Style.pp_info_string padded
   in
   (* No leading [Say.newline] here: the progress bar's tear-down
      ([Preflight_bar.run]'s finally) leaves the cursor on the blank row
@@ -109,11 +109,12 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
       | R.Failed { per_pkg_logs; _ } ->
           List.iter
             (fun (pkg, log_path) ->
-              Fmt.pr "         %a %s: %s@." Oi.Style.dim_string "↳ log" pkg
+              Fmt.pr "         %a %s: %s@." Oi.Style.pp_dim_string "↳ log" pkg
                 log_path)
             per_pkg_logs
       | R.Skipped { log_path; _ } when log_path <> "" ->
-          Fmt.pr "         %a %s@." Oi.Style.dim_string "↳ solver log:" log_path
+          Fmt.pr "         %a %s@." Oi.Style.pp_dim_string "↳ solver log:"
+            log_path
       | _ -> ())
     rows;
   Oi.Say.newline ();
@@ -122,13 +123,13 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
      actually happened. Otherwise even a clean run shows [failed 0]
      in bright red, which reads as "something's wrong". *)
   let pair styled_when_active label n =
-    if n = 0 then Fmt.str "%a %d" Oi.Style.dim_string label n
+    if n = 0 then Fmt.str "%a %d" Oi.Style.pp_dim_string label n
     else Fmt.str "%a %d" styled_when_active label n
   in
   Fmt.pr "  %s  %s  %s@."
-    (pair Oi.Style.ok_string "ok" n_ok)
-    (pair Oi.Style.error_string "failed" n_failed)
-    (pair Oi.Style.warn_string "skipped" n_skipped);
+    (pair Oi.Style.pp_ok_string "ok" n_ok)
+    (pair Oi.Style.pp_error_string "failed" n_failed)
+    (pair Oi.Style.pp_warn_string "skipped" n_skipped);
   (* Dump per-target build-failure output at debug level so `-v` still
      shows the reason, without dumping a compiler transcript by
      default. *)
@@ -163,8 +164,10 @@ let print_build_summary ~targets ~target_handle ~solve_failures ~target_group
                   | None -> ()
                   | Some tail ->
                       Oi.Say.newline ();
-                      Fmt.pr "%a %s %a@." Oi.Style.error_string "── tail" pkg
-                        Oi.Style.dim_string (Fmt.str "(%s)" log_path);
+                      Fmt.kstr
+                        (Fmt.pr "%a %s %a@." Oi.Style.pp_error_string "── tail"
+                           pkg Oi.Style.pp_dim_string)
+                        "(%s)" log_path;
                       Fmt.pr "%s@." tail
                 end)
               per_pkg_logs
@@ -421,7 +424,7 @@ let compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh ~conf
 let compute_overlay_depexts_per_distro ~fs ~sys ~cache ~data_dir ~refresh
     ~platform ~distros =
   let host_conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let solves =
     gather_overlay_solves ~fs ~sys ~cache ~data_dir ~refresh ~host_conf ()
@@ -472,7 +475,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let { Terms.layer_remote; source_remote } =
     Terms.remotes_of ~url:registry ~mode:use_registry
@@ -532,7 +535,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
       \  cd <build_dir>@,\
       \  dune runtest --profile=release@,\
        @]@."
-      Oi.Style.header_string "Would run:" target_display;
+      Oi.Style.pp_header_string "Would run:" target_display;
     0
   end
   else begin
@@ -596,7 +599,7 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
       find_target_layer ~fs ~cache ~os_key ~pkg_name:target layer_hashes
     with
     | None ->
-        Oi.Error.not_found target
+        Oi.Error.fail_not_found target
           "no built layer matched %s; the solve may have substituted a \
            different package."
           target
@@ -608,12 +611,12 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
           Oi.Cache.root_s cache / "build" / "_build" / (pkg_full ^ "-" ^ short)
         in
         if not (Sys.file_exists build_dir) then
-          Oi.Error.not_found target
+          Oi.Error.fail_not_found target
             "build dir %s missing (layer was cached without preserved source). \
              Pass --refresh to rebuild from source."
             build_dir;
         if not (Sys.file_exists (build_dir / "dune-project")) then
-          Oi.Error.config_error
+          Oi.Error.fail_config_error
             "%s has no dune-project; native opam test commands not yet \
              supported."
             build_dir;
@@ -626,17 +629,17 @@ let run_target_test ~target ~fs ~proc_mgr ~clock ~sys ~platform ~os_key ~cache
         let env =
           Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
         in
-        Fmt.pr "@.%a %s@.%a %s@." Oi.Style.header_string "Testing" pkg_full
-          Oi.Style.dim_string "→" build_dir;
+        Fmt.pr "@.%a %s@.%a %s@." Oi.Style.pp_header_string "Testing" pkg_full
+          Oi.Style.pp_dim_string "→" build_dir;
         let cmd = Fmt.str "cd %s && dune runtest --profile=release" build_dir in
         let ec = Subprocess.run proc_mgr ~env [ "/bin/sh"; "-c"; cmd ] in
         if ec <> 0 then begin
-          Fmt.epr "%a (dune runtest exit %d)@." Oi.Style.error_string
+          Fmt.epr "%a (dune runtest exit %d)@." Oi.Style.pp_error_string
             "Test failed" ec;
           ec
         end
         else begin
-          Fmt.pr "%a@." Oi.Style.ok_string "Test successful";
+          Fmt.pr "%a@." Oi.Style.pp_ok_string "Test successful";
           0
         end
   end
@@ -724,7 +727,7 @@ let cmd =
         with Sys_error _ -> false
     in
     let needs_spec what =
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi build %s: no spec and no project (cwd has no *.opam). Pass a PKG, \
          @HANDLE, or --all."
         what
@@ -734,10 +737,10 @@ let cmd =
        proceed: [--export] + [--depext] together, and any flag whose
        result depends on solving when there's nothing to solve. *)
     if export <> None && depext_only then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi build: --export and --depext are mutually exclusive";
     if archives_only && (export <> None || depext_only) then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi build --archives-only: cannot combine with --export or --depext \
          (no build runs, so there's nothing to publish or depext)";
     let no_spec = targets = [] && (not all) && not project_mode in
@@ -745,7 +748,7 @@ let cmd =
     if no_spec && depext_only then needs_spec "--depext";
     if no_spec && archives_only then needs_spec "--archives-only";
     if every_version && not archives_only then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi build --every-version: only valid with --archives-only (it skips \
          the solver and walks every recorded reporepo opam file)";
     if every_version then begin
@@ -772,7 +775,7 @@ let cmd =
     end;
     if depext_only && all then begin
       let conf =
-        Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+        Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
       in
       let names =
         compute_overlay_depexts_for_conf ~fs ~sys ~cache ~data_dir ~refresh
@@ -843,7 +846,7 @@ let cmd =
           (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh
              ~reporter:ui_reporter ());
         let conf =
-          Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+          Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
         in
         let { Terms.layer_remote; source_remote } =
           Terms.remotes_of ~url:registry ~mode:use_registry
@@ -934,12 +937,12 @@ let cmd =
         let tokens = List.concat token_groups in
         if tokens = [] then
           begin if all then
-            Oi.Error.config_error
+            Oi.Error.fail_config_error
               "--all expanded to nothing in %s (all overlays filtered by \
                --skip/--only, or the reporepo only contains 'default')"
               (Terms.reporepo_path ())
           else
-            Oi.Error.config_error
+            Oi.Error.fail_config_error
               "no targets to build (pass PKG arguments or --all)"
           end;
         (* Classify each input into a plain target or an overlay form.
@@ -1043,13 +1046,14 @@ let cmd =
           let path = Terms.reporepo_path () in
           let entries = Oi.Source.Reporepo.load ~path in
           match Oi.Source.Reporepo.latest entries ~handle with
-          | None -> Oi.Error.config_error "no overlay %s in reporepo" handle
+          | None ->
+              Oi.Error.fail_config_error "no overlay %s in reporepo" handle
           | Some e ->
               let pkgs_dir =
                 Oi.Source.Reporepo.overlay_packages_dir ~path ~handle:e.handle
               in
               if not (Sys.file_exists pkgs_dir) then
-                Oi.Error.config_error
+                Oi.Error.fail_config_error
                   "overlay %s.%s is not materialised at %s; run 'oi repo bump \
                    %s' to populate it (upstream %s)"
                   handle e.version pkgs_dir handle e.url;
@@ -1104,7 +1108,7 @@ let cmd =
                             Hashtbl.replace target_handle pkg_spec h;
                             pkg_spec
                         | Target.Overlay_all h ->
-                            Oi.Error.config_error
+                            Oi.Error.fail_config_error
                               "@%s cannot appear inside a multi-package solve \
                                group; use @%s/PKG or list packages explicitly"
                               h h)
@@ -1125,7 +1129,7 @@ let cmd =
         let target_groups = raw_target_groups in
         let targets = List.concat_map fst target_groups in
         if targets = [] && url_project.roots = [] then
-          Oi.Error.config_error "no targets to build";
+          Oi.Error.fail_config_error "no targets to build";
         (* [--with] adds extra packages to every target's root set plus any
        version constraints they carry. *)
         let base_constraints = Oi.Project.Script.constraints extra_cli in
@@ -1341,7 +1345,7 @@ let cmd =
                 solved.groups
             in
             if not any_solved then
-              Oi.Error.msg "no packages solved successfully";
+              Oi.Error.fail_msg "no packages solved successfully";
             (* [--depext]: every group is solved, sum their depexts. *)
             if depext_only then begin
               let group_conf, _ =
@@ -1588,7 +1592,7 @@ let cmd =
                                   | [ f ] ->
                                       Fmt.str "package %s.%s in phase %s"
                                         f.package.name f.package.version
-                                        (D10ir.Direct.phase_to_string f.phase)
+                                        (D10ir.Direct.string_of_phase f.phase)
                                   | fs -> Fmt.str "%d packages" (List.length fs)
                                 in
                                 let output =
@@ -1655,7 +1659,7 @@ let cmd =
         with Sys_error _ -> []
       in
       if entries <> [] then begin
-        Fmt.pr "@.%a (%d):@." Oi.Style.dim_string "transient fetch errors"
+        Fmt.pr "@.%a (%d):@." Oi.Style.pp_dim_string "transient fetch errors"
           (List.length entries);
         List.iter (fun p -> Fmt.pr "  %s@." p) entries
       end
@@ -1674,17 +1678,17 @@ let cmd =
           Hashtbl.replace by_sub sub
             (1 + Stdlib.Option.value (Hashtbl.find_opt by_sub sub) ~default:0))
         !dist_mapping;
-      Fmt.pr "@.%a@." Oi.Style.header_string "Dist artifacts:";
+      Fmt.pr "@.%a@." Oi.Style.pp_header_string "Dist artifacts:";
       List.iter
         (fun (_, name, dst) ->
-          Fmt.pr "  %s %a %s@." name Oi.Style.dim_string "→" dst)
+          Fmt.pr "  %s %a %s@." name Oi.Style.pp_dim_string "→" dst)
         (List.filter
            (fun (sub, _, _) -> sub = "bin" || sub = "sbin")
            !dist_mapping);
       match Hashtbl.find_opt by_sub "share" with
       | Some n when n > 0 ->
-          Fmt.pr "  share/ %a %a@." Oi.Style.dim_string (Fmt.str "(%d files)" n)
-            Oi.Style.dim_string "—"
+          Fmt.pr "  share/ %a %a@." Oi.Style.pp_dim_string
+            (Fmt.str "(%d files)" n) Oi.Style.pp_dim_string "—"
       | _ -> ()
     end
   in
@@ -1867,7 +1871,7 @@ let test_cmd =
     match targets with
     | [] ->
         if not project_mode then
-          Oi.Error.config_error
+          Oi.Error.fail_config_error
             "oi test: no *.opam in %s. Run from a project, or pass a PKG / \
              @HANDLE/PKG."
             cwd_s;
@@ -1887,7 +1891,7 @@ let test_cmd =
         in
         exit ec
     | _ ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi test takes at most one PKG / @HANDLE/PKG target."
   in
   let dry_run =

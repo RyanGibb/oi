@@ -10,9 +10,12 @@ type t
     [~/.cache/oi/]). Constructed once at startup and threaded into every
     subsystem that may write into the cache. *)
 
-val create : root:string -> Eio.Fs.dir_ty Eio.Path.t -> t
-(** [create ~root fs] builds a {!t} pinned to [root]. Does not create the
-    directory; callers create subdirs lazily as they're needed. *)
+val v : root:string -> Eio.Fs.dir_ty Eio.Path.t -> t
+(** [v ~root fs] builds a {!t} pinned to [root]. Does not create the directory;
+    callers create subdirs lazily as they're needed. *)
+
+val pp : t Fmt.t
+(** [pp ppf t] renders the cache root path. *)
 
 val root : t -> Eio.Fs.dir_ty Eio.Path.t
 (** Eio path to the cache root. *)
@@ -21,14 +24,14 @@ val root_s : t -> string
 (** String form of {!root}, for env vars and APIs that take native paths. *)
 
 val dune_root : t -> string
-(** Directory used as the dune cache root ([<cache>/dune]). Threaded into the
-    [DUNE_CACHE_ROOT] env var for child dune invocations so layer builds share
-    one cache across [oi] runs. *)
+(** [dune_root] Directory used as the dune cache root ([<cache>/dune]). Threaded
+    into the [DUNE_CACHE_ROOT] env var for child dune invocations so layer
+    builds share one cache across [oi] runs. *)
 
 val fs : t -> Eio.Fs.dir_ty Eio.Path.t
-(** The underlying filesystem capability used to construct the cache; exposed so
-    modules that already thread a [Cache.t] don't need to duplicate the [fs]
-    argument on every internal helper. *)
+(** [fs] The underlying filesystem capability used to construct the cache;
+    exposed so modules that already thread a [Cache.t] don't need to duplicate
+    the [fs] argument on every internal helper. *)
 
 (** {1 Script run cache} *)
 
@@ -59,8 +62,8 @@ val toolchains_root : unit -> string
     was populated cleanly (partial fetches don't leave one behind). *)
 
 val refresh_max_age : float
-(** Seconds. Default [86_400.0] (24h). A clone older than this is pulled again
-    on next use. *)
+(** [refresh_max_age] Seconds. Default [86_400.0] (24h). A clone older than this
+    is pulled again on next use. *)
 
 val fresh : refresh:bool -> sentinel:string -> max_age:float -> bool
 (** [fresh ~refresh ~sentinel ~max_age] is [true] when a cache entry guarded by
@@ -103,29 +106,28 @@ type item = {
   description : string;
 }
 
-val cache_items : t -> item list
-(** Subdirs under [<cache>/]. Swept by {!Stamp.cache_schema} bumps. *)
+val items : t -> item list
+(** [items] Subdirs under [<cache>/]. Swept by {!Stamp.cache_schema} bumps. *)
 
 val data_items : t -> data_dir:string -> item list
-(** Subdirs under [<data>/] that are rebuildable cache (repos, opam-root). Swept
-    by {!Stamp.data_schema} bumps. The reporepo is user-authored data and is NOT
-    included. *)
+(** [data_items] Subdirs under [<data>/] that are rebuildable cache (repos,
+    opam-root). Swept by {!Stamp.data_schema} bumps. The reporepo is
+    user-authored data and is NOT included. *)
 
 val toolchain_items : t -> item list
-(** [$XDG_CACHE_HOME/oi/toolchains/]. Swept by {!Stamp.toolchains_schema} bumps.
-*)
+(** [toolchain_items] . Swept by {!Stamp.toolchains_schema} bumps. *)
 
 val cleanable_items : t -> data_dir:string -> item list
-(** Concatenation of {!cache_items}, {!data_items}, {!toolchain_items}. The
-    [oi clean] CLI iterates this. *)
+(** [cleanable_items t ~data_dir] is the concatenation of {!items},
+    {!data_items}, {!toolchain_items}. The [oi clean] CLI iterates this. *)
 
 val purge_items : item list -> unit
-(** [rmtree ~missing_ok:true] each item; no logging. *)
+(** [purge_items] each item; no logging. *)
 
 val size : sys:D10.Sysops.t -> Eio.Fs.dir_ty Eio.Path.t -> int64
-(** Recursive on-disk size of a directory in bytes, computed via [du -sk] (with
-    the result multiplied by 1024). Returns [0L] when the path doesn't exist or
-    the subprocess errors out. *)
+(** [size ~sys path] is the recursive on-disk size of a directory in bytes,
+    computed via [du -sk] (with the result multiplied by 1024). Returns [0L]
+    when the path doesn't exist or the subprocess errors out. *)
 
 val pp_size : int64 Fmt.t
 (** Pretty-print a byte count as a human-readable string (e.g. ["1.2 GB"]). *)

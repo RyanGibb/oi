@@ -34,7 +34,7 @@ let index_path_s d10 =
 
 let status_span = function
   | 0 -> Tty.Span.styled Oi.Style.ok "ok"
-  | n -> Tty.Span.styled Oi.Style.error (Fmt.str "fail %d" n)
+  | n -> Fmt.kstr (Tty.Span.styled Oi.Style.error) "fail %d" n
 
 let pp_time t =
   let t = Unix.gmtime t in
@@ -116,9 +116,9 @@ let list_cmd =
         | Ok s ->
             print_string s;
             print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+        | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e)
     | Text ->
-        Fmt.pr "%a %s@.@." Oi.Style.header_string "Layers" d10.os_key;
+        Fmt.pr "%a %s@.@." Oi.Style.pp_header_string "Layers" d10.os_key;
         if summaries = [] then Fmt.pr "  (empty)@."
         else begin
           let total = List.length summaries in
@@ -150,7 +150,7 @@ let list_cmd =
               rows
           in
           Oi.Style.pp_table Fmt.stdout table;
-          Fmt.pr "@.%a %d layer(s)@." Oi.Style.header_string "Total:" total
+          Fmt.pr "@.%a %d layer(s)@." Oi.Style.pp_header_string "Total:" total
         end
   in
   let info = Cmd.info "list" ~doc:"List cached layers" in
@@ -178,7 +178,7 @@ let print_provenance (p : Oi.Provenance.t) =
     | Some ov -> Fmt.str "%a %a" Oi.Origin.pp_kind o.kind D10.Overlay.pp ov
     | None -> Fmt.str "%a" Oi.Origin.pp_kind o.kind
   in
-  Fmt.pr "  method:   %s@," (Oi.Identity.method_to_string p.method_);
+  Fmt.pr "  method:   %s@," (Oi.Identity.string_of_method p.method_);
   Fmt.pr "  built:    %s (%s)@," (pp_time p.built_at) (pp_duration p.duration_s);
   Fmt.pr "  opam sha: %s@," p.opam.sha256;
   Fmt.pr "  origin:   %s@," origin_label;
@@ -252,7 +252,7 @@ let print_callers events =
         let outcome_str =
           Oi.Outcome.sort_histogram outcomes
           |> List.map (fun (k, c) ->
-              Fmt.str "%s×%d" (Oi.Outcome.kind_to_string k) c)
+              Fmt.str "%s×%d" (Oi.Outcome.string_of_kind k) c)
           |> String.concat " "
         in
         Fmt.pr "    %-16s %s  (last %s)@," handle outcome_str (pp_time last_ts))
@@ -367,7 +367,7 @@ let show_cmd =
         | Ok s ->
             print_string s;
             print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+        | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e)
     | Text ->
         if matches = [] then Fmt.pr "No layers found matching %S@." package
         else
@@ -375,12 +375,13 @@ let show_cmd =
             (fun (m : show_match) ->
               let status =
                 if m.meta.exit_status = 0 then
-                  Fmt.str "%a" Oi.Style.ok_string "ok"
+                  Fmt.str "%a" Oi.Style.pp_ok_string "ok"
                 else
-                  Fmt.str "%a (exit %d)" Oi.Style.error_string "failed"
+                  Fmt.str "%a (exit %d)" Oi.Style.pp_error_string "failed"
                     m.meta.exit_status
               in
-              Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Layer" m.layer_hash;
+              Fmt.pr "@[<v>%a %s@," Oi.Style.pp_header_string "Layer"
+                m.layer_hash;
               Fmt.pr "  package:  %s@," m.meta.package;
               Fmt.pr "  status:   %s@," status;
               Fmt.pr "  created:  %s@," (pp_time m.meta.created);
@@ -464,13 +465,13 @@ let binaries_cmd =
         | Ok s ->
             print_string s;
             print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+        | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e)
     | Text ->
         if not index_present then
-          Fmt.pr "No index found. Run %a first.@." Oi.Style.accent_string
+          Fmt.pr "No index found. Run %a first.@." Oi.Style.pp_accent_string
             "oi cache index"
         else begin
-          Fmt.pr "%a %s@.@." Oi.Style.header_string "Binaries" d10.os_key;
+          Fmt.pr "%a %s@.@." Oi.Style.pp_header_string "Binaries" d10.os_key;
           let rows =
             List.map
               (fun b ->
@@ -491,7 +492,7 @@ let binaries_cmd =
               rows
           in
           Oi.Style.pp_table Fmt.stdout table;
-          Fmt.pr "@.%a %d binar%s@." Oi.Style.header_string "Total:"
+          Fmt.pr "@.%a %d binar%s@." Oi.Style.pp_header_string "Total:"
             (List.length bins)
             (if List.length bins = 1 then "y" else "ies")
         end
@@ -597,7 +598,7 @@ let index_cmd =
         Fmt.str "%d layers, %d binaries, %d findlib, %d tarballs" t.layers
           t.binaries t.findlib t.tarballs
     in
-    Fmt.pr "@.%a %s@." Oi.Style.header_string "Total:" trailer;
+    Fmt.pr "@.%a %s@." Oi.Style.pp_header_string "Total:" trailer;
     Fmt.pr "Index: %s@." index_path
   in
   let include_files =
@@ -699,13 +700,13 @@ let stats_cmd =
         | Ok s ->
             print_string s;
             print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+        | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e)
     | Text ->
         if not index_present then
-          Fmt.pr "No index found. Run %a first.@." Oi.Style.accent_string
+          Fmt.pr "No index found. Run %a first.@." Oi.Style.pp_accent_string
             "oi cache index"
         else begin
-          Fmt.pr "@[<v>%a %s@," Oi.Style.header_string "Stats" d10.os_key;
+          Fmt.pr "@[<v>%a %s@," Oi.Style.pp_header_string "Stats" d10.os_key;
           Fmt.pr "  layers:    %d@," s.layers;
           Fmt.pr "  binaries:  %d@," s.binaries;
           Fmt.pr "  findlib:   %d@," s.findlib;
@@ -767,7 +768,7 @@ let archives_cmd =
         Fmt.pr
           "%a %d archive(s) at %s (%d new, %d already present; %d total in \
            cache)@."
-          Oi.Style.ok_string "✓" (linked + present) dst linked present
+          Oi.Style.pp_ok_string "✓" (linked + present) dst linked present
           (List.length entries)
     | None -> (
         match c.format with
@@ -779,9 +780,9 @@ let archives_cmd =
             | Ok s ->
                 print_string s;
                 print_newline ()
-            | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+            | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e)
         | Text ->
-            Fmt.pr "%a %s@.@." Oi.Style.header_string "d10ir archives" dir;
+            Fmt.pr "%a %s@.@." Oi.Style.pp_header_string "d10ir archives" dir;
             if entries = [] then Fmt.pr "  (empty)@."
             else begin
               let total =
@@ -805,7 +806,7 @@ let archives_cmd =
                   rows
               in
               Oi.Style.pp_table Fmt.stdout table;
-              Fmt.pr "@.%a %d archive(s), %s total@." Oi.Style.header_string
+              Fmt.pr "@.%a %d archive(s), %s total@." Oi.Style.pp_header_string
                 "Total:" (List.length entries) (pp_size total)
             end)
   in
@@ -904,7 +905,7 @@ let explain_cmd =
             with
             | Some p -> p
             | None ->
-                Oi.Error.config_error
+                Oi.Error.fail_config_error
                   "no provenance.json for layer %s under os %s — layer may be \
                    absent, failed, or pre-provenance"
                   hash d10.os_key
@@ -926,12 +927,12 @@ let explain_cmd =
         | Ok s ->
             print_string s;
             print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+        | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e)
     | Text ->
         let rec pp ~depth (n : explain_node) =
           let indent = String.make (depth * 2) ' ' in
           let pkg = Oi.Identity.to_string n.provenance.pkg in
-          Fmt.pr "%s%s %a@." indent pkg Oi.Style.dim_string
+          Fmt.pr "%s%s %a@." indent pkg Oi.Style.pp_dim_string
             (short_hash n.layer_hash);
           List.iter (pp ~depth:(depth + 1)) n.depends_on
         in

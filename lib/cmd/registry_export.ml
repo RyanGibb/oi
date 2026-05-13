@@ -1,3 +1,8 @@
+let log_src =
+  Logs.Src.create "oi.cmd.registry_export" ~doc:"oi registry export command"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 
 (* Sqlite in WAL mode leaves [<path>-wal] and [<path>-shm] sidecars
@@ -67,7 +72,7 @@ let record_tarballs db ~output ~os_key =
 let export_d10ir_archives = Oi.D10ir_archives.publish_all
 
 let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
-  let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
+  let d10 = Oi.Pipeline.d10 ~sys ~fs ~clock ~cache ~os_key in
   let dst = Eio.Path.(fs / output) in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 dst;
   let n_layers = D10.Layer.export_all d10 ~dst in
@@ -93,11 +98,11 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
     then begin
       (try D10.Index.merge_remote db ~remote_path:scratch
        with Failure msg ->
-         Logs.warn (fun m -> m "Failed to merge remote layer index: %s" msg));
+         Log.warn (fun m -> m "Failed to merge remote layer index: %s" msg));
       remove_sqlite_scratch scratch
     end
     else
-      Logs.info (fun m ->
+      Log.info (fun m ->
           m "No remote layer index at %s/%s/index.db (skipping merge)" registry
             os_key)
   end;
@@ -135,7 +140,7 @@ let run ~fs ~clock ~sys ~os_key ~cache ~registry ~output =
     | Ok s ->
         Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / path) s;
         Oi.Say.field "manifest" "%d entry(ies) at %s" manifest.n_packages path
-    | Error e -> Logs.warn (fun m -> m "manifest encode failed: %s" e));
+    | Error e -> Log.warn (fun m -> m "manifest encode failed: %s" e));
     if events <> [] then begin
       Oi.Audit.write_per_os ~fs ~output_dir:output ~os_key events;
       Oi.Say.field "audit" "%d event(s) at %s/audit.jsonl" (List.length events)

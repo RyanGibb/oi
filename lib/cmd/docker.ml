@@ -1,13 +1,14 @@
 open Cmdliner
 
 let ( / ) = Filename.concat
+let err_msg fmt = Fmt.kstr (fun s -> Error (`Msg s)) fmt
 
 (* [--distro=NAME] parsed via dockerfile-opam. Defaults to debian-stable. *)
 let parse_distro tag =
   match Dockerfile_opam.Distro.distro_of_tag tag with
   | Some d -> Ok d
-  | None -> Error (`Msg (Fmt.str "unknown distro tag: %s" tag))
-  | exception _ -> Error (`Msg (Fmt.str "unknown distro tag: %s" tag))
+  | None -> err_msg "unknown distro tag: %s" tag
+  | exception _ -> err_msg "unknown distro tag: %s" tag
 
 let pp_distro ppf d =
   Fmt.string ppf
@@ -89,7 +90,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~s3
   List.iter
     (fun (_, df_path, spec_path, n) ->
       let suffix = if n = 0 then "" else Fmt.str "  (%d overlay depexts)" n in
-      Oi.Say.info "%s%a" df_path Oi.Style.dim_string suffix;
+      Oi.Say.info "%s%a" df_path Oi.Style.pp_dim_string suffix;
       Oi.Say.info "%s" spec_path)
     per_distro_paths;
   Oi.Say.info "%s" compose_path;
@@ -99,7 +100,7 @@ let emit_all ~fs ~sys ~platform ~cache ~data_dir ~refresh ~src_context ~s3
     oi_path;
   Oi.Say.step "Run the build + sync (Docker)";
   Oi.Say.info "S3_ACCESS_KEY=… S3_SECRET_KEY=… docker compose build   %a"
-    Oi.Style.dim_string
+    Oi.Style.pp_dim_string
     "# builds each image, runs oi build --all and s3cmd sync"
 
 let cmd =
@@ -124,15 +125,16 @@ let cmd =
     in
     let data_dir = c.data_dir in
     if test_mode && all then
-      Oi.Error.config_error "oi docker: --test and --all are mutually exclusive";
+      Oi.Error.fail_config_error
+        "oi docker: --test and --all are mutually exclusive";
     if targets <> [] && all then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi docker: --all and positional TARGET(s) are mutually exclusive";
     if targets <> [] && test_mode then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi docker: --test and positional TARGET(s) are mutually exclusive";
     if obuilder && (test_mode || no_recipe || (targets = [] && not all)) then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi docker --obuilder: supported with --all or positional TARGET(s); \
          --no-recipe/--test/project-mode aren't wired up yet.";
     if obuilder && all then

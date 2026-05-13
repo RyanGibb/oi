@@ -28,6 +28,10 @@ val default : t
     [keep_staging = false], [log_dir = None], [inject_env = []]. *)
 
 val with_env_overrides : t -> t
-(** Apply environment-variable overrides:
-    - [OI_BUILD_PARALLELISM] → [build_parallelism]
-    - [OI_KEEP_STAGING] (any non-empty value) → [keep_staging = true] *)
+(** [with_env_overrides t] applies environment-variable overrides:
+    - [OI_BUILD_PARALLELISM] → [build_parallelism].
+    - [OI_KEEP_STAGING] (any non-empty value) → [keep_staging = true]. *)
+
+val pp : t Fmt.t
+(** [pp] renders the parallelism, [keep_staging], and [log_dir] knobs on one
+    line. [inject_env] is omitted to keep the line short. *)

@@ -51,17 +51,16 @@ let print_path_hint ~bin_dir =
   Oi.Say.newline ();
   Oi.Say.warn "%s is not on your PATH." bin_dir;
   Fmt.pr "Add it to the current shell:@.";
-  Fmt.pr "  %s@." (Fmt.str "export PATH=\"%s:$PATH\"" bin_dir);
+  Fmt.pr "  export PATH=\"%s:$PATH\"@." bin_dir;
   match detect_shell_rc () with
   | None -> ()
   | Some ("fish", rc) ->
       Fmt.pr "Persist (fish):@.";
-      Fmt.pr "  %s@." (Fmt.str "fish_add_path %s" bin_dir);
-      Fmt.pr "  %a@." Oi.Style.dim_string (Fmt.str "(writes to %s)" rc)
+      Fmt.pr "  fish_add_path %s@." bin_dir;
+      Fmt.kstr (Fmt.pr "  %a@." Oi.Style.pp_dim_string) "(writes to %s)" rc
   | Some (_, rc) ->
       Fmt.pr "Persist (add to %s):@." rc;
-      Fmt.pr "  %s@."
-        (Fmt.str "echo 'export PATH=\"%s:$PATH\"' >> %s" bin_dir rc)
+      Fmt.pr "  echo 'export PATH=\"%s:$PATH\"' >> %s@." bin_dir rc
 
 (* Map a CLI target token to a [Build_pipeline.target]. [@h/pkg] →
    Overlay_pkg, [@h] → Overlay_all, anything else → Plain. *)
@@ -112,11 +111,11 @@ let promote_to_prefix ~prefix ~bin_dir ~force ~(roots : string list) =
      let lines =
        List.map
          (fun (sub, name, dst) ->
-           Fmt.str "  %s/%s %a %s" sub name Oi.Style.dim_string "→" dst)
+           Fmt.str "  %s/%s %a %s" sub name Oi.Style.pp_dim_string "→" dst)
          conflicts
        |> String.concat "\n"
      in
-     Oi.Error.config_error
+     Oi.Error.fail_config_error
        "oi install: %d file(s) already exist under %s:@\n\
         %s@\n\
         Re-run with --force to overwrite."
@@ -139,7 +138,7 @@ let promote_to_prefix ~prefix ~bin_dir ~force ~(roots : string list) =
   List.iter
     (fun (sub, name, dst) ->
       if sub = "bin" || sub = "sbin" then
-        Fmt.pr "  %s %a %s@." name Oi.Style.dim_string "→" dst)
+        Fmt.pr "  %s %a %s@." name Oi.Style.pp_dim_string "→" dst)
     installed;
   if n_share > 0 then
     Oi.Say.info "+ %d data file(s) under %s/share/" n_share prefix;
@@ -188,7 +187,7 @@ let cmd =
        they don't own. *)
     (try Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / prefix)
      with exn ->
-       Oi.Error.config_error
+       Oi.Error.fail_config_error
          "oi install: cannot create %s: %s. Pass --prefix=DIR to install \
           elsewhere."
          prefix (Printexc.to_string exn));
@@ -197,7 +196,7 @@ let cmd =
       targets = [] && (not skip_local) && cwd_has_opam_files cwd_s
     in
     if targets = [] && not project_mode then
-      Oi.Error.config_error
+      Oi.Error.fail_config_error
         "oi install: pass one or more PKG / @HANDLE/PKG targets, or run from a \
          directory containing *.opam files.";
     if project_mode then begin
@@ -215,7 +214,7 @@ let cmd =
       if ec <> 0 then exit ec;
       let install_root = cwd_s / "_build" / "install" / "default" in
       if not (Sys.file_exists install_root) then
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi install: project built but %s is missing. Does the project's \
            dune-project declare anything installable?"
           install_root;
@@ -260,7 +259,7 @@ let cmd =
             Result.is_error gr.error)
           solved.groups
       then
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi install: every solve group failed; nothing to install.";
       (* Build outcome triage. Mirrors what [oi run] does, minus the
          empty-d10ir-plan diagnostic (the install path can't usefully
@@ -268,28 +267,28 @@ let cmd =
          returned [Some r] with zero work, every root layer should
          still be present and we just copy from them). *)
       (match build_result with
-      | None -> Oi.Error.config_error "oi install: build pipeline failed."
+      | None -> Oi.Error.fail_config_error "oi install: build pipeline failed."
       | Some r when r.failed = 0 && r.skipped = 0 -> ()
       | Some r ->
           let pp_fail (f : D10ir.Direct.failure) =
             Fmt.str "%s.%s @ %s: %s — see %s" f.package.name f.package.version
-              (D10ir.Direct.phase_to_string f.phase)
+              (D10ir.Direct.string_of_phase f.phase)
               f.error f.log_path
           in
           if r.failures <> [] then begin
             let summary = List.map pp_fail r.failures |> String.concat "\n  " in
-            Oi.Error.config_error
+            Oi.Error.fail_config_error
               "oi install: build failed (%d node(s), %d skipped).@\n  %s"
               r.failed r.skipped summary
           end
           else
-            Oi.Error.config_error
+            Oi.Error.fail_config_error
               "oi install: build failed (%d skipped). Re-run with \
                --verbosity=debug for the per-node trace."
               r.skipped);
       let root_hashes = Oi.Build_pipeline.root_layer_hashes solved in
       if root_hashes = [] then
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi install: solve succeeded but no root packages matched the \
            requested targets. Re-run with --refresh.";
       let roots =

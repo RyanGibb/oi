@@ -41,7 +41,7 @@ let kind_of = function
   | Solve_failed _ -> K_solve_failed
   | Skipped _ -> K_skipped
 
-let kind_to_string = function
+let string_of_kind = function
   | K_ok -> "ok"
   | K_cached -> "cached"
   | K_restored -> "restored"
@@ -52,6 +52,8 @@ let kind_to_string = function
   | K_depext_missing -> "depext_missing"
   | K_solve_failed -> "solve_failed"
   | K_skipped -> "skipped"
+
+let pp ppf t = Fmt.string ppf (string_of_kind (kind_of t))
 
 (* -- Histogram ----------------------------------------------------------- *)
 
@@ -69,7 +71,7 @@ let sort_histogram xs =
   List.sort
     (fun (k1, c1) (k2, c2) ->
       if c1 <> c2 then compare c2 c1
-      else compare (kind_to_string k1) (kind_to_string k2))
+      else compare (string_of_kind k1) (string_of_kind k2))
     xs
 
 (* -- Codecs -------------------------------------------------------------- *)

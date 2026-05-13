@@ -6,7 +6,7 @@ let ( / ) = Filename.concat
 
 type t = { fs : Eio.Fs.dir_ty Eio.Path.t; root : string }
 
-let create ~root fs =
+let v ~root fs =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / root);
   { fs; root }
 
@@ -14,6 +14,7 @@ let root t = Eio.Path.(t.fs / t.root)
 let root_s t = t.root
 let dune_root t = t.root / "dune"
 let fs t = t.fs
+let pp ppf t = Fmt.pf ppf "@[<h>{ root = %s }@]" t.root
 
 (* -- Script run cache ---------------------------------------------------- *)
 
@@ -91,7 +92,7 @@ type item = {
 
 let item label path description = { label; path; description }
 
-let cache_items t =
+let items t =
   let p sub = Eio.Path.(t.fs / t.root / sub) in
   [
     item "sources" (p "sources") "Downloaded source tarballs";
@@ -124,7 +125,7 @@ let toolchain_items t =
   ]
 
 let cleanable_items t ~data_dir =
-  cache_items t @ data_items t ~data_dir @ toolchain_items t
+  items t @ data_items t ~data_dir @ toolchain_items t
 
 (* Clear the *contents* of each item rather than the item dir itself.
    Removing the dir would fail with [EBUSY] for any path that's a mount

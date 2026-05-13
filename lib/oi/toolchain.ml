@@ -86,7 +86,7 @@ let find_entry_by_toolchain_name ~name =
   | [] -> None
   | [ h ] -> Source.Reporepo.latest entries ~handle:h
   | _ ->
-      Error.config_error
+      Error.fail_config_error
         "multiple reporepo handles define toolchain %S: %s — fix by removing \
          the duplicate definitions"
         name
@@ -262,7 +262,7 @@ let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
               e.toolchain_name)
           |> List.sort_uniq String.compare
         in
-        Error.config_error
+        Error.fail_config_error
           "toolchain %S not registered in reporepo at %s. Known: %s" handle path
           (if known = [] then "(none — add toolchain definition entries)"
            else String.concat ", " known)
@@ -295,8 +295,8 @@ let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
   in
   let root_specs = List.flatten entry.toolchain_roots in
   if root_specs = [] then
-    Error.config_error "toolchain %s: %s.%s declares no %s" handle entry.handle
-      entry.version Keys.toolchain_roots;
+    Error.fail_config_error "toolchain %s: %s.%s declares no %s" handle
+      entry.handle entry.version Keys.toolchain_roots;
   let constraints =
     List.fold_left
       (fun m spec ->
@@ -322,7 +322,7 @@ let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
     match Solver.raw_solve ~env ~packages_dirs ~constraints names with
     | Ok pkgs -> pkgs
     | Error msg ->
-        Error.config_error "toolchain %s: solve failed: %s" handle msg
+        Error.fail_config_error "toolchain %s: solve failed: %s" handle msg
   in
   let pkgs = Solver.topo_sort ~packages_dirs ~conf pkgs in
   Log.info (fun m ->
@@ -335,15 +335,15 @@ let resolve ~fs ~sys ~data_dir:_ ~(conf : Solver.Ctx.conf) ~handle =
         (* Source.Reporepo.parse_entry_file guarantees a toolchain
            entry has [x-oi-toolchain-compiler] set. If we hit this
            branch the reporepo bypassed validation. *)
-        Error.config_error "toolchain %s: %s.%s has no %s" handle entry.handle
-          entry.version Keys.toolchain_compiler
+        Error.fail_config_error "toolchain %s: %s.%s has no %s" handle
+          entry.handle entry.version Keys.toolchain_compiler
   in
   let ocaml_version =
     match pick_ocaml_version ~explicit_compiler pkgs with
     | Some v -> v
     | None ->
-        Error.config_error "toolchain %s: solved set contains no %s package"
-          handle
+        Error.fail_config_error
+          "toolchain %s: solved set contains no %s package" handle
           (fst (parse_spec explicit_compiler))
   in
   let relocatable_flag = Stdlib.Option.value entry.relocatable ~default:true in
@@ -397,8 +397,9 @@ let repo_specs_of_packages_dirs packages_dirs =
     (fun d ->
       let name = repo_name_of_packages_dir d in
       let url =
-        OpamUrl.parse ~from_file:false
-          (Fmt.str "file://%s" (Filename.dirname d))
+        Fmt.kstr
+          (OpamUrl.parse ~from_file:false)
+          "file://%s" (Filename.dirname d)
       in
       (name, url))
     packages_dirs
@@ -444,8 +445,9 @@ let ensure_installed ?(reporter = Build_progress.null) ~fs (info : info) =
     Log.debug (fun m ->
         m "toolchain %s already installed at %s" info.handle info.install_prefix)
   else begin
-    reporter.Build_progress.event
-      (Status (Fmt.str "Installing toolchain %s" info.handle));
+    Fmt.kstr
+      (fun s -> reporter.Build_progress.event (Status s))
+      "Installing toolchain %s" info.handle;
     let switch_dir = Filename.dirname info.install_prefix in
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / switch_dir);
     (* Frame what's about to happen so the user understands why opam
@@ -454,8 +456,8 @@ let ensure_installed ?(reporter = Build_progress.null) ~fs (info : info) =
        (the [OpamConsole.msg] calls in opamAction.ml have no quiet
        hook — verbose_level only gates the [foo] compiled line and
        subprocess output), so we live with that and just frame it. *)
-    Fmt.pr "@.%a One-off build of toolchain %a (%s)@." Style.accent_string "▸"
-      Style.header_string info.handle info.ocaml_version;
+    Fmt.pr "@.%a One-off build of toolchain %a (%s)@." Style.pp_accent_string
+      "▸" Style.pp_header_string info.handle info.ocaml_version;
     Fmt.pr "  %s isn't relocatable yet, so it's installed once at a fixed@."
       info.handle;
     Fmt.pr "  prefix and reused on subsequent runs. This will go away once@.";
@@ -543,13 +545,14 @@ let ensure_installed ?(reporter = Build_progress.null) ~fs (info : info) =
           end
         in
         OpamSwitchState.drop st);
-    Eio.Path.save ~create:(`Or_truncate 0o644)
-      Eio.Path.(fs / ready_marker info)
-      (Fmt.str "handle: %s\nocaml: %s\nhash: %s\n" info.handle
-         info.ocaml_version info.hash);
+    Fmt.kstr
+      (Eio.Path.save ~create:(`Or_truncate 0o644)
+         Eio.Path.(fs / ready_marker info))
+      "handle: %s\nocaml: %s\nhash: %s\n" info.handle info.ocaml_version
+      info.hash;
     let elapsed = Unix.gettimeofday () -. started in
-    Fmt.pr "@.%a Toolchain %s ready at %s (%.0fs)@." Style.strong_ok_string "▸"
-      info.handle info.install_prefix elapsed;
+    Fmt.pr "@.%a Toolchain %s ready at %s (%.0fs)@." Style.pp_strong_ok_string
+      "▸" info.handle info.install_prefix elapsed;
     Log.info (fun m ->
         m "Toolchain %s (%s) ready at %s" info.handle info.ocaml_version
           info.install_prefix)

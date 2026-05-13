@@ -1,3 +1,7 @@
+let log_src = Logs.Src.create "oi.cmd.sync" ~doc:"oi sync command"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 let short_hash h = String.sub h 0 (min 12 (String.length h))
 
@@ -38,11 +42,11 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
     ~cache ~data_dir ~conf ~os_key ~session ~extra_repos ~pins ?toolchain
     ?layer_remote ?source_remote ~cwd () =
   let say_step fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    if quiet then Fmt.kstr (fun s -> Log.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
   in
   let say_info fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    if quiet then Fmt.kstr (fun s -> Log.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
   in
   let warn_named name fmt =
@@ -53,7 +57,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
     (* Surface the per-tool [Build_pipeline.build] phases (build solver
        context, solve, plan, fetch layers) and Execute's per-package
        progress so a long tool build doesn't look like a hang. In
-       quiet mode the phase narration drops to [Logs.info], matching
+       quiet mode the phase narration drops to [Log.info], matching
        the rest of [install_tools]. *)
     try
       let pipeline_env : Oi.Build_pipeline.env =
@@ -155,7 +159,7 @@ let install_tools ?(quiet = false) ?refresh ?jobs ~proc_mgr ~fs ~clock ~sys
           let tools_dir = cwd / "_oi" / "tools" in
           Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / tools_dir);
           Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / tools_dir);
-          let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
+          let d10 = Oi.Pipeline.d10 ~sys ~fs ~clock ~cache ~os_key in
           let unique = List.sort_uniq String.compare leaves in
           D10.Prefix.assemble d10 ~layer_hashes:unique
             ~dst:Eio.Path.(fs / tools_dir);
@@ -197,7 +201,7 @@ let resolve_project_toolchain ?(refresh = false) ?(skip_local = false)
 (* Run a full sync in [cwd]: solve the deps declared in *.opam files,
    build/fetch layers, assemble [cwd]/_oi/prefix, and (re)write .envrc.
    Returns the assembled prefix path and the resolved toolchain. When
-   [quiet] is true, narration goes to Logs.info (hidden at default
+   [quiet] is true, narration goes to Log.info (hidden at default
    verbosity); otherwise it prints to stdout. *)
 type envrc_mode = [ `Skip | `Always | `Detect ]
 
@@ -232,23 +236,23 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     ?(envrc_mode = `Detect) ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache
     ~data_dir ~registry ~use_registry ~session ~cwd () =
   let toolchain_override = toolchain in
-  (* [quiet]: route narration to [Logs.info] (debug-only). Otherwise
+  (* [quiet]: route narration to [Log.info] (debug-only). Otherwise
      persistent [Oi.Say.step] / [Oi.Say.info] lines. The
      [Progress_ui] bar (opened around the [Build_pipeline.build] call
      below) interjects properly so Say lines and bar redraws don't
      tear each other. *)
   let say_step fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    if quiet then Fmt.kstr (fun s -> Log.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Oi.Say.step "%s" s) fmt
   in
   let say_info fmt =
-    if quiet then Fmt.kstr (fun s -> Logs.info (fun m -> m "%s" s)) fmt
+    if quiet then Fmt.kstr (fun s -> Log.info (fun m -> m "%s" s)) fmt
     else Fmt.kstr (fun s -> Oi.Say.info "%s" s) fmt
   in
   let say_field_list label items =
     if quiet then
       begin if items <> [] then
-        Logs.info (fun m -> m "%s: %s" label (String.concat ", " items))
+        Log.info (fun m -> m "%s: %s" label (String.concat ", " items))
       end
     else Oi.Say.field_list label items
   in
@@ -262,12 +266,12 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   in
   let deps = project.deps in
   if deps = [] && extra_cli = [] && url_project.roots = [] then
-    Oi.Error.config_error "No .opam files found in %s." cwd;
+    Oi.Error.fail_config_error "No .opam files found in %s." cwd;
   say_step "Sync %s" cwd;
   say_field_list "deps" deps;
   say_field_list "with-deps" url_project.roots;
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   (* Same handle scope as {resolve_project_toolchain} — kept inline
      here so we can reuse the already-loaded [project] / [url_project]
@@ -398,10 +402,10 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
                     | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
                     | Emit_failed { msg } -> Fmt.str "emit: %s" msg
                   in
-                  Some (Fmt.str "%s — %s" gr.group.label kind))
+                  Fmt.kstr (fun s -> Some s) "%s — %s" gr.group.label kind)
             solved.groups
         in
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "project sync produced no executable plan:@\n\
           \  %s@\n\
            Re-run with --verbosity=debug for the full per-group trace."
@@ -409,11 +413,11 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     | Some r when r.failed > 0 ->
         let pp_fail (f : D10ir.Direct.failure) =
           Fmt.str "%s.%s @ %s — see %s" f.package.name f.package.version
-            (D10ir.Direct.phase_to_string f.phase)
+            (D10ir.Direct.string_of_phase f.phase)
             f.log_path
         in
-        Oi.Error.config_error "project sync had %d build failure(s):@\n  %s"
-          r.failed
+        Oi.Error.fail_config_error
+          "project sync had %d build failure(s):@\n  %s" r.failed
           (String.concat "\n  " (List.map pp_fail r.failures))
     | Some _ -> ());
     Oi.Build_pipeline.layer_hashes solved
@@ -422,7 +426,7 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   let prefix = oi_dir / "prefix" in
   Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / prefix);
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / oi_dir);
-  let d10 = Oi.Pipeline.make_d10 ~sys ~fs ~clock ~cache ~os_key in
+  let d10 = Oi.Pipeline.d10 ~sys ~fs ~clock ~cache ~os_key in
   say_step "Assembling project prefix";
   D10.Prefix.assemble d10 ~layer_hashes ~dst:Eio.Path.(fs / prefix);
   say_step "Installing dev tools";
@@ -445,7 +449,7 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
     say_info "run 'direnv allow' to activate"
   end
   else
-    Logs.info (fun m ->
+    Log.info (fun m ->
         m "Skipping .envrc (--envrc=%a)" pp_envrc_mode envrc_mode);
   say_step "Prefix assembled at %s (%d packages)" prefix
     (List.length layer_hashes);

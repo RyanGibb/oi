@@ -1,10 +1,23 @@
 open Cmdliner
 
+let log_src = Logs.Src.create "oi.cmd.run" ~doc:"oi run command"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 
-let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
-    use_registry toolchain_override target with_deps with_repos jobs save_d10ir
-    args =
+(* Flags collapsed into a record so call sites can't accidentally swap
+   booleans (E350). [Terms]-derived [Term.t] builds one of these. *)
+type flags = {
+  refresh : bool;
+  locked : bool;
+  skip_local : bool;
+  dry_run : bool;
+}
+
+let impl (c : Terms.common) (flags : flags) registry use_registry
+    toolchain_override target with_deps with_repos jobs save_d10ir args =
+  let { refresh; locked; skip_local; dry_run } = flags in
   Harness.run @@ fun ~sw env ->
   let {
     Harness.proc_mgr;
@@ -134,7 +147,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let { Terms.layer_remote; source_remote } =
     Terms.remotes_of ~url:registry ~mode:use_registry
@@ -267,7 +280,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
        solver dedups internally but the log line ("Solving for
        packages: owntracks, owntracks") is misleading. *)
     let pkg_names = List.sort_uniq String.compare pkg_names in
-    Logs.info (fun m ->
+    Log.info (fun m ->
         m "Solving for packages: %s" (String.concat ", " pkg_names));
     let names =
       List.map OpamPackage.Name.of_string pkg_names
@@ -388,10 +401,10 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                       | Elaborate_failed _ -> "elaborate"
                       | Emit_failed _ -> "emit"
                     in
-                    Some (Fmt.str "%s: %s" gr.group.label kind))
+                    Fmt.kstr (fun s -> Some s) "%s: %s" gr.group.label kind)
               solved.groups
           in
-          Oi.Error.config_error
+          Oi.Error.fail_config_error
             "build pipeline produced no executable plan (%s). Re-run with \
              --verbosity=debug for the per-group trace."
             (String.concat ", " group_msgs)
@@ -412,7 +425,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
              Distinguish by probing every package the solve claims via
              [D10.Layer.succeeded]. *)
           let d10_cfg =
-            Oi.Pipeline.make_d10 ~sys ~fs
+            Oi.Pipeline.d10 ~sys ~fs
               ~clock:(clock :> D10.Config.clk)
               ~cache ~os_key
           in
@@ -441,7 +454,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                   xs
                 |> String.concat "\n"
               in
-              Oi.Error.config_error
+              Oi.Error.fail_config_error
                 "build pipeline ran with an empty d10ir plan, but %d \
                  package(s) claim cached layers that aren't in the local d10 \
                  cache:@\n\
@@ -454,36 +467,36 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
       | Some r ->
           let pp_fail (f : D10ir.Direct.failure) =
             Fmt.str "%s.%s @ %s: %s — see %s" f.package.name f.package.version
-              (D10ir.Direct.phase_to_string f.phase)
+              (D10ir.Direct.string_of_phase f.phase)
               f.error f.log_path
           in
           if r.failures <> [] then begin
             let summary = List.map pp_fail r.failures |> String.concat "\n  " in
-            Oi.Error.config_error
+            Oi.Error.fail_config_error
               "build failed: %d node(s) failed, %d skipped.@\n  %s" r.failed
               r.skipped summary
           end
           else
-            Oi.Error.config_error
+            Oi.Error.fail_config_error
               "build failed: 0 nodes built, %d skipped (likely a dep chain \
                broke upstream). Re-run with --verbosity=debug for the per-node \
                trace."
               r.skipped);
       Oi.Build_pipeline.layer_hashes solved
     in
-    Logs.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
+    Log.info (fun m -> m "Got %d layer hashes" (List.length layer_hashes));
     let prefix =
       Oi.Pipeline.assemble_prefix ~sys ~fs ~clock ~cache ~os_key ~layer_hashes
     in
-    Logs.info (fun m -> m "Assembled prefix at %s" prefix);
+    Log.info (fun m -> m "Assembled prefix at %s" prefix);
     let tc_ctx = Option.map Oi.Toolchain.opam_ctx_of_info toolchain in
     let env_vars () =
       Oi.Solver.Env.make_env ?toolchain:tc_ctx ~prefix ~dune_cache_root ()
     in
     let bin = prefix / "bin" / binary_name in
-    Logs.info (fun m -> m "Looking for binary: %s" bin);
+    Log.info (fun m -> m "Looking for binary: %s" bin);
     if Workspace.path_exists fs bin then begin
-      Logs.info (fun m -> m "Found binary, executing");
+      Log.info (fun m -> m "Found binary, executing");
       store_fast_cache ~bin_path:bin ~prefix ~tc_ctx;
       exit (Subprocess.run proc_mgr ~env:(env_vars ()) (bin :: args))
     end;
@@ -504,7 +517,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
     in
     match toolchain_bin with
     | Some p ->
-        Logs.info (fun m -> m "Found %s in toolchain prefix: %s" binary_name p);
+        Log.info (fun m -> m "Found %s in toolchain prefix: %s" binary_name p);
         store_fast_cache ~bin_path:p ~prefix ~tc_ctx;
         exit (Subprocess.run proc_mgr ~env:(env_vars ()) (p :: args))
     | None ->
@@ -525,7 +538,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
               with Eio.Exn.Io _ -> [])
         in
         unfound_bins := bins;
-        Logs.info (fun m ->
+        Log.info (fun m ->
             m "Available binaries: %s"
               (if bins = [] then "(none)" else String.concat ", " bins));
         false
@@ -541,9 +554,9 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
     in
     if is_url target then begin
       let local = Filename.temp_file "oi-script-" ".ml" in
-      Logs.info (fun m -> m "Fetching %s to %s" target local);
+      Log.info (fun m -> m "Fetching %s to %s" target local);
       if not (D10.Sysops.Http.fetch sys ~url:target ~dst:Eio.Path.(fs / local))
-      then Oi.Error.not_found target "failed to fetch %s" target;
+      then Oi.Error.fail_not_found target "failed to fetch %s" target;
       local
     end
     else target
@@ -551,7 +564,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
   (* Only .ml files are treated as scripts *)
   if Filename.check_suffix target ".ml" then begin
     if not (Workspace.path_exists cwd target) then
-      Oi.Error.not_found target "file not found: %s" target;
+      Oi.Error.fail_not_found target "file not found: %s" target;
     (* For scripts, solve deps first to get a prefix with the compiler *)
     let all_script_deps =
       Oi.Project.Script.parse_deps_from_file ~fs target @ extra_deps
@@ -709,13 +722,13 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
       with Oi.Error.E e as exn -> (
         match Oi.Error.kind e with
         | K_no_solution | K_not_found ->
-            Logs.info (fun m -> m "%s failed: %a" label Oi.Error.pp e);
+            Log.info (fun m -> m "%s failed: %a" label Oi.Error.pp e);
             false
         | _ -> Stdlib.raise exn)
     in
     let from_target =
       if not (package_exists target) then begin
-        Logs.info (fun m ->
+        Log.info (fun m ->
             m "Skipping solve %s — not a package name in any configured repo"
               target);
         false
@@ -754,8 +767,9 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                To run one of them: oi run --with=%s %s"
               (String.concat ", " bins) qualified (List.hd bins)
       in
-      Oi.Error.not_found binary_name "%s solved but does not install bin/%s.%s"
-        qualified binary_name suggestion
+      Oi.Error.fail_not_found binary_name
+        "%s solved but does not install bin/%s.%s" qualified binary_name
+        suggestion
     in
     (match target_pin with
     | Some pin when not from_with -> fail_overlay_pin_no_binary pin
@@ -787,7 +801,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
         with_preflight_bar
         @@ fun ~on_phase ~on_text:_ ~preflight_done ~shared_display:_ ->
         let r =
-          Layer_index.binary_to_package ~on_phase ~sys ~fs ~clock:clk ~cache
+          Layer_index.package_of_binary ~on_phase ~sys ~fs ~clock:clk ~cache
             ~os_key ~registry binary_name
         in
         preflight_done ();
@@ -805,7 +819,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
                  [--with-repo] / [x-repos] anyway, so passing just
                  [pkg_name] works for the common cases without
                  lying through an unparsed [@handle/...] string. *)
-            Logs.info (fun m ->
+            Log.info (fun m ->
                 m "Index: bin/%s provided by package %s" binary_name pkg_name);
             try_step (Fmt.str "solve %s" pkg_name) (fun () ->
                 solve_with_extras [ pkg_name ])
@@ -825,9 +839,9 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
           |> List.filter package_exists
         in
         if prefixes = [] then
-          Oi.Error.not_found target "no package provides bin/%s" target
+          Oi.Error.fail_not_found target "no package provides bin/%s" target
         else begin
-          Logs.info (fun m ->
+          Log.info (fun m ->
               m "Trying packages: %s" (String.concat ", " prefixes));
           let found =
             List.exists
@@ -837,7 +851,7 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
               prefixes
           in
           if not found then
-            Oi.Error.not_found target "no package provides bin/%s" target
+            Oi.Error.fail_not_found target "no package provides bin/%s" target
         end
       end
     end
@@ -1008,11 +1022,17 @@ let info_oix =
         `P "$(b,oi)(1).";
       ]
 
+let flags_term ~skip_local =
+  let mk refresh locked skip_local dry_run =
+    { refresh; locked; skip_local; dry_run }
+  in
+  Term.(const mk $ Terms.refresh $ Terms.locked $ skip_local $ dry_run)
+
 let term ~skip_local =
   Term.(
-    const run_impl $ Terms.common $ Terms.refresh $ Terms.locked $ skip_local
-    $ dry_run $ Terms.registry $ Terms.use_registry $ Terms.toolchain $ target
-    $ Terms.with_deps $ Terms.with_repos $ Terms.jobs $ save_d10ir $ args)
+    const impl $ Terms.common $ flags_term ~skip_local $ Terms.registry
+    $ Terms.use_registry $ Terms.toolchain $ target $ Terms.with_deps
+    $ Terms.with_repos $ Terms.jobs $ save_d10ir $ args)
 
 let cmd = Cmd.v info_run (term ~skip_local:Terms.skip_local)
 let cmd_x = Cmd.v info_oix (term ~skip_local:(Term.const true))

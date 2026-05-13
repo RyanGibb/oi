@@ -137,7 +137,7 @@ let version_cmd =
         | Ok s ->
             print_string s;
             print_newline ()
-        | Error e -> Oi.Error.config_error "json encode failed: %s" e)
+        | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e)
     | Text ->
         Fmt.pr "oi %s (%s)@." info.oi_version info.os_key;
         Fmt.pr
@@ -163,15 +163,15 @@ let where_cmd =
   let run () =
     let exe = Oi.Selfexe.current () in
     let writable = Oi.Selfexe.is_writable exe in
-    Fmt.pr "%a %s@." Oi.Style.header_string "executable:" exe;
-    Fmt.pr "%a %s@." Oi.Style.header_string "writable:  "
+    Fmt.pr "%a %s@." Oi.Style.pp_header_string "executable:" exe;
+    Fmt.pr "%a %s@." Oi.Style.pp_header_string "writable:  "
       (if writable then "yes" else "no");
     match Oi.Selfexe.resolve_target () with
     | In_place p ->
-        Fmt.pr "%a in place (%s)@." Oi.Style.header_string "target:    " p
+        Fmt.pr "%a in place (%s)@." Oi.Style.pp_header_string "target:    " p
     | Fallback { current; install_dir } ->
         Fmt.pr "%a fallback to %s/oi (current %s is not writable)@."
-          Oi.Style.header_string "target:    " install_dir current
+          Oi.Style.pp_header_string "target:    " install_dir current
   in
   let info =
     Cmd.info "where" ~doc:"Locate the running oi binary"
@@ -276,7 +276,7 @@ let update_cmd =
           (install_dir / "oi", install_dir / "oix")
     in
     let conf =
-      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+      Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
     in
     let { Terms.layer_remote; source_remote } =
       Terms.remotes_of ~url:registry ~mode:use_registry
@@ -410,7 +410,7 @@ let update_cmd =
     let new_oi = prefix / "bin" / "oi" in
     let new_oix = prefix / "bin" / "oix" in
     if not (Sys.file_exists new_oi) then
-      Oi.Error.msg "build succeeded but %s is missing" new_oi;
+      Oi.Error.fail_msg "build succeeded but %s is missing" new_oi;
     install_binary ~fs ~src:new_oi ~dst:oi_dst;
     Oi.Say.ok "installed oi → %s" oi_dst;
     if Sys.file_exists new_oix then begin

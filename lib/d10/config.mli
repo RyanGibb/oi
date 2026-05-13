@@ -21,3 +21,7 @@ type t = {
       (** Cache root directory (e.g. [~/.cache/oi/]). *)
   os_key : string;  (** Platform key (e.g. ["macos~26~arm64"]), see {!Os_key}. *)
 }
+
+val pp : t Fmt.t
+(** [pp] renders a one-line debug summary showing the cache root and OS key —
+    enough to disambiguate a {!t} in a log line. *)

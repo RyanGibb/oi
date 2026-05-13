@@ -72,7 +72,7 @@ let with_eio f =
   Eio_posix.run @@ fun env ->
   Eio.Switch.run @@ fun sw -> f ~sw env
 
-let make_d10 ~sys ~fs ~clock ~cache_dir ~os_key : D10.Config.t =
+let d10 ~sys ~fs ~clock ~cache_dir ~os_key : D10.Config.t =
   { sys; fs; clock; root = Eio.Path.(fs / cache_dir); os_key }
 
 let detect_os_key ~proc_mgr ~fs =
@@ -86,11 +86,9 @@ let validate_run cache_dir dir =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let proc_mgr = Eio.Stdenv.process_mgr env in
-  let sys = D10.Sysops.create ~proc_mgr ~fs ~net ~clock () in
+  let sys = D10.Sysops.v ~proc_mgr ~fs ~net ~clock () in
   let os_key = detect_os_key ~proc_mgr ~fs in
-  let d10 =
-    make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache_dir ~os_key
-  in
+  let d10 = d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache_dir ~os_key in
   let plan = load_recipe_dir dir in
   match D10ir.Plan.validate ~d10 ~fs ~plan_dir:dir plan with
   | Ok () ->
@@ -284,7 +282,7 @@ let show_cmd =
    log line; richer UI (progress bars, sparklines) is the caller's job
    if it wants more — this library aims for the [oi]-free baseline. *)
 let stderr_reporter : D10ir.Direct.reporter =
-  let phase = D10ir.Direct.phase_to_string in
+  let phase = D10ir.Direct.string_of_phase in
   let pkg (n : D10ir.Plan.node) =
     Fmt.str "%s.%s" n.package.name n.package.version
   in
@@ -314,11 +312,9 @@ let run_run cache_dir dir parallel keep_staging =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let proc_mgr = Eio.Stdenv.process_mgr env in
-  let sys = D10.Sysops.create ~proc_mgr ~fs ~net ~clock () in
+  let sys = D10.Sysops.v ~proc_mgr ~fs ~net ~clock () in
   let os_key = detect_os_key ~proc_mgr ~fs in
-  let d10 =
-    make_d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache_dir ~os_key
-  in
+  let d10 = d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache_dir ~os_key in
   let plan = load_recipe_dir dir in
   (match D10ir.Plan.validate ~d10 ~fs ~plan_dir:dir plan with
   | Ok () -> ()

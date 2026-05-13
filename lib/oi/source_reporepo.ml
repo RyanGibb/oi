@@ -187,19 +187,23 @@ let ensure_clone ?(reporter = Build_progress.null) ~fs ~sys ~refresh ~path ~url
     Sys.file_exists path && Sys.is_directory path
     && Array.length (Sys.readdir path) > 0
   then
-    Error.config_error
+    Error.fail_config_error
       "reporepo path %s exists but is not a git clone; move or remove it and \
        retry"
       path
   else begin
     mkdir_p ~fs (Filename.dirname path);
     Log.info (fun m -> m "Cloning reporepo from %s to %s" url path);
-    reporter.Build_progress.event (Status (Fmt.str "Cloning reporepo"));
+    reporter.Build_progress.event (Status "Cloning reporepo");
     try
-      Retry.with_attempts ~label:(Fmt.str "git clone %s" url) (fun () ->
-          D10.Sysops.Cmd.run sys [ "git"; "clone"; url; path ])
+      Fmt.kstr
+        (fun label ->
+          Retry.with_attempts ~label (fun () ->
+              D10.Sysops.Cmd.run sys [ "git"; "clone"; url; path ]))
+        "git clone %s" url
     with _ ->
-      Error.config_error "failed to clone reporepo from %s into %s" url path
+      Error.fail_config_error "failed to clone reporepo from %s into %s" url
+        path
   end
 
 let git_at ~sys ~path args =
@@ -213,7 +217,7 @@ let git_at_inherit ~sys ~path args =
 
 let assert_clone path =
   if not (Sys.file_exists (path / ".git")) then
-    Error.config_error
+    Error.fail_config_error
       "reporepo at %s is not a git working copy — run an [oi repo] subcommand \
        first to bootstrap the clone"
       path
@@ -330,7 +334,7 @@ let read_bool_extension ~path extensions name =
   | Some v -> (
       match v.OpamParserTypes.FullPos.pelem with
       | OpamParserTypes.FullPos.Bool b -> Some b
-      | _ -> Error.config_error "%s: %s must be a boolean" path name)
+      | _ -> Error.fail_config_error "%s: %s must be a boolean" path name)
 
 let read_string_list_extension ~path extensions name =
   match OpamStd.String.Map.find_opt name extensions with
@@ -343,17 +347,20 @@ let read_string_list_extension ~path extensions name =
             (fun (it : OpamParserTypes.FullPos.value) ->
               match it.pelem with
               | OpamParserTypes.FullPos.String s -> s
-              | _ -> Error.config_error "%s: %s items must be strings" path name)
+              | _ ->
+                  Error.fail_config_error "%s: %s items must be strings" path
+                    name)
             items
       | _ ->
-          Error.config_error "%s: %s must be a string or a list of strings" path
-            name)
+          Error.fail_config_error "%s: %s must be a string or a list of strings"
+            path name)
 
 let read_root_packages_extension ~path extensions name =
   let as_string_item (v : OpamParserTypes.FullPos.value) =
     match v.pelem with
     | OpamParserTypes.FullPos.String s -> s
-    | _ -> Error.config_error "%s: %s nested item must be a string" path name
+    | _ ->
+        Error.fail_config_error "%s: %s nested item must be a string" path name
   in
   match OpamStd.String.Map.find_opt name extensions with
   | None -> []
@@ -368,12 +375,12 @@ let read_root_packages_extension ~path extensions name =
               | OpamParserTypes.FullPos.List { pelem = sub; _ } ->
                   List.map as_string_item sub
               | _ ->
-                  Error.config_error
+                  Error.fail_config_error
                     "%s: %s item must be a string or a list of strings" path
                     name)
             items
       | _ ->
-          Error.config_error
+          Error.fail_config_error
             "%s: %s must be a string, a list of strings, or a list of lists"
             path name)
 
@@ -404,12 +411,12 @@ let parse_entry_file path : entry option =
       let handle =
         match OpamFile.OPAM.name_opt opam with
         | Some n -> OpamPackage.Name.to_string n
-        | None -> Error.config_error "%s: missing name field" path
+        | None -> Error.fail_config_error "%s: missing name field" path
       in
       let version =
         match OpamFile.OPAM.version_opt opam with
         | Some v -> OpamPackage.Version.to_string v
-        | None -> Error.config_error "%s: missing version field" path
+        | None -> Error.fail_config_error "%s: missing version field" path
       in
       let extensions = OpamFile.OPAM.extensions opam in
       let url_bare, commit =
@@ -421,8 +428,8 @@ let parse_entry_file path : entry option =
         read_string_extension extensions Keys.toolchain_name
       in
       if url_bare = "" && toolchain_name = None then
-        Error.config_error "%s: entry needs either a [url:] block or [%s]" path
-          Keys.toolchain_name;
+        Error.fail_config_error "%s: entry needs either a [url:] block or [%s]"
+          path Keys.toolchain_name;
       let depends = parse_depends_formula (OpamFile.OPAM.depends opam) in
       let ref_ = read_string_extension extensions Keys.ref in
       let toolchain = read_string_extension extensions Keys.toolchain in
@@ -430,7 +437,7 @@ let parse_entry_file path : entry option =
         read_string_extension extensions Keys.toolchain_compiler
       in
       if toolchain_name <> None && toolchain_compiler = None then
-        Error.config_error
+        Error.fail_config_error
           "%s: %s is set but %s is missing — every toolchain definition must \
            declare its compiler package (e.g. \"ocaml-base-compiler.5.4.1\")"
           path Keys.toolchain_name Keys.toolchain_compiler;
@@ -447,7 +454,7 @@ let parse_entry_file path : entry option =
         | None -> false
       in
       if default_toolchain && toolchain_name = None then
-        Error.config_error
+        Error.fail_config_error
           "%s: %s is only meaningful on toolchain definitions (entries with %s \
            set)"
           path Keys.default_toolchain Keys.toolchain_name;
@@ -525,7 +532,7 @@ let load ~path =
     (match defaults with
     | [] | [ _ ] -> ()
     | many ->
-        Error.config_error
+        Error.fail_config_error
           "reporepo at %s has %d toolchains marked as default (%s: true): %s. \
            Exactly one toolchain may be the default — clear the flag on the \
            others."
@@ -595,7 +602,7 @@ let resolve entries ~roots =
     let path = env_path () in
     let packages_dir = meta_packages_dir ~path in
     if not (Sys.file_exists packages_dir) then
-      Error.config_error
+      Error.fail_config_error
         "reporepo at %s has no v2/reporepo/packages/ tree (run 'oi repo add' \
          or migrate from the old layout)"
         path;
@@ -621,7 +628,7 @@ let resolve entries ~roots =
           (String.concat ", " (List.map OpamPackage.Name.to_string names)));
     match Inst.solve ctx names with
     | Error diag ->
-        Error.config_error "overlay resolution failed: %s"
+        Error.fail_config_error "overlay resolution failed: %s"
           (Inst.diagnostics diag)
     | Ok sels ->
         let pkgs = Inst.packages_of_result sels in
@@ -660,7 +667,7 @@ let base_entries () =
 let assert_overlay_dir ~path ~handle =
   let dir = overlay_packages_dir ~path ~handle in
   if not (Sys.file_exists dir) then
-    Error.config_error
+    Error.fail_config_error
       "overlay %s not materialised in reporepo at %s (missing %s); run 'oi \
        repo bump %s' (or 'oi repo bump --all' to populate every overlay)"
       handle path dir handle;
@@ -669,7 +676,7 @@ let assert_overlay_dir ~path ~handle =
 let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false)
     ?(reporter = Build_progress.null) () =
   let path = env_path () in
-  reporter.event (Status (Fmt.str "Reporepo at %s" path));
+  Fmt.kstr (fun s -> reporter.event (Status s)) "Reporepo at %s" path;
   (* Auto-pull when the existing clone hasn't seen [git fetch] for
      longer than [auto_refresh_after_s]. Skipped when [refresh] is
      already requested (avoid the double-pull), when the clone
@@ -695,7 +702,7 @@ let ensure_base ~fs ~sys ~data_dir:_ ?(refresh = false)
   let entries = try load ~path with Error.E _ -> [] in
   match latest entries ~handle:"relocatable" with
   | None ->
-      Error.config_error
+      Error.fail_config_error
         "reporepo at %s has no 'relocatable' overlay; run 'oi repo add \
          relocatable <URL>' to bootstrap the base repositories"
         path
@@ -730,7 +737,7 @@ let try_ls_remote ~sys url args =
     Retry.with_attempts ~label:(Fmt.str "git ls-remote %s" url) (fun () ->
         D10.Sysops.Cmd.run_out_quiet sys ("git" :: "ls-remote" :: url :: args))
   with exn ->
-    Error.config_error "git ls-remote %s failed: %s" url
+    Error.fail_config_error "git ls-remote %s failed: %s" url
       (Printexc.to_string exn)
 
 let ls_remote_sha ~sys ?ref_ url =
@@ -739,7 +746,8 @@ let ls_remote_sha ~sys ?ref_ url =
       let out = try_ls_remote ~sys url [ r ] in
       match parse_ls_remote_output out with
       | (sha, _) :: _ -> sha
-      | [] -> Error.config_error "git ls-remote %s %s: ref not found" url r)
+      | [] -> Error.fail_config_error "git ls-remote %s %s: ref not found" url r
+      )
   | None -> (
       let head = try_ls_remote ~sys url [ "HEAD" ] in
       match parse_ls_remote_output head with
@@ -761,8 +769,8 @@ let ls_remote_sha ~sys ?ref_ url =
                   match refs with
                   | (sha, _) :: _ -> sha
                   | [] ->
-                      Error.config_error "git ls-remote %s returned no refs" url
-                  ))))
+                      Error.fail_config_error
+                        "git ls-remote %s returned no refs" url))))
 
 let today_yyyymmdd () =
   let tm = Unix.gmtime (Unix.time ()) in
@@ -804,17 +812,16 @@ let render_root_groups buf field groups =
   match groups with
   | [] -> ()
   | groups ->
-      Printf.bprintf buf "%s: [\n" field;
+      let pp = Fmt.with_buffer buf in
+      Fmt.pf pp "%s: [\n" field;
       List.iter
         (fun group ->
           match group with
           | [] -> ()
-          | [ one ] -> Printf.bprintf buf "  %s\n" (escape_string one)
+          | [ one ] -> Fmt.pf pp "  %s\n" (escape_string one)
           | multi ->
               Buffer.add_string buf "  [";
-              List.iter
-                (fun p -> Printf.bprintf buf " %s" (escape_string p))
-                multi;
+              List.iter (fun p -> Fmt.pf pp " %s" (escape_string p)) multi;
               Buffer.add_string buf " ]\n")
         groups;
       Buffer.add_string buf "]\n"
@@ -831,10 +838,11 @@ type toolchain_def = {
 let render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ?toolchain_def ~depends
     ~root_packages () =
   let buf = Buffer.create 512 in
-  Printf.bprintf buf "opam-version: \"2.0\"\n";
-  Printf.bprintf buf "synopsis: %s\n" (escape_string synopsis);
+  let pp = Fmt.with_buffer buf in
+  Fmt.pf pp "opam-version: \"2.0\"\n";
+  Fmt.pf pp "synopsis: %s\n" (escape_string synopsis);
   if url <> "" then
-    Printf.bprintf buf "url {\n  src: %s\n}\n"
+    Fmt.pf pp "url {\n  src: %s\n}\n"
       (escape_string (if commit = "" then url else url ^ "#" ^ commit));
   (match depends with
   | [] -> ()
@@ -844,40 +852,34 @@ let render_opam ~synopsis ~url ~commit ~ref_ ~toolchain ?toolchain_def ~depends
         (fun (h, v) ->
           match v with
           | Some ver ->
-              Printf.bprintf buf "  %s { = %s }\n" (escape_string h)
-                (escape_string ver)
-          | None -> Printf.bprintf buf "  %s\n" (escape_string h))
+              Fmt.pf pp "  %s { = %s }\n" (escape_string h) (escape_string ver)
+          | None -> Fmt.pf pp "  %s\n" (escape_string h))
         ds;
       Buffer.add_string buf "]\n");
-  Printf.bprintf buf "%s: true\n" Keys.overlay;
+  Fmt.pf pp "%s: true\n" Keys.overlay;
   Stdlib.Option.iter
-    (fun s -> Printf.bprintf buf "%s: %s\n" Keys.ref (escape_string s))
+    (fun s -> Fmt.pf pp "%s: %s\n" Keys.ref (escape_string s))
     ref_;
   Stdlib.Option.iter
-    (fun s -> Printf.bprintf buf "%s: %s\n" Keys.toolchain (escape_string s))
+    (fun s -> Fmt.pf pp "%s: %s\n" Keys.toolchain (escape_string s))
     toolchain;
   Stdlib.Option.iter
     (fun (td : toolchain_def) ->
-      Printf.bprintf buf "%s: %s\n" Keys.toolchain_name
-        (escape_string td.td_name);
+      Fmt.pf pp "%s: %s\n" Keys.toolchain_name (escape_string td.td_name);
       Stdlib.Option.iter
         (fun s ->
-          Printf.bprintf buf "%s: %s\n" Keys.toolchain_compiler
-            (escape_string s))
+          Fmt.pf pp "%s: %s\n" Keys.toolchain_compiler (escape_string s))
         td.td_compiler;
       Stdlib.Option.iter
-        (fun b -> Printf.bprintf buf "%s: %b\n" Keys.relocatable b)
+        (fun b -> Fmt.pf pp "%s: %b\n" Keys.relocatable b)
         td.td_relocatable;
-      if td.td_default then
-        Printf.bprintf buf "%s: true\n" Keys.default_toolchain;
+      if td.td_default then Fmt.pf pp "%s: true\n" Keys.default_toolchain;
       render_root_groups buf Keys.toolchain_roots td.td_roots;
       match td.td_tools with
       | [] -> ()
       | tools ->
-          Printf.bprintf buf "%s: [\n" Keys.toolchain_tools;
-          List.iter
-            (fun t -> Printf.bprintf buf "  %s\n" (escape_string t))
-            tools;
+          Fmt.pf pp "%s: [\n" Keys.toolchain_tools;
+          List.iter (fun t -> Fmt.pf pp "  %s\n" (escape_string t)) tools;
           Buffer.add_string buf "]\n")
     toolchain_def;
   render_root_groups buf Keys.root_packages root_packages;
@@ -946,7 +948,7 @@ let classify_url ~where (u : OpamUrl.t) : [ `Git | `Tarball | `Local ] =
   | `rsync -> `Local
   | (`darcs | `hg) as b ->
       let name = match b with `darcs -> "darcs" | `hg -> "hg" in
-      Error.config_error
+      Error.fail_config_error
         "%s: %s URLs are not supported in v1 materialisation (URL: %s)" where
         name (OpamUrl.to_string u)
 
@@ -1143,7 +1145,7 @@ let scratch_clone ~fs ~sys ~url ~commit =
     scratch
   with exn ->
     (try Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / scratch) with _ -> ());
-    Error.config_error "failed to clone %s at %s: %s" url commit
+    Error.fail_config_error "failed to clone %s at %s: %s" url commit
       (Printexc.to_string exn)
 
 (* In an opam-repository layout, [packages/<name>/<name>.<version>/opam].
@@ -1168,7 +1170,7 @@ let walk_packages_dir packages_dir =
 
 let materialise_handle ~fs ~sys ~path ~handle ~url ~commit =
   if commit = "" || url = "" then
-    Error.config_error
+    Error.fail_config_error
       "cannot materialise overlay %s: missing url or commit (definition-only \
        entries should not call this)"
       handle;
@@ -1246,7 +1248,7 @@ let add ~fs ~sys ~path ~handle ~url ?ref_ ?toolchain ?base_handles ?depends
     List.exists (fun (e : entry) -> e.handle = handle) entries
   in
   if handle_exists && not force then
-    Error.config_error
+    Error.fail_config_error
       "overlay %s already exists in reporepo; use 'oi repo bump' to add a new \
        version, or pass --force to register a new entry with a different URL"
       handle;
@@ -1297,11 +1299,11 @@ let bump ~fs ~sys ~path ~handle ?url ?ref_ ?toolchain ?base_handles ?depends
     match latest entries ~handle with
     | Some e -> e
     | None ->
-        Error.config_error
+        Error.fail_config_error
           "overlay %s not in reporepo; use 'oi repo add' to create it" handle
   in
   if default <> None && prev.toolchain_name = None then
-    Error.config_error
+    Error.fail_config_error
       "overlay %s is not a toolchain definition (no %s) — the --default flag \
        only applies to toolchain entries"
       handle Keys.toolchain_name;
@@ -1410,7 +1412,7 @@ let remove ~fs ~path ~handle ?version () =
       entries
   in
   if matches = [] then
-    Error.config_error "no such overlay %s%s in reporepo" handle
+    Error.fail_config_error "no such overlay %s%s in reporepo" handle
       (match version with None -> "" | Some v -> "." ^ v);
   List.iter
     (fun (e : entry) ->

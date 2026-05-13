@@ -22,10 +22,9 @@ val pull :
   remote:remote ->
   sha:string ->
   bool
-(** [pull ~session ~cache_root ~remote ~sha] downloads the archive with the
-    given sha into [<cache>/d10ir/archives/<sha>.tar.zst]. Verifies the
-    downloaded content's sha256 against [sha] before renaming into place.
-    Returns [true] on success.
+(** [pull] downloads the archive with the given sha into
+    [<cache>/d10ir/archives/<sha>.tar.zst]. Verifies the downloaded content's
+    sha256 against [sha] before renaming into place. Returns [true] on success.
 
     No-op (returns [true]) if the archive already exists locally. Returns
     [false] on HTTP failure or sha mismatch — caller decides whether to fall
@@ -49,7 +48,6 @@ val prefetch :
   ?max_fibers:int ->
   string list ->
   prefetch_summary
-(** [prefetch ~remote shas] pulls every archive in parallel, skipping those
-    already present. Used by the recipe runner to make all required sources
-    available locally before kicking off the d10ir build (which itself does no
-    network I/O). *)
+(** [prefetch] pulls every archive in parallel, skipping those already present.
+    Used by the recipe runner to make all required sources available locally
+    before kicking off the d10ir build (which itself does no network I/O). *)

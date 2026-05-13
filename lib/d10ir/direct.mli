@@ -36,9 +36,9 @@ type phase =
   | Diff_layer
   | Store_layer
 
-val phase_to_string : phase -> string
-(** Short kebab-case name suitable for a status column (e.g. ["stage-deps"],
-    ["run-script"]). *)
+val string_of_phase : phase -> string
+(** [string_of_phase] Short kebab-case name suitable for a status column (e.g.
+    ["stage-deps"], ["run-script"]). *)
 
 (** Structured progress events.
 
@@ -108,7 +108,7 @@ val run :
   ?plan_dir:string ->
   Plan.t ->
   result
-(** Execute every node in the plan. Returns aggregate counts.
+(** [run] Execute every node in the plan. Returns aggregate counts.
 
     [plan_dir] is the directory containing the plan (and its [archive_root]);
     defaults to the current working directory. Used to resolve [archive.path].

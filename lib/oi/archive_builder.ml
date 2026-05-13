@@ -169,7 +169,7 @@ let submodule_paths ~src_dir =
       |> List.filter_map parse_path_line
     with Sys_error _ -> []
 
-let make_tar_zst ~proc_mgr ~src_dir ~dst_path =
+let tar_zst ~proc_mgr ~src_dir ~dst_path =
   let submodule_excludes =
     List.map (fun p -> "./" ^ p) (submodule_paths ~src_dir)
   in
@@ -205,7 +205,9 @@ let build ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10 ~cache_root
     ?(cache_urls = []) (p : Plan.package_plan) =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / archives_dir ~d10);
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / tmp_dir ~d10);
-  reporter.Build_progress.event (Status (Fmt.str "Baking archive for %s" p.pkg));
+  Fmt.kstr
+    (fun s -> reporter.Build_progress.event (Status s))
+    "Baking archive for %s" p.pkg;
   (* x-d10-archive short-circuit: when the opam file declares a
      pre-baked source sha (typically populated by [oi ir bake] /
      [oi repo bump]), skip the fetch/patches/extras/substs dance and
@@ -263,7 +265,7 @@ let build ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10 ~cache_root
       in
       let tmp_path = tmp_dir ~d10 / Fmt.str "%s-%s.tar.zst" p.pkg layer_short in
       (try Sys.remove tmp_path with _ -> ());
-      make_tar_zst ~proc_mgr ~src_dir:p.build_dir ~dst_path:tmp_path;
+      tar_zst ~proc_mgr ~src_dir:p.build_dir ~dst_path:tmp_path;
       let sha = sha256_of_file tmp_path in
       (match p.d10_archive with
       | Some declared when declared <> sha ->
@@ -448,12 +450,13 @@ let build_no_solve ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10
     () =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / archives_dir ~d10);
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / tmp_dir ~d10);
-  reporter.Build_progress.event
-    (Status (Fmt.str "Baking archive for %s.%s" name version));
+  Fmt.kstr
+    (fun s -> reporter.Build_progress.event (Status s))
+    "Baking archive for %s.%s" name version;
   let platform_env = bake_platform_env ~platform in
   let build_dir =
     Filename.concat cache_root
-      (Filename.concat "build/_build" (Fmt.str "%s.%s-bake" name version))
+      (Fmt.kstr (Filename.concat "build/_build") "%s.%s-bake" name version)
   in
   (* Use the same prefix string [Plan.elaborate] would produce
      (cache_root/build/prefix). Substituted .in files end up
@@ -480,7 +483,7 @@ let build_no_solve ?(reporter = Build_progress.null) ~proc_mgr ~fs ~d10
   ensure_dune_project_version ~build_dir ~opam_version:version ~url_opt;
   let tmp_path = tmp_dir ~d10 / Fmt.str "%s.%s-bake.tar.zst" name version in
   (try Sys.remove tmp_path with _ -> ());
-  make_tar_zst ~proc_mgr ~src_dir:build_dir ~dst_path:tmp_path;
+  tar_zst ~proc_mgr ~src_dir:build_dir ~dst_path:tmp_path;
   let sha = sha256_of_file tmp_path in
   let final_path = archives_dir ~d10 / Fmt.str "%s.tar.zst" sha in
   (if not (Sys.file_exists final_path) then

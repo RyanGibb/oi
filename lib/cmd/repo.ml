@@ -105,7 +105,7 @@ let status_span = function
       Tty.Span.(
         styled Oi.Style.error "stale"
         ++ space
-        ++ styled Oi.Style.dim (Fmt.str "(%s)" (short_sha tip)))
+        ++ Fmt.kstr (styled Oi.Style.dim) "(%s)" (short_sha tip))
 
 (* Toolchain section: definitions ([toolchain_name] set) printed under
    their CLI-facing name (the [x-oi-toolchain-name] field) rather than
@@ -213,7 +213,7 @@ let base_handles_of_toolchain = function
       match Oi.Toolchain.depends_of ~handle:t with
       | Some d -> Some d
       | None ->
-          Oi.Error.config_error
+          Oi.Error.fail_config_error
             "unknown toolchain %S — known builtins listed by 'oi config'" t)
 
 module Ls = struct
@@ -223,7 +223,7 @@ module Ls = struct
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        D10.Sysops.v ~stdout:(Eio.Stdenv.stdout env)
           ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
@@ -259,9 +259,9 @@ module Ls = struct
             in
             untagged @ tagged
           in
-          let pp_subtitle ppf s = Oi.Style.dim_string ppf s in
+          let pp_subtitle ppf s = Oi.Style.pp_dim_string ppf s in
           if overlays <> [] then begin
-            Fmt.pr "%a@." Oi.Style.header_string "OVERLAYS";
+            Fmt.pr "%a@." Oi.Style.pp_header_string "OVERLAYS";
             Fmt.pr "%a@.@." pp_subtitle
               "Curated opam packages pinned to git commits. Use as \
                --with-repo=@HANDLE, --with=@HANDLE/PKG, or 'x-repos:' in \
@@ -287,7 +287,7 @@ module Ls = struct
           end;
           if toolchains <> [] then begin
             if overlays <> [] then Fmt.pr "@.";
-            Fmt.pr "%a@." Oi.Style.header_string "TOOLCHAINS";
+            Fmt.pr "%a@." Oi.Style.pp_header_string "TOOLCHAINS";
             Fmt.pr "%a@.@." pp_subtitle
               "Compiler bundles. Select with --toolchain=NAME; the DEFAULT \
                entry is used otherwise.";
@@ -342,7 +342,7 @@ module Show = struct
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        D10.Sysops.v ~stdout:(Eio.Stdenv.stdout env)
           ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
@@ -361,7 +361,8 @@ module Show = struct
                  (OpamPackage.Version.of_string a.version))
       in
       if matches = [] then
-        Oi.Error.not_found handle "no overlay %s in reporepo %s" handle reporepo;
+        Oi.Error.fail_not_found handle "no overlay %s in reporepo %s" handle
+          reporepo;
       List.iter
         (fun (e : Oi.Source.Reporepo.entry) ->
           Fmt.pr "%s.%s@." e.handle e.version;
@@ -422,7 +423,7 @@ module Add = struct
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        D10.Sysops.v ~stdout:(Eio.Stdenv.stdout env)
           ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
@@ -643,15 +644,15 @@ module Bump = struct
                with
               | `Added | `Already -> ());
               incr baked;
-              Fmt.pr "  %a %s.%s@." Oi.Style.ok_string "baked" pkg version;
+              Fmt.pr "  %a %s.%s@." Oi.Style.pp_ok_string "baked" pkg version;
               match on_baked with
               | None -> ()
               | Some f ->
                   f ~name:pkg ~version ~sha:built.sha256 ~path:built.path
             with exn ->
               incr failed;
-              Fmt.pr "  %a %s.%s: %s@." Oi.Style.warn_string "skip" pkg version
-                (Printexc.to_string exn)));
+              Fmt.pr "  %a %s.%s: %s@." Oi.Style.pp_warn_string "skip" pkg
+                version (Printexc.to_string exn)));
     (!baked, !failed)
 
   let count_packages_missing_archive ~reporepo ~handle =
@@ -738,7 +739,8 @@ module Bump = struct
         (List.length summary.unavailable);
       List.iter
         (fun (pkg, reason) ->
-          Fmt.pr "    %a %s: %s@." Oi.Style.warn_string "unavailable" pkg reason)
+          Fmt.pr "    %a %s: %s@." Oi.Style.pp_warn_string "unavailable" pkg
+            reason)
         summary.unavailable
     end;
     (* Whether we materialised or not, return the entry so the
@@ -782,12 +784,12 @@ module Bump = struct
               let url = Fmt.str "%s/%s.tar.zst" base sha in
               try
                 D10.Sysops.Cmd.run sys [ "s3cmd"; "put"; "--quiet"; path; url ];
-                Fmt.pr "    %a %s -> %s@." Oi.Style.ok_string "uploaded"
+                Fmt.pr "    %a %s -> %s@." Oi.Style.pp_ok_string "uploaded"
                   (Fmt.str "%s.%s" name version)
                   url
               with exn ->
-                Fmt.pr "    %a upload %s.%s: %s@." Oi.Style.warn_string "skip"
-                  name version (Printexc.to_string exn))
+                Fmt.pr "    %a upload %s.%s: %s@." Oi.Style.pp_warn_string
+                  "skip" name version (Printexc.to_string exn))
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url ();
@@ -797,9 +799,7 @@ module Bump = struct
         | _ -> Some (List.map parse_depend_spec depend_specs)
       in
       let d10 =
-        Oi.Pipeline.make_d10 ~sys ~fs
-          ~clock:(clock :> D10.Config.clk)
-          ~cache ~os_key
+        Oi.Pipeline.d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
       in
       let cache_root = Oi.Cache.root_s cache in
       let bump_and_bake handle =
@@ -881,10 +881,10 @@ module Bump = struct
           in
           List.iter
             (fun h ->
-              Fmt.pr "@.%a@." Oi.Style.header_string ("== " ^ h ^ " ==");
+              Fmt.pr "@.%a@." Oi.Style.pp_header_string ("== " ^ h ^ " ==");
               try bump_and_bake h
               with exn ->
-                Fmt.pr "  %a %s: %s@." Oi.Style.error_string "error" h
+                Fmt.pr "  %a %s: %s@." Oi.Style.pp_error_string "error" h
                   (Printexc.to_string exn))
             handles
       | false, Some handle -> bump_and_bake handle
@@ -1040,19 +1040,17 @@ module Bake = struct
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url ();
       let d10 =
-        Oi.Pipeline.make_d10 ~sys ~fs
-          ~clock:(clock :> D10.Config.clk)
-          ~cache ~os_key
+        Oi.Pipeline.d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
       in
       let cache_root = Oi.Cache.root_s cache in
       let bake_one handle =
         let missing = Bump.count_packages_missing_archive ~reporepo ~handle in
         if missing = 0 then
-          Fmt.pr "@.%a %s: every package already baked@." Oi.Style.ok_string "✓"
-            handle
+          Fmt.pr "@.%a %s: every package already baked@." Oi.Style.pp_ok_string
+            "✓" handle
         else begin
           Fmt.pr "@.%a %s: baking %d missing archive(s)...@."
-            Oi.Style.info_string "▸" handle missing;
+            Oi.Style.pp_info_string "▸" handle missing;
           let baked, failed =
             Bump.bake_changed_archives ~proc_mgr ~fs ~d10 ~cache_root ~platform
               ~reporepo ~handle ()
@@ -1073,12 +1071,12 @@ module Bake = struct
         Fmt.pr
           "  %a %d archive(s) at %s/d10ir-archives/ (%d new, %d already \
            present)@."
-          Oi.Style.ok_string "✓" total to_dir linked present;
+          Oi.Style.pp_ok_string "✓" total to_dir linked present;
         if missing > 0 then
           Fmt.pr
             "  %a %d archive(s) referenced by %s opams but not in local cache; \
              run [oi repo bump %s] to bake them@."
-            Oi.Style.warn_string "!" missing handle handle
+            Oi.Style.pp_warn_string "!" missing handle handle
       in
       Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / to_dir);
       (match handle_opt with
@@ -1212,7 +1210,7 @@ module Set_roots = struct
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        D10.Sysops.v ~stdout:(Eio.Stdenv.stdout env)
           ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
@@ -1286,7 +1284,7 @@ module Remove = struct
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        D10.Sysops.v ~stdout:(Eio.Stdenv.stdout env)
           ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
@@ -1335,46 +1333,47 @@ module Push = struct
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        D10.Sysops.v ~stdout:(Eio.Stdenv.stdout env)
           ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
       Oi.Source.Reporepo.ensure_clone ~fs ~sys ~refresh:false ~path:reporepo
         ~url:reporepo_url ();
-      Fmt.pr "%a %s@." Oi.Style.header_string "reporepo:" reporepo;
+      Fmt.pr "%a %s@." Oi.Style.pp_header_string "reporepo:" reporepo;
       (match push_url with
       | None -> ()
       | Some u ->
           Oi.Source.Reporepo.set_push_url ~sys ~path:reporepo u;
-          Fmt.pr "%a push URL of origin set to %s@." Oi.Style.ok_string "ok" u);
+          Fmt.pr "%a push URL of origin set to %s@." Oi.Style.pp_ok_string "ok"
+            u);
       let on_step_start n title =
-        Fmt.pr "@.%a %s@." Oi.Style.header_string (Fmt.str "[%d/3]" n) title
+        Fmt.pr "@.%a %s@." Oi.Style.pp_header_string (Fmt.str "[%d/3]" n) title
       in
       let outcome =
         Oi.Source.Reporepo.push ~on_step_start ~sys ~path:reporepo ()
       in
-      Fmt.pr "@.%a@." Oi.Style.header_string "summary:";
+      Fmt.pr "@.%a@." Oi.Style.pp_header_string "summary:";
       List.iter
         (function
           | Oi.Source.Reporepo.Step_commit { files = [] } ->
-              Fmt.pr "  commit: %a (working tree clean)@." Oi.Style.dim_string
-                "skipped"
+              Fmt.pr "  commit: %a (working tree clean)@."
+                Oi.Style.pp_dim_string "skipped"
           | Oi.Source.Reporepo.Step_commit { files } ->
-              Fmt.pr "  commit: %a (%d file(s))@." Oi.Style.ok_string "ok"
+              Fmt.pr "  commit: %a (%d file(s))@." Oi.Style.pp_ok_string "ok"
                 (List.length files);
               List.iter (fun f -> Fmt.pr "    %s@." f) files
           | Oi.Source.Reporepo.Step_pull { commits = 0 } ->
-              Fmt.pr "  pull:   %a (already up to date)@." Oi.Style.dim_string
-                "skipped"
+              Fmt.pr "  pull:   %a (already up to date)@."
+                Oi.Style.pp_dim_string "skipped"
           | Oi.Source.Reporepo.Step_pull { commits } ->
               Fmt.pr "  pull:   %a (%d new upstream commit(s))@."
-                Oi.Style.ok_string "ok" commits
+                Oi.Style.pp_ok_string "ok" commits
           | Oi.Source.Reporepo.Step_push { commits = 0 } ->
-              Fmt.pr "  push:   %a (nothing to push)@." Oi.Style.dim_string
+              Fmt.pr "  push:   %a (nothing to push)@." Oi.Style.pp_dim_string
                 "skipped"
           | Oi.Source.Reporepo.Step_push { commits } ->
               Fmt.pr "  push:   %a (%d local commit(s) sent)@."
-                Oi.Style.ok_string "ok" commits)
+                Oi.Style.pp_ok_string "ok" commits)
         outcome
     in
     let push_url =
@@ -1633,7 +1632,7 @@ module Lint = struct
       let proc_mgr = Eio.Stdenv.process_mgr env in
       let fs = Eio.Stdenv.fs env in
       let sys =
-        D10.Sysops.create ~stdout:(Eio.Stdenv.stdout env)
+        D10.Sysops.v ~stdout:(Eio.Stdenv.stdout env)
           ~stderr:(Eio.Stdenv.stderr env) ~proc_mgr ~fs
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ()
       in
@@ -1642,15 +1641,17 @@ module Lint = struct
       let entries = Oi.Source.Reporepo.load ~path:reporepo in
       let problems = collect_problems ~reporepo entries in
       if problems = [] then begin
-        Fmt.pr "%a %d entries, no problems found.@." Oi.Style.ok_string "OK:"
+        Fmt.pr "%a %d entries, no problems found.@." Oi.Style.pp_ok_string "OK:"
           (List.length entries);
         exit 0
       end
       else begin
         List.iter
           (fun { where; paths; msg } ->
-            Fmt.pr "%a %s: %s@." Oi.Style.error_string "error:" where msg;
-            List.iter (fun p -> Fmt.pr "    %a@." Oi.Style.dim_string p) paths)
+            Fmt.pr "%a %s: %s@." Oi.Style.pp_error_string "error:" where msg;
+            List.iter
+              (fun p -> Fmt.pr "    %a@." Oi.Style.pp_dim_string p)
+              paths)
           problems;
         Fmt.pr "@.%d problem(s) in %s@." (List.length problems) reporepo;
         exit 1

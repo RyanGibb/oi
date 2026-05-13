@@ -1,5 +1,9 @@
 open Cmdliner
 
+let log_src = Logs.Src.create "oi.cmd.exec" ~doc:"oi exec command"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 
 let cmd =
@@ -24,7 +28,7 @@ let cmd =
     let cwd, _ = Workspace.resolved_cwd fs in
     let prefix = cwd / "_oi" / "prefix" in
     let conf =
-      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+      Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
     in
     (* Any --with-repo / --with / --toolchain flag forces a re-sync
        even if the prefix is fresh, so the extras and toolchain make
@@ -38,7 +42,7 @@ let cmd =
     in
     let tc_info =
       if forced || Sync.needs_sync ~cwd ~prefix then begin
-        Logs.info (fun m -> m "Syncing %s before exec" cwd);
+        Log.info (fun m -> m "Syncing %s before exec" cwd);
         let _, tc =
           Sync.run ~quiet:true ~refresh ~skip_local ~with_repos ~with_deps ?jobs
             ?toolchain ~proc_mgr ~fs ~clock ~sys ~platform ~os_key ~cache

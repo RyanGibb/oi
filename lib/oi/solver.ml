@@ -13,7 +13,7 @@ module Log = (val Logs.src_log log_src : Logs.LOG)
    across multiple [packages_dirs]. Private to this module. *)
 module Dir_context = struct
   type rejection =
-    | UserConstraint of OpamFormula.atom
+    | User_constraint of OpamFormula.atom
     | Unavailable [@warning "-37"]
 
   let with_dir path fn =
@@ -177,11 +177,11 @@ module Dir_context = struct
               when not
                      (OpamFormula.check_version_formula (OpamFormula.Atom test)
                         v) ->
-                (v, Error (UserConstraint (name, Some test)))
+                (v, Error (User_constraint (name, Some test)))
             | _ -> (v, Ok opam))
 
   let pp_rejection f = function
-    | UserConstraint x ->
+    | User_constraint x ->
         Fmt.pf f "Rejected by user-specified constraint %s"
           (OpamFormula.string_of_atom x)
     | Unavailable -> Fmt.string f "Availability condition not satisfied"
@@ -399,11 +399,11 @@ module Ctx = struct
         OpamPackage.Map.empty packages_dirs
     in
     let all_packages = OpamPackage.keys all_opams in
-    reporter.Build_progress.event
-      (Status
-         (Fmt.str "Loaded %d packages from %d source(s)"
-            (OpamPackage.Set.cardinal all_packages)
-            (List.length packages_dirs)));
+    Fmt.kstr
+      (fun s -> reporter.Build_progress.event (Status s))
+      "Loaded %d packages from %d source(s)"
+      (OpamPackage.Set.cardinal all_packages)
+      (List.length packages_dirs);
     let global_variables =
       let open OpamTypes in
       let var s value desc =
@@ -783,15 +783,14 @@ module Memo = struct
   let compute_git_signature packages_dir =
     let head =
       Option.map String.trim
-        (read_process_output
-           (Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
-              (Filename.quote packages_dir)))
+        (Fmt.kstr read_process_output "git -C %s rev-parse HEAD 2>/dev/null"
+           (Filename.quote packages_dir))
     in
     let status =
-      read_process_output
-        (Printf.sprintf "git -C %s status --porcelain -- %s 2>/dev/null"
-           (Filename.quote packages_dir)
-           (Filename.quote packages_dir))
+      Fmt.kstr read_process_output
+        "git -C %s status --porcelain -- %s 2>/dev/null"
+        (Filename.quote packages_dir)
+        (Filename.quote packages_dir)
     in
     match (head, status) with
     | Some h, Some s when h <> "" ->
@@ -1070,7 +1069,7 @@ let augment_compiler_constraints ctx constraints =
          or hard-errors). Hitting this branch means the caller
          constructed a Ctx without a toolchain and tried to solve —
          a bug rather than a configuration question. *)
-      Error.config_error
+      Error.fail_config_error
         "Solver.augment_compiler_constraints: no toolchain set on Solver.Ctx — \
          every solve must thread a toolchain through (default or \
          --toolchain=NAME). Construct the Ctx via Pipeline.pick_toolchain."
@@ -1153,10 +1152,10 @@ let solve ?test ?doc ?(reporter = Build_progress.null) ~fs ~cache_root ctx
         in
         names @ extra
   in
-  reporter.Build_progress.event
-    (Status
-       (Fmt.str "Solving for %d root%s" (List.length names)
-          (if List.length names = 1 then "" else "s")));
+  Fmt.kstr
+    (fun s -> reporter.Build_progress.event (Status s))
+    "Solving for %d root%s" (List.length names)
+    (if List.length names = 1 then "" else "s");
   let log_selected_versions pkgs =
     let by_name =
       List.fold_left
@@ -1166,10 +1165,11 @@ let solve ?test ?doc ?(reporter = Build_progress.null) ~fs ~cache_root ctx
     let render n =
       match OpamPackage.Name.Map.find_opt n by_name with
       | Some p ->
-          Some
-            (Fmt.str "%s.%s"
-               (OpamPackage.Name.to_string n)
-               (OpamPackage.Version.to_string (OpamPackage.version p)))
+          Fmt.kstr
+            (fun s -> Some s)
+            "%s.%s"
+            (OpamPackage.Name.to_string n)
+            (OpamPackage.Version.to_string (OpamPackage.version p))
       | None -> None
     in
     let extra_names =

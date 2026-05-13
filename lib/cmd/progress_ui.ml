@@ -66,7 +66,7 @@ let ansi_camel_mid = "\027[38;2;229;141;38m" (* #E58D26 transition shade *)
 let ansi_camel_dim = "\027[38;2;139;107;71m" (* #8B6B47 unfilled bg *)
 let ansi_reset = "\027[0m"
 
-let _ansi_byte_overhead =
+let ansi_byte_overhead =
   String.length ansi_camel_full
   + String.length ansi_camel_glow
   + String.length ansi_camel_mid
@@ -79,7 +79,7 @@ let _ansi_byte_overhead =
    lengths, and every interior cell is a 3-byte UTF-8 box-drawing
    char regardless of which "shade" is chosen — so the total stays
    stable across fill ratios. *)
-let bar_with_color_bytes ~inner = 3 + _ansi_byte_overhead + (inner * 3) + 3
+let bar_with_color_bytes ~inner = 3 + ansi_byte_overhead + (inner * 3) + 3
 
 (* Render a fixed-width box-drawing bar in OCaml-camel shades for a
    [(current, total)] pair. We do this ourselves rather than via
@@ -196,13 +196,12 @@ let agg_total_cells =
    ANSI prefix is a constant 19 bytes regardless of the colour
    chosen — that stability lets us pin [agg_spark_bytes] without
    conditioning on which slot maps to which level. *)
-let _spark_ansi_per_cell = 19 (* "\x1b[38;2;XXX;YYY;ZZZm" *)
-let _spark_char_bytes = 3 (* every block-fill char is 3 bytes UTF-8 *)
-let _spark_reset_bytes = String.length ansi_reset
+let spark_ansi_per_cell = 19 (* "\x1b[38;2;XXX;YYY;ZZZm" *)
+let spark_char_bytes = 3 (* every block-fill char is 3 bytes UTF-8 *)
+let spark_reset_bytes = String.length ansi_reset
 
 let agg_spark_bytes =
-  (agg_spark_w * (_spark_ansi_per_cell + _spark_char_bytes))
-  + _spark_reset_bytes
+  (agg_spark_w * (spark_ansi_per_cell + spark_char_bytes)) + spark_reset_bytes
 
 let agg_total_bytes =
   agg_phase_w + 1 + agg_spark_bytes + 1
@@ -263,27 +262,27 @@ let spark_max_level = 8
    mid load, dusty rose / muted brick for high. Saturation is well
    below the vivid blue/green/red used previously — the sparkline
    reads as a soft activity haze rather than a flashing alarm. *)
-let _ansi_rgb_padded r g b = Fmt.str "\027[38;2;%03d;%03d;%03dm" r g b
+let ansi_rgb_padded r g b = Fmt.str "\027[38;2;%03d;%03d;%03dm" r g b
 
 let spark_palette =
   [|
-    _ansi_rgb_padded 080 080 080;
+    ansi_rgb_padded 080 080 080;
     (* 0  idle grey *)
-    _ansi_rgb_padded 100 130 165;
+    ansi_rgb_padded 100 130 165;
     (* 1  dusty slate-blue *)
-    _ansi_rgb_padded 110 145 165;
+    ansi_rgb_padded 110 145 165;
     (* 2  muted blue *)
-    _ansi_rgb_padded 115 155 155;
+    ansi_rgb_padded 115 155 155;
     (* 3  muted teal *)
-    _ansi_rgb_padded 120 160 130;
+    ansi_rgb_padded 120 160 130;
     (* 4  sage green *)
-    _ansi_rgb_padded 150 160 110;
+    ansi_rgb_padded 150 160 110;
     (* 5  pale olive *)
-    _ansi_rgb_padded 175 155 105;
+    ansi_rgb_padded 175 155 105;
     (* 6  warm tan *)
-    _ansi_rgb_padded 175 130 130;
+    ansi_rgb_padded 175 130 130;
     (* 7  dusty rose *)
-    _ansi_rgb_padded 180 110 110;
+    ansi_rgb_padded 180 110 110;
     (* 8+ muted brick *)
   |]
 
@@ -691,7 +690,7 @@ let pct_text_of s =
         let p = current_of s * 100 / t in
         if p < 0 then 0 else if p > 100 then 100 else p
   in
-  pad_exact ~w:agg_pct_w (Fmt.str "(%d%%)" pct)
+  Fmt.kstr (pad_exact ~w:agg_pct_w) "(%d%%)" pct
 
 let push_agg s =
   try
@@ -716,7 +715,7 @@ let add_row s ~now node =
   let k = key_of node in
   if not (Hashtbl.mem s.rows k) then begin
     let pkg = pkg_label_of node in
-    let phase = D10ir.Direct.phase_to_string Stage_deps in
+    let phase = D10ir.Direct.string_of_phase Stage_deps in
     let r =
       Progress.Display.add_line s.display (row_line ~init_phase:phase ~pkg ())
     in
@@ -820,7 +819,7 @@ let handle_build_event s (e : D10ir.Direct.event) =
   | Node_queued _ -> ()
   | Node_started { node } -> add_row s ~now node
   | Node_phase { node; phase } ->
-      update_phase s ~now node (D10ir.Direct.phase_to_string phase)
+      update_phase s ~now node (D10ir.Direct.string_of_phase phase)
   | Node_cached { node } ->
       drop_row s node;
       bump_build_done s
@@ -1110,7 +1109,7 @@ let plain_reporter () : Oi.Build_progress.reporter =
             L.app (fun m ->
                 m "  ✗ %s.%s failed in phase %s — see %s" node.package.name
                   node.package.version
-                  (D10ir.Direct.phase_to_string phase)
+                  (D10ir.Direct.string_of_phase phase)
                   log_path)
         | Node_skipped { node; reason } ->
             L.info (fun m ->

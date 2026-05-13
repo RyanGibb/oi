@@ -13,6 +13,11 @@
 type t
 (** System operations context with pre-resolved tool paths. *)
 
+val pp : t Fmt.t
+(** [pp] renders an opaque tag — the type is abstract, no fields to expose.
+    Provided for debugging contexts where {!t} needs to appear in a formatted
+    record. *)
+
 type Eio.Exn.err +=
   | Cmd_failed of {
       argv : string list;
@@ -28,7 +33,7 @@ type Eio.Exn.err +=
             Use [Eio.Exn.add_context] to layer higher-level context onto the
             raised exception. *)
 
-val create :
+val v :
   ?stdout:_ Eio.Flow.sink ->
   ?stderr:_ Eio.Flow.sink ->
   proc_mgr:_ Eio.Process.mgr ->
@@ -37,11 +42,11 @@ val create :
   clock:_ Eio.Time.clock ->
   unit ->
   t
-(** [create ?stdout ?stderr ~proc_mgr ~fs ~net ~clock ()] detects tool paths
-    (tar variant) by probing the system via [which]. Pass the parent's [stdout]
-    and [stderr] to enable {!Cmd.run_inherit}, which streams subprocess output
-    to the user's terminal. [net] and [clock] are needed by {!Http.fetch} for
-    in-process HTTP downloads. Call once at startup. *)
+(** [v] detects tool paths (tar variant) by probing the system via [which]. Pass
+    the parent's [stdout] and [stderr] to enable {!Cmd.run_inherit}, which
+    streams subprocess output to the user's terminal. [net] and [clock] are
+    needed by {!Http.fetch} for in-process HTTP downloads. Call once at startup.
+*)
 
 (** {1 File queries} *)
 

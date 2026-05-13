@@ -40,9 +40,10 @@ let resolve_data_dir ?override () =
 
 let pp_one_exn fmt = function
   | Oi.Error.E e -> Oi.Error.pp fmt e
-  | Failure msg -> Fmt.pf fmt "%a %s" Oi.Style.error_string "error:" msg
+  | Failure msg -> Fmt.pf fmt "%a %s" Oi.Style.pp_error_string "error:" msg
   | e ->
-      Fmt.pf fmt "%a %s" Oi.Style.error_string "error:" (Printexc.to_string e)
+      Fmt.pf fmt "%a %s" Oi.Style.pp_error_string "error:"
+        (Printexc.to_string e)
 
 let rec is_interrupt = function
   | Oi.Signals.Interrupted | Sys.Break -> true
@@ -136,10 +137,10 @@ let bootstrap ~sw ?data_dir ?(format = Terms.Text) (env : Eio_unix.Stdenv.base)
   let net = Eio.Stdenv.net env in
   let stdout = Eio.Stdenv.stdout env in
   let stderr = Eio.Stdenv.stderr env in
-  let sys = D10.Sysops.create ~stdout ~stderr ~proc_mgr ~fs ~net ~clock () in
+  let sys = D10.Sysops.v ~stdout ~stderr ~proc_mgr ~fs ~net ~clock () in
   let platform = Osrel.detect ~proc_mgr ~fs in
   let os_key = D10.Os_key.(to_string (of_platform platform)) in
-  let cache = Oi.Cache.create ~root:cache_dir fs in
+  let cache = Oi.Cache.v ~root:cache_dir fs in
   let data_dir = resolve_data_dir ?override:data_dir () in
   (* Validate on-disk schema stamps before any command body runs. A
      mismatch means the user upgraded [oi] across an incompatible

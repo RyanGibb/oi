@@ -336,9 +336,10 @@ let cmd =
         c.cache_dir
     in
     let data_dir = c.data_dir in
-    if output = "" then Oi.Error.config_error "oi source: -o DIR is required";
+    if output = "" then
+      Oi.Error.fail_config_error "oi source: -o DIR is required";
     if targets = [] then
-      Oi.Error.config_error "oi source: at least one TARGET is required";
+      Oi.Error.fail_config_error "oi source: at least one TARGET is required";
     (* [Eio.Path.mkdirs] mishandles relative paths whose split-parent
        is the empty string (it ends up calling [mkdirat] with [""]).
        Resolve to absolute against cwd before any filesystem op. *)
@@ -354,7 +355,7 @@ let cmd =
     Oi.Pipeline.init_opam_root ~fs ~data_dir;
     ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
     let conf =
-      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+      Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
     in
     let targets, with_repos, with_deps =
       split_handle_targets ~with_repos ~with_deps targets

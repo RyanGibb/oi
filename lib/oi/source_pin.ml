@@ -72,10 +72,11 @@ module Lock = struct
        ;; refresh.\n";
     Buffer.add_string buf "(version 1)\n";
     let sorted = List.sort (fun a b -> String.compare a.pkg b.pkg) entries in
+    let pp = Fmt.with_buffer buf in
     List.iter
       (fun e ->
-        Printf.bprintf buf "(pin %s\n  (origin   %S)\n  (resolved %S))\n" e.pkg
-          e.origin e.resolved)
+        Fmt.pf pp "(pin %s\n  (origin   %S)\n  (resolved %S))\n" e.pkg e.origin
+          e.resolved)
       sorted;
     Eio.Path.save ~create:(`Or_truncate 0o644)
       Eio.Path.(fs / path)
@@ -106,8 +107,8 @@ let resolve_pins ~fs ~sys ?project_root pins =
                slot, so we leave the URL alone. *)
             | `Add_checksum _ -> pin.url
             | `Failed reason ->
-                Error.config_error "pin %s: cannot resolve URL %s: %s" pkg_s
-                  origin reason)
+                Error.fail_config_error "pin %s: cannot resolve URL %s: %s"
+                  pkg_s origin reason)
       in
       let pins', entries =
         List.fold_right
@@ -148,8 +149,10 @@ let fetch_pin ?(reporter = Build_progress.null) ~fs ~cache ~refresh
         m "Fetching pin %s from %s"
           (OpamPackage.to_string pin.pkg)
           (OpamUrl.to_string pin.url));
-    reporter.Build_progress.event
-      (Status (Fmt.str "Fetching pin %s" (OpamPackage.to_string pin.pkg)));
+    Fmt.kstr
+      (fun s -> reporter.Build_progress.event (Status s))
+      "Fetching pin %s"
+      (OpamPackage.to_string pin.pkg);
     if Sys.file_exists src_dir then
       Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / src_dir);
     let dst = OpamFilename.Dir.of_string src_dir in
@@ -168,7 +171,7 @@ let fetch_pin ?(reporter = Build_progress.null) ~fs ~cache ~refresh
         Eio.Path.save ~create:(`Or_truncate 0o644) Eio.Path.(fs / sentinel) "";
         src_dir
     | OpamTypes.Not_available (_, msg) ->
-        Error.config_error "pin %s: fetch failed (%s): %s"
+        Error.fail_config_error "pin %s: fetch failed (%s): %s"
           (OpamPackage.to_string pin.pkg)
           (OpamUrl.to_string pin.url)
           msg
@@ -188,7 +191,8 @@ let locate_opam_file ~src_dir (pin : Project.pin) =
   match List.find_opt Sys.file_exists candidates with
   | Some p -> p
   | None ->
-      Error.config_error "pin %s: no %s.opam or opam file at the root of %s"
+      Error.fail_config_error
+        "pin %s: no %s.opam or opam file at the root of %s"
         (OpamPackage.to_string pin.pkg)
         name src_dir
 
@@ -196,10 +200,10 @@ let rewrite_opam ~src_dir ~opam_path ~revision (pin : Project.pin) =
   let opam =
     try OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
     with exn ->
-      Error.config_error "pin: failed to read %s: %s" opam_path
+      Error.fail_config_error "pin: failed to read %s: %s" opam_path
         (Printexc.to_string exn)
   in
-  let local_url = OpamUrl.of_string (Fmt.str "file://%s#%s" src_dir revision) in
+  let local_url = Fmt.kstr OpamUrl.of_string "file://%s#%s" src_dir revision in
   let new_url = OpamFile.URL.create local_url in
   opam
   |> OpamFile.OPAM.with_url new_url
@@ -227,8 +231,9 @@ let materialize ?(reporter = Build_progress.null) ~fs ~sys ~cache
   | [] -> None
   | _ ->
       let total = List.length pins in
-      reporter.Build_progress.event
-        (Status (Fmt.str "Materialising %d pin(s)" total));
+      Fmt.kstr
+        (fun s -> reporter.Build_progress.event (Status s))
+        "Materialising %d pin(s)" total;
       let counter = ref 0 in
       let resolved =
         List.map
@@ -257,9 +262,7 @@ let materialize ?(reporter = Build_progress.null) ~fs ~sys ~cache
       let set_hash =
         let s =
           String.concat "\n"
-            (List.map
-               (fun (n, v, r) -> Printf.sprintf "%s\t%s\t%s" n v r)
-               triples)
+            (List.map (fun (n, v, r) -> Fmt.str "%s\t%s\t%s" n v r) triples)
         in
         Digest.to_hex (Digest.string s)
       in

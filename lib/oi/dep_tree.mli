@@ -9,9 +9,9 @@
     re-references:
 
     - First occurrence: rendered via [label_first] in the default style.
-    - Back-reference: rendered via [label_ref], wrapped in {!Style.dim_string},
-      prefixed with a small "↰" arrow so the eye reads "see this layer expanded
-      above". *)
+    - Back-reference: rendered via [label_ref], wrapped in
+      {!Style.pp_dim_string}, prefixed with a small "↰" arrow so the eye reads
+      "see this layer expanded above". *)
 
 val render :
   label_first:('node -> string) ->

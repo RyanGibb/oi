@@ -30,13 +30,13 @@ let with_attempts ~label ?(max_attempts = 3) ?(initial_delay_s = 1.0)
     match f () with
     | result ->
         if attempt > 1 then
-          note ~level:`App
-            (Fmt.str "%s succeeded on attempt %d/%d" label attempt max_attempts);
+          Fmt.kstr (note ~level:`App) "%s succeeded on attempt %d/%d" label
+            attempt max_attempts;
         result
     | exception exn when attempt < max_attempts ->
-        note ~level:`Warn
-          (Fmt.str "%s failed (attempt %d/%d): %s — retrying in %.1fs" label
-             attempt max_attempts (Printexc.to_string exn) delay);
+        Fmt.kstr (note ~level:`Warn)
+          "%s failed (attempt %d/%d): %s — retrying in %.1fs" label attempt
+          max_attempts (Printexc.to_string exn) delay;
         Unix.sleepf delay;
         loop (attempt + 1) (delay *. 2.0)
   in

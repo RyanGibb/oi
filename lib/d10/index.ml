@@ -22,6 +22,13 @@ let exec db sql =
   | rc ->
       Fmt.failwith "layer_index sqlite: %s: %s" (Sqlite3.Rc.to_string rc) sql
 
+(* Format-string variants for [exec] and the row-callback path so each call site
+   reads as a SQL template rather than a stringly-allocated argument. *)
+let execf db fmt = Fmt.kstr (exec db) fmt
+
+let exec_rows db ~cb fmt =
+  Fmt.kstr (Sqlite3.exec_not_null_no_headers db ~cb) fmt
+
 (* Bump whenever [rebuild]'s extracted-rows logic changes shape — i.e. when
    an already-correct on-disk [index.db] would produce a *different* row set
    if regenerated from the same layer dirs. Mismatched stamps force a full
@@ -319,7 +326,7 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
     exec db (scoped "layer_binaries");
     exec db (scoped "layer_deps");
     exec db (scoped "layer_meta");
-    exec db (Fmt.str "DELETE FROM layers WHERE os_key = %s" (quote os_key));
+    execf db "DELETE FROM layers WHERE os_key = %s" (quote os_key);
     let entries = Eio.Path.read_dir layers_dir in
     exec db "BEGIN TRANSACTION";
     List.iter
@@ -336,15 +343,14 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
               | None -> ("NULL", "NULL")
               | Some (o : Overlay.t) -> (quote o.handle, quote o.version)
             in
-            exec db
-              (Fmt.str
-                 "INSERT OR REPLACE INTO layers (hash, os_key, arch, os, \
-                  distro, os_version, package_name, package_ver, exit_status, \
-                  created, overlay_handle, overlay_version) VALUES (%s, %s, \
-                  %s, %s, %s, %s, %s, %s, %d, %f, %s, %s)"
-                 (quote hash) (quote os_key) (quote arch) (quote os)
-                 (quote distro) (quote os_version) (quote name) (quote version)
-                 info.exit_status info.created oh ov);
+            execf db
+              "INSERT OR REPLACE INTO layers (hash, os_key, arch, os, distro, \
+               os_version, package_name, package_ver, exit_status, created, \
+               overlay_handle, overlay_version) VALUES (%s, %s, %s, %s, %s, \
+               %s, %s, %s, %d, %f, %s, %s)"
+              (quote hash) (quote os_key) (quote arch) (quote os) (quote distro)
+              (quote os_version) (quote name) (quote version) info.exit_status
+              info.created oh ov;
             List.iteri
               (fun i dep_s ->
                 let dep_name, dep_version = parse_pkg_string dep_s in
@@ -352,12 +358,11 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
                   if i < List.length info.hashes then List.nth info.hashes i
                   else ""
                 in
-                exec db
-                  (Fmt.str
-                     "INSERT INTO layer_deps (layer_hash, dep_name, \
-                      dep_version, dep_hash) VALUES (%s, %s, %s, %s)"
-                     (quote hash) (quote dep_name) (quote dep_version)
-                     (quote dep_hash)))
+                execf db
+                  "INSERT INTO layer_deps (layer_hash, dep_name, dep_version, \
+                   dep_hash) VALUES (%s, %s, %s, %s)"
+                  (quote hash) (quote dep_name) (quote dep_version)
+                  (quote dep_hash))
               info.deps;
             (* Scan files in fs/. Two passes: always extract
                binaries + ocamlfind META metadata (small, the
@@ -372,11 +377,10 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
               List.iter
                 (fun path ->
                   if include_files then
-                    exec db
-                      (Fmt.str
-                         "INSERT INTO layer_files (layer_hash, path) VALUES \
-                          (%s, %s)"
-                         (quote hash) (quote path));
+                    execf db
+                      "INSERT INTO layer_files (layer_hash, path) VALUES (%s, \
+                       %s)"
+                      (quote hash) (quote path);
                   let bin_name =
                     if String.length path > 4 && String.sub path 0 4 = "bin/"
                     then Some (String.sub path 4 (String.length path - 4))
@@ -387,11 +391,10 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
                   in
                   Option.iter
                     (fun name ->
-                      exec db
-                        (Fmt.str
-                           "INSERT INTO layer_binaries (layer_hash, \
-                            binary_name) VALUES (%s, %s)"
-                           (quote hash) (quote name)))
+                      execf db
+                        "INSERT INTO layer_binaries (layer_hash, binary_name) \
+                         VALUES (%s, %s)"
+                        (quote hash) (quote name))
                     bin_name)
                 files;
               (* Findlib META: record one row per (package_dir,
@@ -405,20 +408,18 @@ let rebuild (c : Config.t) ?(overlay_for = fun ~hash:_ -> None)
                   let archive_q =
                     match archive with None -> "NULL" | Some a -> quote a
                   in
-                  exec db
-                    (Fmt.str
-                       "INSERT INTO layer_meta (layer_hash, package_dir, \
-                        findlib_pkg, archive) VALUES (%s, %s, %s, %s)"
-                       (quote hash) (quote package_dir) (quote findlib_pkg)
-                       archive_q))
+                  execf db
+                    "INSERT INTO layer_meta (layer_hash, package_dir, \
+                     findlib_pkg, archive) VALUES (%s, %s, %s, %s)"
+                    (quote hash) (quote package_dir) (quote findlib_pkg)
+                    archive_q)
                 metas
             end)
       entries;
-    exec db
-      (Fmt.str
-         "INSERT OR REPLACE INTO index_meta (os_key, indexer_version) VALUES \
-          (%s, %s)"
-         (quote os_key) (quote indexer_version));
+    execf db
+      "INSERT OR REPLACE INTO index_meta (os_key, indexer_version) VALUES (%s, \
+       %s)"
+      (quote os_key) (quote indexer_version);
     exec db "COMMIT";
     Log.info (fun m ->
         m "Indexed %d layers for %s" (List.length entries) os_key)
@@ -472,13 +473,12 @@ let find_binary db ~binary ~os_key =
     | _ -> ()
   in
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT l.package_name, l.package_ver, l.hash, \
-           COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') \
-           FROM layer_binaries b JOIN layers l ON b.layer_hash = l.hash WHERE \
-           b.binary_name = %s AND l.os_key = %s AND l.exit_status = 0"
-          (quote binary) (quote os_key)));
+    (exec_rows db ~cb
+       "SELECT l.package_name, l.package_ver, l.hash, \
+        COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') FROM \
+        layer_binaries b JOIN layers l ON b.layer_hash = l.hash WHERE \
+        b.binary_name = %s AND l.os_key = %s AND l.exit_status = 0"
+       (quote binary) (quote os_key));
   (* Sort by opam version descending — latest version first *)
   List.sort
     (fun (_, v1, _, _) (_, v2, _, _) ->
@@ -498,12 +498,11 @@ let search_package db ~pattern ~os_key =
   let sql_pattern = String.map (fun c -> if c = '*' then '%' else c) pattern in
   let op = if String.contains sql_pattern '%' then "LIKE" else "=" in
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT package_name, package_ver, hash, COALESCE(overlay_handle, \
-           ''), COALESCE(overlay_version, '') FROM layers WHERE package_name \
-           %s %s AND os_key = %s AND exit_status = 0"
-          op (quote sql_pattern) (quote os_key)));
+    (exec_rows db ~cb
+       "SELECT package_name, package_ver, hash, COALESCE(overlay_handle, ''), \
+        COALESCE(overlay_version, '') FROM layers WHERE package_name %s %s AND \
+        os_key = %s AND exit_status = 0"
+       op (quote sql_pattern) (quote os_key));
   List.sort
     (fun (n1, v1, _, _) (n2, v2, _, _) ->
       let c = String.compare n1 n2 in
@@ -529,13 +528,12 @@ let search_binary db ~pattern ~os_key =
   (* COALESCE the nullable overlay columns so [exec_not_null_no_headers]
      (which skips rows containing NULLs) still sees every match. *)
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT b.binary_name, l.package_name, l.package_ver, l.hash, \
-           COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') \
-           FROM layer_binaries b JOIN layers l ON b.layer_hash = l.hash WHERE \
-           b.binary_name %s %s AND l.os_key = %s AND l.exit_status = 0"
-          op (quote sql_pattern) (quote os_key)));
+    (exec_rows db ~cb
+       "SELECT b.binary_name, l.package_name, l.package_ver, l.hash, \
+        COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') FROM \
+        layer_binaries b JOIN layers l ON b.layer_hash = l.hash WHERE \
+        b.binary_name %s %s AND l.os_key = %s AND l.exit_status = 0"
+       op (quote sql_pattern) (quote os_key));
   List.sort
     (fun (b1, _, v1, _, _) (b2, _, v2, _, _) ->
       let c = String.compare b1 b2 in
@@ -559,13 +557,12 @@ let find_meta db ~findlib_pkg ~os_key =
   in
   let op = if String.contains sql_pattern '%' then "LIKE" else "=" in
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT l.package_name, l.package_ver, l.hash, \
-           COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') \
-           FROM layer_meta m JOIN layers l ON m.layer_hash = l.hash WHERE \
-           m.findlib_pkg %s %s AND l.os_key = %s AND l.exit_status = 0"
-          op (quote sql_pattern) (quote os_key)));
+    (exec_rows db ~cb
+       "SELECT l.package_name, l.package_ver, l.hash, \
+        COALESCE(l.overlay_handle, ''), COALESCE(l.overlay_version, '') FROM \
+        layer_meta m JOIN layers l ON m.layer_hash = l.hash WHERE \
+        m.findlib_pkg %s %s AND l.os_key = %s AND l.exit_status = 0"
+       op (quote sql_pattern) (quote os_key));
   List.sort
     (fun (_, v1, _, _) (_, v2, _, _) ->
       OpamPackage.Version.compare
@@ -583,11 +580,10 @@ let all_tarballs db ~os_key =
     | _ -> ()
   in
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT hash, tarball_sha256, tarball_size FROM layers WHERE os_key \
-           = %s AND tarball_sha256 IS NOT NULL"
-          (quote os_key)));
+    (exec_rows db ~cb
+       "SELECT hash, tarball_sha256, tarball_size FROM layers WHERE os_key = \
+        %s AND tarball_sha256 IS NOT NULL"
+       (quote os_key));
   List.rev !results
 
 let deps db ~hash =
@@ -599,11 +595,10 @@ let deps db ~hash =
     | _ -> ()
   in
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT dep_name, dep_version, dep_hash FROM layer_deps WHERE \
-           layer_hash = %s ORDER BY dep_name"
-          (quote hash)));
+    (exec_rows db ~cb
+       "SELECT dep_name, dep_version, dep_hash FROM layer_deps WHERE \
+        layer_hash = %s ORDER BY dep_name"
+       (quote hash));
   List.rev !results
 
 let files db ~hash =
@@ -612,10 +607,9 @@ let files db ~hash =
     match row with [| path |] -> results := path :: !results | _ -> ()
   in
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT path FROM layer_files WHERE layer_hash = %s ORDER BY path"
-          (quote hash)));
+    (exec_rows db ~cb
+       "SELECT path FROM layer_files WHERE layer_hash = %s ORDER BY path"
+       (quote hash));
   List.rev !results
 
 let all_binaries db ~os_key =
@@ -627,22 +621,19 @@ let all_binaries db ~os_key =
     | _ -> ()
   in
   ignore
-    (Sqlite3.exec_not_null_no_headers db ~cb
-       (Fmt.str
-          "SELECT b.binary_name, l.package_name, l.package_ver FROM \
-           layer_binaries b JOIN layers l ON b.layer_hash = l.hash WHERE \
-           l.os_key = %s AND l.exit_status = 0 ORDER BY b.binary_name"
-          (quote os_key)));
+    (exec_rows db ~cb
+       "SELECT b.binary_name, l.package_name, l.package_ver FROM \
+        layer_binaries b JOIN layers l ON b.layer_hash = l.hash WHERE l.os_key \
+        = %s AND l.exit_status = 0 ORDER BY b.binary_name"
+       (quote os_key));
   List.rev !results
 
 (* -- Stats ---------------------------------------------------------------- *)
 
 let record_tarball db ~hash ~sha256 ~size =
-  exec db
-    (Fmt.str
-       "UPDATE layers SET tarball_sha256 = %s, tarball_size = %Ld WHERE hash = \
-        %s"
-       (quote sha256) size (quote hash))
+  execf db
+    "UPDATE layers SET tarball_sha256 = %s, tarball_size = %Ld WHERE hash = %s"
+    (quote sha256) size (quote hash)
 
 let stats db ~os_key =
   let get_count sql =
@@ -686,12 +677,10 @@ let dependents db ~hashes ~os_key =
         match row with [| h |] -> results := h :: !results | _ -> ()
       in
       ignore
-        (Sqlite3.exec_not_null_no_headers db ~cb
-           (Fmt.str
-              "SELECT DISTINCT d.layer_hash FROM layer_deps d JOIN layers l ON \
-               d.layer_hash = l.hash WHERE d.dep_hash IN (%s) AND l.os_key = \
-               %s"
-              (in_clause hashes) (quote os_key)));
+        (exec_rows db ~cb
+           "SELECT DISTINCT d.layer_hash FROM layer_deps d JOIN layers l ON \
+            d.layer_hash = l.hash WHERE d.dep_hash IN (%s) AND l.os_key = %s"
+           (in_clause hashes) (quote os_key));
       List.rev !results
 
 let delete_layers db ~hashes =
@@ -700,11 +689,10 @@ let delete_layers db ~hashes =
   | _ ->
       let in_ = in_clause hashes in
       exec db "BEGIN TRANSACTION";
-      exec db (Fmt.str "DELETE FROM layer_files WHERE layer_hash IN (%s)" in_);
-      exec db
-        (Fmt.str "DELETE FROM layer_binaries WHERE layer_hash IN (%s)" in_);
-      exec db (Fmt.str "DELETE FROM layer_deps WHERE layer_hash IN (%s)" in_);
-      exec db (Fmt.str "DELETE FROM layers WHERE hash IN (%s)" in_);
+      execf db "DELETE FROM layer_files WHERE layer_hash IN (%s)" in_;
+      execf db "DELETE FROM layer_binaries WHERE layer_hash IN (%s)" in_;
+      execf db "DELETE FROM layer_deps WHERE layer_hash IN (%s)" in_;
+      execf db "DELETE FROM layers WHERE hash IN (%s)" in_;
       exec db "COMMIT"
 
 (* -- Remote merge --------------------------------------------------------- *)
@@ -737,12 +725,11 @@ let copy_table_intersection db ~table ~where =
   if local = [] || remote = [] || common = [] then ()
   else
     let cols = String.concat ", " common in
-    exec db
-      (Fmt.str "INSERT INTO %s (%s) SELECT %s FROM remote.%s WHERE %s" table
-         cols cols table where)
+    execf db "INSERT INTO %s (%s) SELECT %s FROM remote.%s WHERE %s" table cols
+      cols table where
 
 let merge_remote db ~remote_path =
-  exec db (Fmt.str "ATTACH DATABASE %s AS remote" (quote remote_path));
+  execf db "ATTACH DATABASE %s AS remote" (quote remote_path);
   exec db
     "CREATE TEMP TABLE _new_hashes AS SELECT hash FROM remote.layers WHERE \
      hash NOT IN (SELECT hash FROM main.layers)";

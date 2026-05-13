@@ -102,7 +102,7 @@ let expand_targets ~fs ~sys ~reporepo_path ~reporepo_url (targets : target list)
       | Overlay_all handle -> begin
           let entries = Lazy.force entries_lazy in
           match Source.Reporepo.latest entries ~handle with
-          | None -> Error.config_error "no overlay @%s in reporepo" handle
+          | None -> Error.fail_config_error "no overlay @%s in reporepo" handle
           | Some (e : Source.Reporepo.entry) ->
               let groups =
                 if e.root_packages <> [] then e.root_packages
@@ -148,7 +148,7 @@ let pick_batch_toolchain ?reporter ~env ~conf ~override ~all_handles () =
      package builds start spewing "compiler not found" failures. *)
   (match info with
   | Some i when not (Toolchain.is_ready i) ->
-      Error.config_error
+      Error.fail_config_error
         "toolchain %s is not installed at %s — run [oi config] to inspect, \
          then re-run [oi build] (the install step should have happened \
          automatically and reporting a bug helps if it didn't)."
@@ -522,9 +522,8 @@ let git_head_of dir =
   | Some r -> r
   | None ->
       let r =
-        read_process_output
-          (Printf.sprintf "git -C %s rev-parse HEAD 2>/dev/null"
-             (Filename.quote dir))
+        Fmt.kstr read_process_output "git -C %s rev-parse HEAD 2>/dev/null"
+          (Filename.quote dir)
       in
       let r = match r with Some s when s <> "" -> Some s | _ -> None in
       Hashtbl.add head_memo dir r;
@@ -701,7 +700,7 @@ let solve_uncached env ?(reporter = Build_progress.null) (req : request) :
   let cache_root = Cache.root_s env.cache in
   let build_prefix = cache_root / "build" / "prefix" in
   let d10 =
-    Pipeline.make_d10 ~sys:env.sys ~fs:env.fs
+    Pipeline.d10 ~sys:env.sys ~fs:env.fs
       ~clock:(env.clock :> D10.Config.clk)
       ~cache:env.cache ~os_key:env.os_key
   in
@@ -744,7 +743,7 @@ let solve_uncached env ?(reporter = Build_progress.null) (req : request) :
         match D10ir.Plan.merge recipes with
         | Ok r -> Some r
         | Error msg ->
-            Error.config_error
+            Error.fail_config_error
               "merging %d recipes failed: %s. This is a bug in \
                D10ir.Plan.merge: every recipe was produced by the same \
                toolchain in the same batch."
@@ -774,8 +773,9 @@ let solve env ?(reporter = Build_progress.null) (req : request) : solved =
       Log.info (fun m ->
           m "solve cache hit %s (%d groups)" (String.sub key 0 12)
             (List.length s.groups));
-      reporter.Build_progress.event
-        (Status (Fmt.str "Solve cache hit (%d groups)" (List.length s.groups)));
+      Fmt.kstr
+        (fun s -> reporter.Build_progress.event (Status s))
+        "Solve cache hit (%d groups)" (List.length s.groups);
       s
   | None ->
       let s = solve_uncached env ~reporter req in
@@ -913,7 +913,7 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
   | Some (merged : D10ir.Plan.t) ->
       let cache_root = Cache.root_s env.cache in
       let d10 =
-        Pipeline.make_d10 ~sys:env.sys ~fs:env.fs
+        Pipeline.d10 ~sys:env.sys ~fs:env.fs
           ~clock:(env.clock :> D10.Config.clk)
           ~cache:env.cache ~os_key:env.os_key
       in
@@ -1048,7 +1048,7 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
               still_missing
             |> String.concat ", "
           in
-          Error.config_error
+          Error.fail_config_error
             "%d source archive(s) missing locally and not on the registry: %s.\n\
              Run [oi repo bump] on the offending overlay to bake the archives, \
              or point [--registry] at a registry that publishes \
@@ -1068,7 +1068,8 @@ let build env ?(reporter = Build_progress.null) (inp : build_inputs) :
       (match D10ir.Plan.validate ~d10:d10_cfg ~fs:env.fs ~plan_dir merged with
       | Ok () -> ()
       | Error err ->
-          Error.config_error "d10ir recipe failed validation before build: %a"
+          Error.fail_config_error
+            "d10ir recipe failed validation before build: %a"
             D10ir.Plan.pp_validate_error err);
       let result =
         D10ir.Direct.run ~config:direct_cfg ~d10:d10_cfg ~fs:env.fs

@@ -1,7 +1,3 @@
-[@@@ai_disclosure "ai-assisted"]
-[@@@ai_model "claude-opus-4-7"]
-[@@@ai_provider "Anthropic"]
-
 (** End-to-end pipeline: solve → plan → build → assemble.
 
     The CLI commands compose these operations: most do {!pick_toolchain} →
@@ -10,26 +6,31 @@
     {!fetch_layer_hashes}) are exported so callers can intercept the pipeline at
     intermediate points. *)
 
+[@@@ai_disclosure "ai-assisted"]
+[@@@ai_model "claude-opus-4-7"]
+[@@@ai_provider "Anthropic"]
+
 (** {1 Platform configuration and d10 wiring} *)
 
-val make_conf : platform:Osrel.t -> ocaml_version:string -> Solver.Ctx.conf
+val conf : platform:Osrel.t -> ocaml_version:string -> Solver.Ctx.conf
 (** Build a platform conf from a detected {!Osrel.t} plus an explicit OCaml
     version. *)
 
-val make_d10 :
+val d10 :
   sys:D10.Sysops.t ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   clock:D10.Config.clk ->
   cache:Cache.t ->
   os_key:string ->
   D10.Config.t
-(** Construct a {!D10.Config.t} from the standard capabilities — the value every
-    layer-store call expects. Combines [cache]'s root with [os_key] so layers
-    from different platforms land in their own subdirectories. *)
+(** [d10] Construct a {!D10.Config.t} from the standard capabilities — the value
+    every layer-store call expects. Combines [cache]'s root with [os_key] so
+    layers from different platforms land in their own subdirectories. *)
 
 val init_opam_root : fs:Eio.Fs.dir_ty Eio.Path.t -> data_dir:string -> unit
-(** Create [<data_dir>/opam-root/] (if absent) and call {!Solver.Ctx.init_opam}
-    so the rest of the pipeline can construct {!Solver.Ctx.t}s. Idempotent. *)
+(** [init_opam_root] Create [<data_dir>/opam-root/] (if absent) and call
+    {!Solver.Ctx.init_opam} so the rest of the pipeline can construct
+    {!Solver.Ctx.t}s. Idempotent. *)
 
 (** {1 Toolchain resolution} *)
 
@@ -61,9 +62,8 @@ val pick_toolchain :
   ?reporter:Build_progress.reporter ->
   unit ->
   Toolchain.info option
-(** [pick_toolchain ~override ~handles ()] is the single source of truth for
-    picking which toolchain a command runs against. Selection precedence (first
-    match wins):
+(** [pick_toolchain] is the single source of truth for picking which toolchain a
+    command runs against. Selection precedence (first match wins):
 
     + [override = Some h]: resolve [h] directly. The [--toolchain=NAME] flag.
     + Implicit pickup from [handles]: scan each handle's latest reporepo entry
@@ -105,9 +105,9 @@ val classify_with_args :
   ?reporter:Build_progress.reporter ->
   string list ->
   Project.Script.dep list * Project.Url.t
-(** [classify_with_args tokens] partitions every [--with=…] token in one pass:
-    URLs get cloned into the pin cache and produce pins + solver roots; opam
-    package specs come back as already-parsed {!Project.Script.dep}. *)
+(** [classify_with_args] partitions every [--with=…] token in one pass: URLs get
+    cloned into the pin cache and produce pins + solver roots; opam package
+    specs come back as already-parsed {!Project.Script.dep}. *)
 
 val filter_compatible_overlays :
   reporepo_path:string ->
@@ -115,9 +115,10 @@ val filter_compatible_overlays :
   toolchain:Toolchain.info option ->
   string list ->
   string list
-(** Drop project-declared reporepo overlays tagged with an [x-oi-toolchain] that
-    doesn't match the active toolchain handle. Overlays without [x-oi-toolchain]
-    and overlays not present in the reporepo (URL-only handles) are kept.
+(** [filter_compatible_overlays] Drop project-declared reporepo overlays tagged
+    with an [x-oi-toolchain] that doesn't match the active toolchain handle.
+    Overlays without [x-oi-toolchain] and overlays not present in the reporepo
+    (URL-only handles) are kept.
 
     [?override] reflects whether the active toolchain was {b explicitly} chosen
     ([--toolchain=NAME]) rather than auto-picked. When set, the filter is a
@@ -144,11 +145,11 @@ val fetch_layer_hashes :
   pkg_of:(string, string) Hashtbl.t ->
   unit ->
   unit
-(** Fetch a deduplicated list of layer hashes directly. Used by [oi build]'s
-    merged-plan flow, which collects layer hashes from the unified
-    {!D10ir.Plan.t} (post-{!D10ir.Plan.merge}) and fires one fetch round against
-    the registry instead of N per-group rounds. [pkg_of] maps a hash to its
-    display label. *)
+(** [fetch_layer_hashes] fetches a deduplicated list of layer hashes directly.
+    Used by [oi build]'s merged-plan flow, which collects layer hashes from the
+    unified {!D10ir.Plan.t} (post-{!D10ir.Plan.merge}) and fires one fetch round
+    against the registry instead of N per-group rounds. [pkg_of] maps a hash to
+    its display label. *)
 
 val assemble_prefix :
   sys:D10.Sysops.t ->
@@ -158,5 +159,5 @@ val assemble_prefix :
   os_key:string ->
   layer_hashes:string list ->
   string
-(** Hardlink-assemble a consumer prefix from [layer_hashes] (in topo order) and
-    return its absolute path. *)
+(** [assemble_prefix] Hardlink-assemble a consumer prefix from [layer_hashes]
+    (in topo order) and return its absolute path. *)

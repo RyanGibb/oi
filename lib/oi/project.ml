@@ -89,7 +89,7 @@ let load_one ~filename (opam : OpamFile.OPAM.t) : raw =
     | Some v -> (
         match parse_repos_value v with
         | None ->
-            Error.config_error
+            Error.fail_config_error
               "%s: %s must be a string or a list of strings (each entry is a \
                [@HANDLE] reporepo handle or a repository URL)"
               filename Keys.repos
@@ -133,8 +133,9 @@ let merge_extra_repos entries =
     ~on_conflict:(fun ~prev ~curr name ->
       let prev_file, _, prev_url = prev in
       let declared_in, _, url = curr in
-      Error.config_error "package %s and %s disagree on %s entry %s: %s vs %s"
-        prev_file declared_in Keys.repos name prev_url url)
+      Error.fail_config_error
+        "package %s and %s disagree on %s entry %s: %s vs %s" prev_file
+        declared_in Keys.repos name prev_url url)
     entries
   |> List.map (fun (_, name, url) -> { name; url; local_packages_dir = None })
 
@@ -145,7 +146,7 @@ let merge_pins (entries : pin list) : pin list =
       OpamPackage.equal p1.pkg p2.pkg
       && OpamUrl.to_string p1.url = OpamUrl.to_string p2.url)
     ~on_conflict:(fun ~prev ~curr name ->
-      Error.config_error
+      Error.fail_config_error
         "package %s and %s disagree on pin-depends entry %s: %s (%s) vs %s (%s)"
         prev.declared_in curr.declared_in name
         (OpamPackage.version_to_string prev.pkg)
@@ -224,6 +225,13 @@ let empty =
     overlays = [];
     packages_dir = None;
   }
+
+let pp ppf t =
+  Fmt.pf ppf "@[<h>{ deps=%d local=%d overlays=%d pins=%d repos=%d }@]"
+    (List.length t.deps)
+    (List.length t.local_packages)
+    (List.length t.overlays) (List.length t.pins)
+    (List.length t.extra_repos)
 
 (* -- Script dependency parser ------------------------------------------- *)
 
@@ -367,15 +375,16 @@ module Script = struct
     let libraries = List.rev rev_libs in
     let pps = List.rev rev_pps in
     Out_channel.with_open_text (dir / "dune-project") (fun oc ->
-        Printf.fprintf oc "(lang dune 3.0)\n");
+        output_string oc "(lang dune 3.0)\n");
     let dune_content =
       let buf = Buffer.create 256 in
-      Printf.bprintf buf "(executable\n (name main)\n";
+      let pp = Fmt.with_buffer buf in
+      Fmt.pf pp "(executable\n (name main)\n";
       if libraries <> [] then
-        Printf.bprintf buf " (libraries %s)\n" (String.concat " " libraries);
+        Fmt.pf pp " (libraries %s)\n" (String.concat " " libraries);
       if pps <> [] then
-        Printf.bprintf buf " (preprocess (pps %s))\n" (String.concat " " pps);
-      Printf.bprintf buf ")\n";
+        Fmt.pf pp " (preprocess (pps %s))\n" (String.concat " " pps);
+      Fmt.pf pp ")\n";
       Buffer.contents buf
     in
     Log.debug (fun m ->
@@ -447,8 +456,9 @@ module Url = struct
       src_dir
     else begin
       Log.info (fun m -> m "Cloning URL project %s" (OpamUrl.to_string url));
-      reporter.Build_progress.event
-        (Status (Fmt.str "Cloning %s" (OpamUrl.to_string url)));
+      Fmt.kstr
+        (fun s -> reporter.Build_progress.event (Status s))
+        "Cloning %s" (OpamUrl.to_string url);
       if Sys.file_exists src_dir then
         Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / src_dir);
       let dst = OpamFilename.Dir.of_string src_dir in
@@ -468,7 +478,7 @@ module Url = struct
             "";
           src_dir
       | OpamTypes.Not_available (_, msg) ->
-          Error.config_error "--with=%s: fetch failed: %s"
+          Error.fail_config_error "--with=%s: fetch failed: %s"
             (OpamUrl.to_string url) msg
     end
 
@@ -584,12 +594,13 @@ module Dune = struct
     let path = cwd / "dune-project" in
     let content =
       try Eio.Path.load Eio.Path.(fs / path)
-      with Eio.Exn.Io _ -> Error.config_error "no dune-project at %s" path
+      with Eio.Exn.Io _ ->
+        Error.fail_config_error "no dune-project at %s" path
     in
     match Parsexp.Many.parse_string content with
     | Ok sexps -> { sexps; path }
     | Error e ->
-        Error.config_error "failed to parse %s: %s" path
+        Error.fail_config_error "failed to parse %s: %s" path
           (Parsexp.Parse_error.message e)
 
   let is_form name = function
@@ -658,10 +669,10 @@ module Dune = struct
       | Some n, _ -> n
       | None, [ one ] -> one
       | None, [] ->
-          Error.config_error
+          Error.fail_config_error
             "no (package …) stanzas in dune-project; nothing to edit"
       | None, many ->
-          Error.config_error
+          Error.fail_config_error
             "multiple packages in dune-project (%s); re-run with -p PKG to \
              pick one"
             (String.concat ", " many)
@@ -679,8 +690,8 @@ module Dune = struct
         t.sexps
     in
     if not !found then
-      Error.config_error "no (package (name %s) …) stanza in %s" target_name
-        t.path;
+      Error.fail_config_error "no (package (name %s) …) stanza in %s"
+        target_name t.path;
     { t with sexps = sexps' }
 
   let save ~fs t =
@@ -752,7 +763,7 @@ module Tool = struct
     else
       match parse_ocamlformat_version path with
       | Some ver ->
-          hit spec ~version:ver (Fmt.str ".ocamlformat: version = %s" ver)
+          Fmt.kstr (hit spec ~version:ver) ".ocamlformat: version = %s" ver
       | None -> miss spec ".ocamlformat: no 'version = ...' line"
 
   let dune_project_using ~fs dir name =
@@ -772,8 +783,8 @@ module Tool = struct
 
   let probe_using ~fs dir spec plugin =
     if dune_project_using ~fs dir plugin then
-      hit spec (Fmt.str "dune-project: (using %s ...)" plugin)
-    else miss spec (Fmt.str "dune-project: no (using %s ...)" plugin)
+      Fmt.kstr (hit spec) "dune-project: (using %s ...)" plugin
+    else Fmt.kstr (miss spec) "dune-project: no (using %s ...)" plugin
 
   let probe_one ~fs dir spec =
     match spec.trigger with

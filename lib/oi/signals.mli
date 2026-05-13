@@ -1,7 +1,3 @@
-[@@@ai_disclosure "ai-generated"]
-[@@@ai_model "claude-opus-4-7"]
-[@@@ai_provider "Anthropic"]
-
 (** Signal handling for oi commands.
 
     Installs a single SIGINT / SIGTERM handler that turns a clean Ctrl-C into
@@ -11,6 +7,10 @@
 
     Must be installed by every top-level command; idempotent if called more than
     once in a single process (the handler is global). *)
+
+[@@@ai_disclosure "ai-generated"]
+[@@@ai_model "claude-opus-4-7"]
+[@@@ai_provider "Anthropic"]
 
 exception Interrupted
 (** Raised via [Eio.Switch.fail] when the first signal arrives. Matches the

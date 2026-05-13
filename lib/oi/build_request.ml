@@ -1,5 +1,9 @@
+let log_src = Logs.Src.create "oi.build_request" ~doc:"oi build request"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
-let log_overlay fmt = Fmt.kstr (fun s -> Logs.debug (fun m -> m "%s" s)) fmt
+let log_overlay fmt = Fmt.kstr (fun s -> Log.debug (fun m -> m "%s" s)) fmt
 
 (* -- Extras (CLI URL → Project.extra_repo) ----------------------------- *)
 
@@ -133,7 +137,7 @@ let split_handle_prefix s =
     match String.index_opt rest '/' with
     | None ->
         if String.for_all is_handle_char rest && rest <> "" then
-          Error.config_error
+          Error.fail_config_error
             "overlay handle %S given without a package (use '@%s/PKG')" rest
             rest
         else None
@@ -142,7 +146,7 @@ let split_handle_prefix s =
         let pkg_spec = String.sub rest (i + 1) (String.length rest - i - 1) in
         if (not (String.for_all is_handle_char handle)) || handle = "" then None
         else if pkg_spec = "" then
-          Error.config_error
+          Error.fail_config_error
             "overlay handle %S given without a package (use '@%s/PKG')" handle
             handle
         else begin
@@ -217,7 +221,7 @@ let handle_pin_constraints ~fs ~data_dir ~refresh ~cli_extras handle_pins =
             let pkg_s = OpamPackage.Name.to_string pkg in
             match latest_version_in_dirs ~pkg:pkg_s overlay_pkg_dirs with
             | None ->
-                Error.config_error
+                Error.fail_config_error
                   "overlay %s does not provide a package named %s" handle pkg_s
             | Some v ->
                 log_overlay "pinning %s = %s from overlay %s" pkg_s v handle;

@@ -14,17 +14,19 @@
 type t
 (** Tracker handle, scoped to the [sw] passed to {!create}. *)
 
-val create :
+val pp : t Fmt.t
+(** [pp ppf t] renders the tracker's label. *)
+
+val v :
   ?interval_s:float ->
   sw:Eio.Switch.t ->
   clock:float Eio.Time.clock_ty Eio.Resource.t ->
   string ->
   t
-(** [create ~sw ~clock label] allocates a tracker tagged [label] (used as the
-    prefix in log lines) and forks the heartbeat daemon under [sw]. The daemon
-    exits when [sw] closes. [interval_s] overrides {!default_interval_s} /
-    [OI_HEARTBEAT_INTERVAL]; [0] disables the daemon entirely (the tracker still
-    works but never logs). *)
+(** [v] allocates a tracker tagged [label] (used as the prefix in log lines) and
+    forks the heartbeat daemon under [sw]. The daemon exits when [sw] closes.
+    [interval_s] overrides {!default_interval_s} / [OI_HEARTBEAT_INTERVAL]; [0]
+    disables the daemon entirely (the tracker still works but never logs). *)
 
 val track : t -> string -> (unit -> 'a) -> 'a
 (** [track t name f] runs [f ()], registering [name] in [t]'s in-flight set for

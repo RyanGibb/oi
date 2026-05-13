@@ -18,8 +18,8 @@ val ref : string
 (** [x-oi-ref: <git-ref>] — the git ref the overlay was bumped from. *)
 
 val toolchain : string
-(** [x-oi-toolchain: <name>] — use-site tag declaring that this overlay targets
-    the named toolchain (e.g. ["oxcaml"]). *)
+(** [toolchain] — use-site tag declaring that this overlay targets the named
+    toolchain (e.g. ["oxcaml"]). *)
 
 (** {1 Toolchain definitions}
 
@@ -28,45 +28,44 @@ val toolchain : string
     definitions and are validated together by [oi repo lint]. *)
 
 val toolchain_name : string
-(** [x-oi-toolchain-name: <name>] — when set, this entry DEFINES a toolchain
-    with the given CLI name (e.g. ["ocaml-5.4"], ["oxcaml"]). The handle
-    namespace and CLI-name namespace are separate; this field is the bridge. *)
+(** [toolchain_name] — when set, this entry DEFINES a toolchain with the given
+    CLI name (e.g. ["ocaml-5.4"], ["oxcaml"]). The handle namespace and CLI-name
+    namespace are separate; this field is the bridge. *)
 
 val toolchain_compiler : string
-(** [x-oi-toolchain-compiler: <pkg.version>] — the primary compiler package spec
-    (e.g. ["ocaml-base-compiler.5.4.1"],
-    ["ocaml-variants.\ 5.4.0+relocatable"]). Required on toolchain definitions.
-*)
+(** [toolchain_compiler] — the primary compiler package spec (e.g.
+    ["ocaml-base-compiler.5.4.1"], ["ocaml-variants.\ 5.4.0+relocatable"]).
+    Required on toolchain definitions. *)
 
 val toolchain_roots : string
-(** [x-oi-toolchain-roots: [...]] — solver root specs for the toolchain. Either
-    a flat list of strings or a list of lists of strings (each inner group acts
-    as an OR). *)
+(** [toolchain_roots] [x-oi-toolchain-roots: [...]] — solver root specs for the
+    toolchain. Either a flat list of strings or a list of lists of strings (each
+    inner group acts as an OR). *)
 
 val toolchain_tools : string
-(** [x-oi-toolchain-tools: [...]] — package names that [oi build] should always
-    install into [_oi/tools/] alongside the toolchain (e.g. [odoc], [merlin],
-    [ocaml-lsp-server]). *)
+(** [toolchain_tools] [x-oi-toolchain-tools: [...]] — package names that
+    [oi build] should always install into [_oi/tools/] alongside the toolchain
+    (e.g. [odoc], [merlin], [ocaml-lsp-server]). *)
 
 val relocatable : string
 (** [x-oi-relocatable: <bool>] — build mode for the toolchain this entry
     defines. *)
 
 val default_toolchain : string
-(** [x-oi-default-toolchain: true] — when set, this toolchain is selected when
-    no [--toolchain] is given. Exactly one toolchain definition in the reporepo
-    may carry this flag (validated by [oi repo lint]). *)
+(** [default_toolchain] — when set, this toolchain is selected when no
+    [--toolchain] is given. Exactly one toolchain definition in the reporepo may
+    carry this flag (validated by [oi repo lint]). *)
 
 (** {1 Project / overlay payload} *)
 
 val root_packages : string
-(** [x-root-packages: [...]] — solver root specs [oi build --all] should solve
-    for under this overlay. Same shape as {!toolchain_roots}: a flat list of
-    strings or a list of lists. *)
+(** [root_packages] [x-root-packages: [...]] — solver root specs
+    [oi build --all] should solve for under this overlay. Same shape as
+    {!toolchain_roots}: a flat list of strings or a list of lists. *)
 
 val repos : string
-(** [x-repos: [...]] — project [*.opam] field listing extra reporepo handles
-    ([@HANDLE]) or repository URLs the project depends on. *)
+(** [repos] [x-repos: [...]] — project [*.opam] field listing extra reporepo
+    handles ([@HANDLE]) or repository URLs the project depends on. *)
 
 val reporepo_hash : string
 (** [x-reporepo-hash: <sha>] — git revision of the default reporepo at the time
@@ -78,9 +77,9 @@ val reporepo_hash : string
 (** {1 Bake markers} *)
 
 val d10_archive : string
-(** [x-d10-archive: <sha>] — sha256 of the consolidated d10ir source archive
-    produced by [oi repo bake] / [oi repo bump]. Set in-place on every reporepo
-    opam after a successful bake; consumers ([oi build] / [oi show]) skip the
+(** [d10_archive] — sha256 of the consolidated d10ir source archive produced by
+    [oi repo bake] / [oi repo bump]. Set in-place on every reporepo opam after a
+    successful bake; consumers ([oi build] / [oi show]) skip the
     fetch+patch+extras+substs pipeline whenever this is present and look the
     archive up in [<cache>/d10ir/archives/<sha>.tar.zst]. Hard-error if the
     registered archive isn't available locally — the user must re-bake. *)

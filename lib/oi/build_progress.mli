@@ -20,8 +20,9 @@ type phase =
   | Building  (** [D10ir.Direct.run] executing the layer plan. *)
   | Assembling  (** Prefix assembly post-build. *)
 
-val phase_to_string : phase -> string
-(** Lowercase kebab-case label, e.g. ["solving"], ["building"]. *)
+val string_of_phase : phase -> string
+(** [string_of_phase] Lowercase kebab-case label, e.g. ["solving"],
+    ["building"]. *)
 
 (** The kind of asset being fetched. Affects how the UI labels per-row progress
     (binary layer vs. raw source archive). *)

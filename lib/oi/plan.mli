@@ -1,7 +1,3 @@
-[@@@ai_disclosure "ai-assisted"]
-[@@@ai_model "claude-opus-4-7"]
-[@@@ai_provider "Anthropic"]
-
 (** Build plan: dependency graph of package actions, and the fully-resolved
     execution plan derived from it.
 
@@ -19,6 +15,10 @@
     [{cache_root}/build/_build/{pkg}-{short_hash}/], with the shared prefix at
     [{cache_root}/build/prefix/]. Each package lists the dependency layers that
     must be hardlinked into the prefix before building. *)
+
+[@@@ai_disclosure "ai-assisted"]
+[@@@ai_model "claude-opus-4-7"]
+[@@@ai_provider "Anthropic"]
 
 (** {1 Action graph}
 
@@ -72,9 +72,10 @@ val nodes : graph -> node list
 
 val overlay_of_pkg :
   packages_dirs:string list -> OpamPackage.t -> D10.Overlay.t option
-(** Resolve the overlay that contributed [pkg]'s opam file, by walking
-    [packages_dirs] for a [<dir>/<name>/<name.version>/opam] hit. Returns [None]
-    for packages from a non-overlay source (pin-depends, raw URL, local). *)
+(** [overlay_of_pkg] Resolve the overlay that contributed [pkg]'s opam file, by
+    walking [packages_dirs] for a [<dir>/<name>/<name.version>/opam] hit.
+    Returns [None] for packages from a non-overlay source (pin-depends, raw URL,
+    local). *)
 
 val layer_hashes : graph -> string list
 (** [layer_hashes g] returns the layer hash for each package in the plan, in

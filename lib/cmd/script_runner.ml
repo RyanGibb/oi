@@ -15,7 +15,7 @@ let run ~sys ~fs ~proc_mgr ~clock ~os_key ~prefix ~conf ~cache ~data_dir
   let file_deps = Oi.Project.Script.parse_deps_from_file ~fs script_path in
   let all_deps = Oi.Project.Script.dedup (file_deps @ cli_deps) in
   if all_deps = [] then
-    Oi.Error.msg
+    Oi.Error.fail_msg
       "No dependencies found. Add [@@@opam pkg1 pkg2] to the first line or use \
        --with=pkg";
   let script_hash = Oi.Project.Script.script_hash script_path all_deps in

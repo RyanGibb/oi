@@ -1,7 +1,3 @@
-[@@@ai_disclosure "ai-assisted"]
-[@@@ai_model "claude-opus-4-7"]
-[@@@ai_provider "Anthropic"]
-
 (** Fixed-prefix OCaml toolchains.
 
     A toolchain is a bundle of OCaml compiler + findlib + ocamlbuild (+ maybe
@@ -25,6 +21,10 @@
     [$XDG_CACHE_HOME/oi/toolchains/<name>-<version>-<hash8>/]. On first use a
     non-relocatable toolchain is built there; subsequent runs skip the install.
     Relocatable toolchains skip the fixed-prefix install entirely. *)
+
+[@@@ai_disclosure "ai-assisted"]
+[@@@ai_model "claude-opus-4-7"]
+[@@@ai_provider "Anthropic"]
 
 type info = {
   handle : string;  (** Toolchain handle, e.g. [oxcaml]. *)
@@ -71,10 +71,10 @@ type info = {
 }
 
 val opam_ctx_of_info : info -> Solver.Ctx.toolchain
-(** Project a {!info} down to the {!Solver.Ctx.toolchain} subset that
-    [Solver.Ctx.create] / [Solver.solve] / [Prefix.make_env] need. Single source
-    of truth for the conversion, used by all the CLI commands that thread a
-    toolchain through. *)
+(** [opam_ctx_of_info] Project a {!info} down to the {!Solver.Ctx.toolchain}
+    subset that [Solver.Ctx.create] / [Solver.solve] / [Prefix.make_env] need.
+    Single source of truth for the conversion, used by all the CLI commands that
+    thread a toolchain through. *)
 
 val apply_conf : info option -> Solver.Ctx.conf -> Solver.Ctx.conf
 (** [apply_conf info conf] is [conf] with [ocaml_version] replaced by the
@@ -83,7 +83,7 @@ val apply_conf : info option -> Solver.Ctx.conf -> Solver.Ctx.conf
     this so [ocaml:version] resolves to the toolchain's compiler. *)
 
 val default_root : unit -> string
-(** Root dir under which toolchains are installed, i.e.
+(** [default_root] Root dir under which toolchains are installed, i.e.
     [$XDG_CACHE_HOME/oi/toolchains]. *)
 
 val resolve :
@@ -93,11 +93,11 @@ val resolve :
   conf:Solver.Ctx.conf ->
   handle:string ->
   info
-(** Look up [handle] (the CLI toolchain name) in the reporepo: find the latest
-    entry whose [x-oi-toolchain-name] matches, resolve its [depends:]
+(** [resolve] Look up [handle] (the CLI toolchain name) in the reporepo: find
+    the latest entry whose [x-oi-toolchain-name] matches, resolve its [depends:]
     transitively, materialise the URL-bearing overlays, solve the
     [x-oi-toolchain-roots], compute the effective hash, and return [info].
-    Auto-clones the reporepo if missing. Raises {!Error.config_error} if no
+    Auto-clones the reporepo if missing. Raises {!Error.fail_config_error} if no
     entry defines a toolchain with that name. *)
 
 val url_of : handle:string -> string option
@@ -137,21 +137,21 @@ type summary = {
 }
 
 val available : unit -> summary list
-(** Snapshot of every toolchain definition the reporepo currently advertises
-    (entries carrying [x-oi-toolchain-name]) plus any of their install prefixes
-    already present under {!default_root}. Cheap (no solve, no network), so safe
-    for [oi config]. Empty when the reporepo has no toolchain entries — fresh
-    machines need to clone or create them. *)
+(** [available] Snapshot of every toolchain definition the reporepo currently
+    advertises (entries carrying [x-oi-toolchain-name]) plus any of their
+    install prefixes already present under {!default_root}. Cheap (no solve, no
+    network), so safe for [oi config]. Empty when the reporepo has no toolchain
+    entries — fresh machines need to clone or create them. *)
 
 val ensure_installed :
   ?reporter:Build_progress.reporter ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   info ->
   unit
-(** Build the toolchain into its fixed prefix if absent. No-op for relocatable
-    toolchains and for already-prepared non-relocatable ones. On failure for a
-    non-relocatable toolchain the install prefix is left partial and the next
-    call retries from scratch.
+(** [ensure_installed] Build the toolchain into its fixed prefix if absent.
+    No-op for relocatable toolchains and for already-prepared non-relocatable
+    ones. On failure for a non-relocatable toolchain the install prefix is left
+    partial and the next call retries from scratch.
 
     [?reporter] receives a [Status "Installing toolchain <handle>"] event when
     the install actually runs. *)

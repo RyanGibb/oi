@@ -24,7 +24,7 @@ let dep_of_opam p ~hash = { id = of_opam p; hash }
 
 type method_ = Source | Binary
 
-let method_to_string = function Source -> "source" | Binary -> "binary"
+let string_of_method = function Source -> "source" | Binary -> "binary"
 
 (* -- Codecs -------------------------------------------------------------- *)
 

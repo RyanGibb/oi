@@ -19,7 +19,7 @@ let render ~label_first ~label_ref ~key_of ~children roots =
           if repeated then
             Fmt.str "%a"
               (fun ppf () ->
-                Style.dim_string ppf (Fmt.str "\u{21B0} %s" (label_ref n)))
+                Fmt.kstr (Style.pp_dim_string ppf) "\u{21B0} %s" (label_ref n))
               ()
           else label_first n
         in

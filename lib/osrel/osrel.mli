@@ -86,7 +86,10 @@ module OS : sig
   (** Alias for [os_to_string t.kind]. *)
 
   val pp : t Fmt.t
+  (** [pp] renders the OS as [kind/version]. *)
+
   val pp_kind : kind Fmt.t
+  (** [pp_kind] renders a {!kind} as its short string form. *)
 end
 
 (** {1 Platform}

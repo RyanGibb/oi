@@ -1,6 +1,6 @@
 let ( / ) = Filename.concat
 
-(* Placeholder ocaml-version used to seed Pipeline.make_conf before
+(* Placeholder ocaml-version used to seed Pipeline.conf before
    toolchain resolution overrides it via Pipeline.solver_inputs.
    Every consumer solve goes through resolve_toolchain (which returns
    the x-oi-default-toolchain entry when --toolchain isn't set) and

@@ -9,14 +9,16 @@ type t = { name : string; version : string }
 (** A name + version pair. ["foo"] / ["1.2.3"]. *)
 
 val of_string : string -> t
-(** Parse a [name.version] string. Falls back to [{ name = s; version = "" }]
-    when the input doesn't match opam's package shape. *)
+(** [of_string] Parse a [name.version] string. Falls back to
+    [{ name = s; version = "" }] when the input doesn't match opam's package
+    shape. *)
 
 val to_string : t -> string
-(** [name ^ "." ^ version], or just [name] when [version] is empty. *)
+(** [to_string t] is [name ^ "." ^ version], or just [name] when [version] is
+    empty. *)
 
 val of_opam : OpamPackage.t -> t
-(** Project an opam package to its [name + version] pair. *)
+(** [of_opam pkg] projects an opam package to its name/version pair. *)
 
 type dep = { id : t; hash : string }
 (** A layer dependency: an [Identity.t] paired with the d10 layer hash that
@@ -34,11 +36,17 @@ val dep_of_opam : OpamPackage.t -> hash:string -> dep
     - [Binary] — restored from an existing layer in the local d10 cache. *)
 type method_ = Source | Binary
 
-val method_to_string : method_ -> string
-(** Lowercase tag (["source"] / ["binary"]) used in CLI output and JSON. *)
+val string_of_method : method_ -> string
+(** [string_of_method] Lowercase tag (["source"] / ["binary"]) used in CLI
+    output and JSON. *)
 
 (** {1 Codecs} *)
 
 val codec : t Jsont.t
+(** [codec] (de)serialises an {!t} as JSON. *)
+
 val dep_codec : dep Jsont.t
+(** [dep_codec] (de)serialises a {!dep} as JSON. *)
+
 val method_codec : method_ Jsont.t
+(** [method_codec] (de)serialises a {!method_} as JSON. *)

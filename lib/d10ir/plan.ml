@@ -1,3 +1,5 @@
+let err_str fmt = Fmt.kstr (fun s -> Error s) fmt
+
 type package = { name : string; version : string }
 type overlay = { handle : string; version : string }
 
@@ -178,7 +180,8 @@ let metadata_jsont : metadata Jsont.t =
        ~enc:(fun (m : metadata) -> m.cli_invocation)
   |> Object.finish
 
-type plan = t
+(* Local alias kept because [t] inside [let open Jsont] resolves to [Jsont.t]. *)
+type local = t
 
 let codec : t Jsont.t =
   let open Jsont in
@@ -194,7 +197,7 @@ let codec : t Jsont.t =
       external_layers
       metadata
       :
-      plan
+      local
     ->
       {
         schema_version;
@@ -207,26 +210,33 @@ let codec : t Jsont.t =
         external_layers;
         metadata;
       })
-  |> Object.mem "schema_version" int ~enc:(fun (p : plan) -> p.schema_version)
-  |> Object.mem "os_key" string ~enc:(fun (p : plan) -> p.os_key)
-  |> Object.mem "toolchain" toolchain_jsont ~enc:(fun (p : plan) -> p.toolchain)
+  |> Object.mem "schema_version" int ~enc:(fun (p : local) -> p.schema_version)
+  |> Object.mem "os_key" string ~enc:(fun (p : local) -> p.os_key)
+  |> Object.mem "toolchain" toolchain_jsont ~enc:(fun (p : local) ->
+      p.toolchain)
   |> Object.mem "archive_root" string ~dec_absent:"archives"
-       ~enc:(fun (p : plan) -> p.archive_root)
-  |> Object.mem "nodes" (list node_jsont) ~enc:(fun (p : plan) -> p.nodes)
-  |> Object.mem "roots" (list layer_hash_jsont) ~enc:(fun (p : plan) -> p.roots)
+       ~enc:(fun (p : local) -> p.archive_root)
+  |> Object.mem "nodes" (list node_jsont) ~enc:(fun (p : local) -> p.nodes)
+  |> Object.mem "roots" (list layer_hash_jsont) ~enc:(fun (p : local) ->
+      p.roots)
   |> Object.mem "mounts" (list mount_jsont) ~dec_absent:[]
-       ~enc:(fun (p : plan) -> p.mounts)
+       ~enc:(fun (p : local) -> p.mounts)
   |> Object.mem "external_layers" (list layer_hash_jsont) ~dec_absent:[]
-       ~enc:(fun (p : plan) -> p.external_layers)
+       ~enc:(fun (p : local) -> p.external_layers)
   |> Object.mem "metadata" metadata_jsont
        ~dec_absent:{ oi_version = ""; generated_at = 0.0; cli_invocation = [] }
-       ~enc:(fun (p : plan) -> p.metadata)
+       ~enc:(fun (p : local) -> p.metadata)
   |> Object.finish
 
 let to_string t =
   match Jsont_bytesrw.encode_string ~format:Jsont.Indent codec t with
   | Ok s -> s
   | Error e -> Fmt.failwith "d10ir plan encode: %s" e
+
+let pp ppf t =
+  Fmt.pf ppf "@[<h>plan v%d %s toolchain=%s roots=%d nodes=%d@]"
+    t.schema_version t.os_key t.toolchain.name (List.length t.roots)
+    (List.length t.nodes)
 
 let of_string s =
   match Jsont_bytesrw.decode_string ~locs:true ~file:"<plan.json>" codec s with
@@ -255,7 +265,7 @@ let load path =
     match Jsont_bytesrw.decode_string ~locs:true ~file codec s with
     | Ok t -> Ok t
     | Error e -> Error e
-  with Eio.Exn.Io _ as e -> Error (Fmt.str "%a" Eio.Exn.pp e)
+  with Eio.Exn.Io _ as e -> err_str "%a" Eio.Exn.pp e
 
 (* Validation *)
 
@@ -389,7 +399,7 @@ let merge = function
 
 (* Tarjan SCC over the nodes-by-layer-hash graph; returns SCCs of size > 1
    (true cycles) and self-loops. *)
-let find_cycles (nodes : node list) : Layer_hash.t list list =
+let cycles_in (nodes : node list) : Layer_hash.t list list =
   let producers = Hashtbl.create (List.length nodes) in
   List.iter (fun n -> Hashtbl.replace producers n.layer_hash n) nodes;
   let succ n =
@@ -470,7 +480,7 @@ let validate ?d10 ~fs ~plan_dir t =
     match dup with
     | Some n -> Error (Duplicate_layer n.layer_hash)
     | None -> (
-        match find_cycles t.nodes with
+        match cycles_in t.nodes with
         | _ :: _ as cycles -> Error (Cycle cycles)
         | [] -> (
             let external_set =

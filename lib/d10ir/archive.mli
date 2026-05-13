@@ -12,3 +12,4 @@ type t = {
 }
 
 val pp : t Fmt.t
+(** [pp] renders [path] and the short sha for log lines. *)

@@ -1,6 +1,6 @@
 type phase = Solving | Fetching | Baking | Building | Assembling
 
-let phase_to_string = function
+let string_of_phase = function
   | Solving -> "solving"
   | Fetching -> "fetching"
   | Baking -> "baking"

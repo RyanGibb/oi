@@ -45,18 +45,27 @@ type kind =
   | K_skipped
 
 val kind_of : t -> kind
-val kind_to_string : kind -> string
+(** [kind_of t] projects an outcome to its tag (drops the payload). *)
+
+val string_of_kind : kind -> string
+
+val pp : t Fmt.t
+(** [pp] renders an outcome via its {!kind_of} tag (no payload). *)
 
 (** {1 Histogram helpers} *)
 
 val bump : kind -> (kind * int) list -> (kind * int) list
-(** Increment the count for [kind] in a histogram, preserving the relative order
-    of earlier entries (a new tag is appended at the end). *)
+(** [bump] Increment the count for [kind] in a histogram, preserving the
+    relative order of earlier entries (a new tag is appended at the end). *)
 
 val sort_histogram : (kind * int) list -> (kind * int) list
-(** Stable sort: highest count first, then alphabetic by [kind_to_string]. *)
+(** [sort_histogram] Stable sort: highest count first, then alphabetic by
+    [string_of_kind]. *)
 
 (** {1 Codecs} *)
 
 val codec : t Jsont.t
+(** [codec] (de)serialises an outcome as JSON. *)
+
 val kind_codec : kind Jsont.t
+(** [kind_codec] (de)serialises a {!kind} tag as JSON. *)

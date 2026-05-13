@@ -19,7 +19,7 @@ val emit :
   toolchain_layer:string ->
   Plan.t ->
   D10ir.Plan.t
-(** Uses [d10.root] to resolve the recipe's [archive_root] (i.e.
+(** [emit] Uses [d10.root] to resolve the recipe's [archive_root] (i.e.
     [<d10.root>/d10ir/archives/]). The archives themselves are NOT materialised
     here — that's [oi repo bake] / [oi repo bump]'s job; the emitter reads each
     package's [x-d10-archive] sha and references the archive by content hash. *)

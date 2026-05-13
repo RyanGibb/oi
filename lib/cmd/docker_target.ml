@@ -72,7 +72,7 @@ let render_dockerfile ~distro ~oi_version_default ~registry_default ~depexts
     match mgr with
     | (`Apk | `Apt | `Yum) as m -> m
     | _ ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi docker: distro %s uses an unsupported package manager"
           (Distro.tag_of_distro (resolved :> Distro.t))
   in
@@ -241,7 +241,7 @@ let render_obuilder_spec ~distro ~oi_version_default ~registry_default ~depexts
     match mgr with
     | (`Apk | `Apt | `Yum) as m -> m
     | _ ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi docker --obuilder: distro %s uses an unsupported package manager"
           distro_label
   in
@@ -295,7 +295,7 @@ let render_obuilder_spec ~distro ~oi_version_default ~registry_default ~depexts
 let solve_targets ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
     ~platform ~refresh targets =
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let bp_targets = List.map bp_target_of_token targets in
   let global_handles = handles_of_targets targets in
@@ -348,9 +348,9 @@ let solve_local_project ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir
     Oi.Pipeline.classify_with_args ~fs ~sys ~cache ~refresh []
   in
   if project.deps = [] && extra_cli = [] && url_project.roots = [] then
-    Oi.Error.config_error "oi docker: no *.opam files in %s" cwd;
+    Oi.Error.fail_config_error "oi docker: no *.opam files in %s" cwd;
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let candidate_overlays = project.overlays @ url_project.overlays in
   let toolchain =
@@ -432,7 +432,7 @@ let render_no_recipe_dockerfile ~distro ~oi_version_default ~registry_default
     match mgr with
     | (`Apk | `Apt | `Yum) as m -> m
     | _ ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi docker: distro %s uses an unsupported package manager"
           distro_label
   in
@@ -568,7 +568,7 @@ let render_local_dockerfile ~distro ~oi_version_default ~registry_default
     match mgr with
     | (`Apk | `Apt | `Yum) as m -> m
     | _ ->
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi docker: distro %s uses an unsupported package manager"
           (Distro.tag_of_distro (resolved :> Distro.t))
   in
@@ -714,10 +714,10 @@ let emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
                     | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
                     | Emit_failed { msg } -> Fmt.str "emit: %s" msg
                   in
-                  Some (Fmt.str "%s — %s" gr.group.label kind))
+                  Fmt.kstr (fun s -> Some s) "%s — %s" gr.group.label kind)
             solved.groups
         in
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi docker: project produced no executable plan:@\n  %s"
           (String.concat "\n  " msgs)
   in
@@ -742,9 +742,10 @@ let emit_local ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dst_dir);
   Registry_docker.write_file dockerfile_path dockerfile_body;
   Oi.Say.step "Wrote";
-  Oi.Say.info "%s  %a" dockerfile_path Oi.Style.dim_string
-    (Fmt.str "(plan: %d nodes, %d unique archives)" (List.length merged.nodes)
-       (List.length shas));
+  Fmt.kstr
+    (Oi.Say.info "%s  %a" dockerfile_path Oi.Style.pp_dim_string)
+    "(plan: %d nodes, %d unique archives)" (List.length merged.nodes)
+    (List.length shas);
   Oi.Say.newline ();
   Oi.Say.step "Build with";
   Oi.Say.info "docker build -t %s -f %s %s" project_label dockerfile_path
@@ -754,7 +755,7 @@ let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
     ~refresh ~registry ~distro ~oi_version ~no_cache_mount ~obuilder ~output
     ~targets =
   if targets = [] then
-    Oi.Error.config_error
+    Oi.Error.fail_config_error
       "oi docker: no target. Pass one or more PKG / @HANDLE / @HANDLE/PKG \
        tokens, or run without arguments for project mode.";
   let solved =
@@ -779,10 +780,10 @@ let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
                     | Elaborate_failed { msg } -> Fmt.str "elaborate: %s" msg
                     | Emit_failed { msg } -> Fmt.str "emit: %s" msg
                   in
-                  Some (Fmt.str "%s — %s" gr.group.label kind))
+                  Fmt.kstr (fun s -> Some s) "%s — %s" gr.group.label kind)
             solved.groups
         in
-        Oi.Error.config_error
+        Oi.Error.fail_config_error
           "oi docker: target produced no executable plan:@\n  %s"
           (String.concat "\n  " msgs)
   in
@@ -818,9 +819,10 @@ let emit ~fs ~proc_mgr ~clock ~sys ~os_key ~cache ~data_dir ~session ~platform
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / dst_dir);
   Registry_docker.write_file dockerfile_path body;
   Oi.Say.step "Wrote";
-  Oi.Say.info "%s  %a" dockerfile_path Oi.Style.dim_string
-    (Fmt.str "(plan: %d nodes, %d unique archives)" (List.length merged.nodes)
-       (List.length shas));
+  Fmt.kstr
+    (Oi.Say.info "%s  %a" dockerfile_path Oi.Style.pp_dim_string)
+    "(plan: %d nodes, %d unique archives)" (List.length merged.nodes)
+    (List.length shas);
   Oi.Say.newline ();
   Oi.Say.step "Build with";
   if obuilder then Oi.Say.info "obuilder build -f %s --store=…" dockerfile_path

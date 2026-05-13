@@ -44,7 +44,7 @@ let prepare ~(harness : Harness.env) ~refresh ~locked ~skip_local ~registry
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   let { Terms.layer_remote; source_remote } =
     Terms.remotes_of ~url:registry ~mode:use_registry

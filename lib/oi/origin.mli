@@ -35,14 +35,20 @@ val of_packages_dir : pkgs_dir:string -> name:string -> full:string -> t
     [packages/] directory the opam file lives in, plus the package's [name] and
     [full] ([name.version]) for path reconstruction. The path-shape rules are:
 
-    - [<root>/v2/<handle>/packages] → [Reporepo (Some handle)]
-    - [<root>/v2/reporepo/packages] → [Reporepo (Some "reporepo")]
-    - [<root>/pins/sets/<hash>/packages] → [Pin]
-    - everything else → [Local] *)
+    - [<root>/v2/<handle>/packages] → [Reporepo (Some handle)].
+    - [<root>/v2/reporepo/packages] → [Reporepo (Some "reporepo")].
+    - [<root>/pins/sets/<hash>/packages] → [Pin].
+    - everything else → [Local]. *)
 
 val pp_kind : kind Fmt.t
+
+val pp : t Fmt.t
+(** [pp] renders [<kind>@<path_in_repo>]. *)
 
 (** {1 Codec} *)
 
 val kind_codec : kind Jsont.t
+(** [kind_codec] (de)serialises a {!kind} tag as JSON. *)
+
 val codec : t Jsont.t
+(** [codec] (de)serialises an {!t} as JSON. *)

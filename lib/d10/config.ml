@@ -7,3 +7,6 @@ type t = {
   root : Eio.Fs.dir_ty Eio.Path.t;
   os_key : string;
 }
+
+let pp ppf t =
+  Fmt.pf ppf "@[<h>{ root = %s; os_key = %s }@]" (snd t.root) t.os_key

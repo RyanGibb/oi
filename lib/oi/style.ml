@@ -30,14 +30,14 @@ let color_enabled ppf =
 let styled style pp ppf v =
   if color_enabled ppf then Style.styled style pp ppf v else pp ppf v
 
-let error_string ppf s = styled error Fmt.string ppf s
-let warn_string ppf s = styled warn Fmt.string ppf s
-let ok_string ppf s = styled ok Fmt.string ppf s
-let info_string ppf s = styled info Fmt.string ppf s
-let header_string ppf s = styled header Fmt.string ppf s
-let dim_string ppf s = styled dim Fmt.string ppf s
-let accent_string ppf s = styled accent Fmt.string ppf s
-let strong_ok_string ppf s = styled strong_ok Fmt.string ppf s
+let pp_error_string ppf s = styled error Fmt.string ppf s
+let pp_warn_string ppf s = styled warn Fmt.string ppf s
+let pp_ok_string ppf s = styled ok Fmt.string ppf s
+let pp_info_string ppf s = styled info Fmt.string ppf s
+let pp_header_string ppf s = styled header Fmt.string ppf s
+let pp_dim_string ppf s = styled dim Fmt.string ppf s
+let pp_accent_string ppf s = styled accent Fmt.string ppf s
+let pp_strong_ok_string ppf s = styled strong_ok Fmt.string ppf s
 let pp s pp = styled s pp
 
 (* Strip SGR ANSI escape sequences ([\027[...m]) from [s]. Used as a

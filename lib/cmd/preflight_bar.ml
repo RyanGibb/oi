@@ -31,7 +31,7 @@ module Theme = struct
           let p = n * 100 / total in
           if p < 0 then 0 else if p > 100 then 100 else p
       in
-      let body = Printf.sprintf "(%d%%)" pct in
+      let body = Fmt.str "(%d%%)" pct in
       let pad = max 0 (6 - String.length body) in
       String.make pad ' ' ^ body
     in

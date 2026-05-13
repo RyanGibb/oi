@@ -6,8 +6,8 @@
     by [Oi_cmd.Ir]; can also be wired into a standalone [d10ir] CLI. *)
 
 val validate_cmd : unit Cmdliner.Cmd.t
-(** [d10ir validate DIR]: structural check against the on-disk [DIR/recipe.json]
-    — schema version, layer-hash uniqueness, cycle freedom, dep satisfiability
+(** [validate_cmd] : structural check against the on-disk [DIR/recipe.json] —
+    schema version, layer-hash uniqueness, cycle freedom, dep satisfiability
     against the d10 cache, archive presence and sha. *)
 
 val merge_cmd : unit Cmdliner.Cmd.t
@@ -20,8 +20,7 @@ val show_cmd : unit Cmdliner.Cmd.t
     full plan details ($(b,--plan)). *)
 
 val run_cmd : unit Cmdliner.Cmd.t
-(** [d10ir run DIR]: execute the recipe at [DIR/recipe.json] via
-    {!D10ir.Direct.run}. Per-event progress is emitted to stderr as plain log
-    lines; richer UI (progress bars, sparklines) is the caller's responsibility
-    — typically [oi]'s [Progress_ui] wraps this for its [oi ir run] entry point.
-*)
+(** [run_cmd] : execute the recipe at [DIR/recipe.json] via {!D10ir.Direct.run}.
+    Per-event progress is emitted to stderr as plain log lines; richer UI
+    (progress bars, sparklines) is the caller's responsibility — typically
+    [oi]'s [Progress_ui] wraps this for its [oi ir run] entry point. *)

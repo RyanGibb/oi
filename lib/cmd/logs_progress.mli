@@ -16,8 +16,8 @@
     share one display via [shared_display].) *)
 
 val set_active : (unit, unit) Progress.Display.t -> unit
-(** Register [d] as the currently-active display. Subsequent log emissions will
-    pause [d] before writing. *)
+(** [set_active] Register [d] as the currently-active display. Subsequent log
+    emissions will pause [d] before writing. *)
 
 val clear_active : unit -> unit
 (** Unregister whatever display was set. Call from the bar's cleanup path.

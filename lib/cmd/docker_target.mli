@@ -28,9 +28,9 @@ val emit_local :
   output:string option ->
   cwd:string ->
   unit
-(** Project-mode counterpart to {!emit}: solves the cwd's [*.opam] closure to
-    derive the archive sha list, then writes a multi-stage Dockerfile that
-    [COPY]s the local sources, re-solves inside the container (so reporepo
+(** [emit_local] Project-mode counterpart to {!emit}: solves the cwd's [*.opam]
+    closure to derive the archive sha list, then writes a multi-stage Dockerfile
+    that [COPY]s the local sources, re-solves inside the container (so reporepo
     changes between bake and [docker build] are picked up), runs
     [oi build --dist=/dist] (which drives the project's [dune build] and gathers
     install-tree binaries / share data), and finally [COPY]s the gathered tree
@@ -45,14 +45,15 @@ val emit_no_recipe :
   output:string option ->
   targets:string list ->
   unit
-(** Source-independent counterpart to {!emit}: emit a Dockerfile that doesn't
-    bake a recipe.json. At [docker build] time, [oi] itself solves [targets]
-    against the configured registry / reporepo, fetches archives, and builds.
-    The image is reproducible only insofar as [OI_VERSION], the reporepo URL,
-    and the registry index are stable; every other input is resolved at build
-    time. Useful when you want a one-file Dockerfile you can hand off without a
-    recipe sidecar, accepting that "the build runs at docker-build time" rather
-    than "the build replays a pre-computed plan". *)
+(** [emit_no_recipe] is the source-independent counterpart to {!emit}: emit a
+    Dockerfile that doesn't bake a recipe.json. At [docker build] time, [oi]
+    itself solves [targets] against the configured registry / reporepo, fetches
+    archives, and builds. The image is reproducible only insofar as
+    [OI_VERSION], the reporepo URL, and the registry index are stable; every
+    other input is resolved at build time. Useful when you want a one-file
+    Dockerfile you can hand off without a recipe sidecar, accepting that "the
+    build runs at docker-build time" rather than "the build replays a
+    pre-computed plan". *)
 
 val emit :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -73,13 +74,13 @@ val emit :
   output:string option ->
   targets:string list ->
   unit
-(** [emit ~targets ~distro ~output …] solves [targets] under [distro]'s os_key
-    via [Build_pipeline.solve], collects unique archive shas from the merged
-    [D10ir.Plan.t], and writes a single Dockerfile to
-    [<output>/Dockerfile.oi-<slug>.<distro>] (or that name in the cwd when
-    [output] is [None]). The plan is only used at generation time to derive the
-    sha list embedded in the fetch step; the container re-solves at build time
-    via [oi build TARGET] so no recipe sidecar is emitted.
+(** [emit] solves [targets] under [distro]'s os_key via [Build_pipeline.solve],
+    collects unique archive shas from the merged [D10ir.Plan.t], and writes a
+    single Dockerfile to [<output>/Dockerfile.oi-<slug>.<distro>] (or that name
+    in the cwd when [output] is [None]). The plan is only used at generation
+    time to derive the sha list embedded in the fetch step; the container
+    re-solves at build time via [oi build TARGET] so no recipe sidecar is
+    emitted.
 
     [oi_version] is passed through as the default for the [ARG OI_VERSION] in
     the emitted Dockerfile ([latest] resolves at docker-build time via the

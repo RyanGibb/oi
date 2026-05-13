@@ -13,11 +13,11 @@ val fetch_phase :
   cache_root:string ->
   Plan.package_plan ->
   unit
-(** Fetch primary source + extra sources into [p.build_dir]. *)
+(** [fetch_phase] Fetch primary source + extra sources into [p.build_dir]. *)
 
 val copy_extra_files : Plan.package_plan -> unit
-(** Copy opam [extra-files:] entries into [p.build_dir]. *)
+(** [copy_extra_files] Copy opam [extra-files:] entries into [p.build_dir]. *)
 
 val apply_patches : Plan.package_plan -> unit
-(** Run [OpamFilename.patch] on each declared patch from [p.build_dir].
-    Pure-OCaml; no shell-out to [patch(1)]. *)
+(** [apply_patches] Run [OpamFilename.patch] on each declared patch from
+    [p.build_dir]. Pure-OCaml; no shell-out to [patch(1)]. *)

@@ -32,7 +32,7 @@ let cmd =
       skip_local || with_repos <> [] || with_deps <> [] || toolchain <> None
     in
     let conf =
-      Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+      Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
     in
     (* Use the same project-aware resolve [oi sync] uses, so [oi env]
        picks the toolchain the existing prefix was actually built with

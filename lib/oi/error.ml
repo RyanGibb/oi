@@ -62,10 +62,11 @@ let code e = code_of_kind (kind e)
 
 let pp fmt = function
   | Not_found { target; msg } ->
-      Fmt.pf fmt "%a %s: %s" Style.error_string "error:" target msg
+      Fmt.pf fmt "%a %s: %s" Style.pp_error_string "error:" target msg
   | No_solution { msg } ->
-      Fmt.pf fmt "%a no solution found@,%s" Style.error_string "error:" msg
-  | Config_error { msg } -> Fmt.pf fmt "%a %s" Style.error_string "error:" msg
+      Fmt.pf fmt "%a no solution found@,%s" Style.pp_error_string "error:" msg
+  | Config_error { msg } ->
+      Fmt.pf fmt "%a %s" Style.pp_error_string "error:" msg
   | Build_failed { pkg; cmd; output } ->
       (* [pkg] is the full noun phrase ("foo.1.0 in phase build", or
          "3 packages") so the format string just appends "failed".
@@ -74,15 +75,15 @@ let pp fmt = function
          Wrap in [@[<v>...@]] so [@,] becomes a real newline — without
          the vertical box [@,] is a no-op separator and the whole
          message collapses onto one line. *)
-      Fmt.pf fmt "@[<v>%a %s failed@,  command: %s@,@,%s@]" Style.error_string
-        "error:" pkg cmd output
+      Fmt.pf fmt "@[<v>%a %s failed@,  command: %s@,@,%s@]"
+        Style.pp_error_string "error:" pkg cmd output
   | Fetch_failed { url; msg } ->
-      Fmt.pf fmt "%a fetch %s: %s" Style.error_string "error:" url msg
-  | Msg s -> Fmt.pf fmt "%a %s" Style.error_string "error:" s
+      Fmt.pf fmt "%a fetch %s: %s" Style.pp_error_string "error:" url msg
+  | Msg s -> Fmt.pf fmt "%a %s" Style.pp_error_string "error:" s
 
 let () =
   Printexc.register_printer (function
-    | E e -> Some (Fmt.str "%a" pp e)
+    | E e -> Fmt.kstr (fun s -> Some s) "%a" pp e
     | _ -> None)
 
 (* One-line summary suitable for the [message] field in JSON. Drops ANSI
@@ -193,13 +194,16 @@ let to_json e =
 
 (* -- Constructors -------------------------------------------------------- *)
 
-let not_found target fmt =
+let fail_not_found target fmt =
   Fmt.kstr (fun msg -> raise (Not_found { target; msg })) fmt
 
-let msg fmt = Fmt.kstr (fun s -> raise (Msg s)) fmt
+let fail_msg fmt = Fmt.kstr (fun s -> raise (Msg s)) fmt
 let no_solution diagnostic = raise (No_solution { msg = diagnostic })
-let config_error fmt = Fmt.kstr (fun msg -> raise (Config_error { msg })) fmt
+
+let fail_config_error fmt =
+  Fmt.kstr (fun msg -> raise (Config_error { msg })) fmt
+
 let build_failed ~pkg ~cmd ~output = raise (Build_failed { pkg; cmd; output })
 
-let fetch_failed ~url fmt =
+let fail_fetch_failed ~url fmt =
   Fmt.kstr (fun msg -> raise (Fetch_failed { url; msg })) fmt

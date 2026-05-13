@@ -42,9 +42,9 @@ let interval_s () =
 let now t = Eio.Time.now t.clock
 
 let format_duration secs =
-  if secs < 60.0 then Printf.sprintf "%.0fs" secs
-  else if secs < 3600.0 then Printf.sprintf "%.1fmin" (secs /. 60.0)
-  else Printf.sprintf "%.1fh" (secs /. 3600.0)
+  if secs < 60.0 then Fmt.str "%.0fs" secs
+  else if secs < 3600.0 then Fmt.str "%.1fmin" (secs /. 60.0)
+  else Fmt.str "%.1fh" (secs /. 3600.0)
 
 let snapshot t =
   Eio.Mutex.use_ro t.mutex @@ fun () ->
@@ -55,7 +55,7 @@ let format_entries t entries =
   let now_t = now t in
   entries
   |> List.map (fun e ->
-      Printf.sprintf "%s (%s)" e.name (format_duration (now_t -. e.started)))
+      Fmt.str "%s (%s)" e.name (format_duration (now_t -. e.started)))
   |> String.concat ", "
 
 (* The heartbeat fiber runs as a daemon: it loops [Eio.Time.sleep] +
@@ -77,7 +77,7 @@ let run_daemon t =
   in
   try loop () with Eio.Cancel.Cancelled _ -> ()
 
-let create ?(interval_s = interval_s ()) ~sw ~clock label =
+let v ?(interval_s = interval_s ()) ~sw ~clock label =
   let t =
     {
       label;
@@ -93,6 +93,8 @@ let create ?(interval_s = interval_s ()) ~sw ~clock label =
         run_daemon t;
         `Stop_daemon);
   t
+
+let pp ppf t = Fmt.pf ppf "<heartbeat %s>" t.label
 
 let track t name f =
   if t.interval_s <= 0.0 then f ()

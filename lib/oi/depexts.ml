@@ -4,7 +4,7 @@
 
 type entry = { pkg : OpamPackage.t; sys_pkgs : OpamSysPkg.Set.t }
 
-let compute_from_env ~env ~packages_dirs solved =
+let compute_of_env ~env ~packages_dirs solved =
   List.filter_map
     (fun pkg ->
       match Solver.find_opam_file packages_dirs pkg with
@@ -24,10 +24,10 @@ let compute_from_env ~env ~packages_dirs solved =
     solved
 
 let compute ctx ~packages_dirs solved =
-  compute_from_env ~env:(Solver.Ctx.platform_env ctx) ~packages_dirs solved
+  compute_of_env ~env:(Solver.Ctx.platform_env ctx) ~packages_dirs solved
 
 let compute_for_conf ~conf ~packages_dirs solved =
-  compute_from_env ~env:(Solver.filter_env conf) ~packages_dirs solved
+  compute_of_env ~env:(Solver.filter_env conf) ~packages_dirs solved
 
 type status = {
   installed : OpamSysPkg.Set.t;

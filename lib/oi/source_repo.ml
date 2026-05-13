@@ -62,13 +62,17 @@ let ensure ?(reporter = Build_progress.null) ~fs ~refresh ~label ~url ~dir () =
       Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / dir)
     end;
     Log.info (fun m -> m "Cloning %s from %s..." label url);
-    reporter.Build_progress.event (Status (Fmt.str "Cloning %s" label));
+    Fmt.kstr
+      (fun s -> reporter.Build_progress.event (Status s))
+      "Cloning %s" label;
     pull_repo ~label ~url_s:url ~dst:dir;
     touch_dir dir
   end
   else if refresh || dir_needs_refresh dir then begin
     Log.info (fun m -> m "Updating %s..." label);
-    reporter.Build_progress.event (Status (Fmt.str "Updating %s" label));
+    Fmt.kstr
+      (fun s -> reporter.Build_progress.event (Status s))
+      "Updating %s" label;
     try
       pull_repo ~label ~url_s:url ~dst:dir;
       touch_dir dir

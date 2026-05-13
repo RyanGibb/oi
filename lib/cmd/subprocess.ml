@@ -1,6 +1,6 @@
 let ( / ) = Filename.concat
 
-let path_from_env env =
+let path_of_env env =
   Array.find_map
     (fun s ->
       if String.starts_with ~prefix:"PATH=" s then
@@ -17,7 +17,7 @@ let is_executable p =
 let resolve_in_env ~env exe =
   if String.contains exe '/' then exe
   else
-    match path_from_env env with
+    match path_of_env env with
     | None -> exe
     | Some path ->
         String.split_on_char ':' path

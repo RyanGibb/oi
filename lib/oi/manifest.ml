@@ -163,7 +163,7 @@ let pick_headline events =
   |> List.sort (fun a b ->
       let pa = priority a and pb = priority b in
       if pa <> pb then compare pa pb
-      else compare (Outcome.kind_to_string a) (Outcome.kind_to_string b))
+      else compare (Outcome.string_of_kind a) (Outcome.string_of_kind b))
   |> List.hd
 
 let entry_for_failure_only = function
@@ -435,3 +435,6 @@ let codec : t Jsont.t =
   |> Object.mem "summary" summary_codec ~enc:(fun m -> m.summary)
   |> Object.mem "results" (list entry_codec) ~enc:(fun m -> m.results)
   |> Object.finish
+
+let pp ppf t =
+  Fmt.pf ppf "@[<h>manifest v%d %s n=%d@]" t.schema t.os_key t.n_packages

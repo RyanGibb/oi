@@ -59,14 +59,14 @@ val kind : t -> kind
 (** Project an error to its stable kind. *)
 
 val kind_string : kind -> string
-(** Snake-case identifier (["not_found"], ["no_solution"], …) used as the [kind]
-    field in the JSON envelope. *)
+(** [kind_string] Snake-case identifier (["not_found"], ["no_solution"], …) used
+    as the [kind] field in the JSON envelope. *)
 
 val code : t -> int
 (** Exit code per the table above. *)
 
 val codec : t Jsont.t
-(** JSON envelope of an error:
+(** [codec] JSON envelope of an error:
     {[
       {
         "schema_version": "<version>",
@@ -83,26 +83,27 @@ val codec : t Jsont.t
     [url]/[log]). *)
 
 val to_json : t -> string
-(** Encode [t] via {!codec} and pretty-print as a JSON string with a trailing
-    newline. Falls back to a minimal ASCII envelope if the codec fails (which it
-    shouldn't). *)
+(** [to_json] Encode [t] via {!codec} and pretty-print as a JSON string with a
+    trailing newline. Falls back to a minimal ASCII envelope if the codec fails
+    (which it shouldn't). *)
 
 (** {1 Constructors} *)
 
-val not_found : string -> ('a, Format.formatter, unit, 'b) format4 -> 'a
+val fail_not_found : string -> ('a, Format.formatter, unit, 'b) format4 -> 'a
 (** Raise a {!Not_found}. *)
 
-val msg : ('a, Format.formatter, unit, 'b) format4 -> 'a
-(** Raise a generic {!Msg}. Exit code [1]. *)
+val fail_msg : ('a, Format.formatter, unit, 'b) format4 -> 'a
+(** [fail_msg] Raise a generic {!Msg}. Exit code [1]. *)
 
 val no_solution : string -> 'a
-(** Raise a {!No_solution}. Exit code [20]. *)
+(** [no_solution] Raise a {!No_solution}. Exit code [20]. *)
 
-val config_error : ('a, Format.formatter, unit, 'b) format4 -> 'a
-(** Raise a {!Config_error}. Exit code [10]. *)
+val fail_config_error : ('a, Format.formatter, unit, 'b) format4 -> 'a
+(** [fail_config_error] Raise a {!Config_error}. Exit code [10]. *)
 
 val build_failed : pkg:string -> cmd:string -> output:string -> 'a
-(** Raise a {!Build_failed}. Exit code [31]. *)
+(** [build_failed] Raise a {!Build_failed}. Exit code [31]. *)
 
-val fetch_failed : url:string -> ('a, Format.formatter, unit, 'b) format4 -> 'a
-(** Raise a {!Fetch_failed}. Exit code [30]. *)
+val fail_fetch_failed :
+  url:string -> ('a, Format.formatter, unit, 'b) format4 -> 'a
+(** [fail_fetch_failed] Raise a {!Fetch_failed}. Exit code [30]. *)

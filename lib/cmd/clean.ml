@@ -51,7 +51,7 @@ let pkg_clean ~sys ~fs ~clock ~cache ~os_key ~target ~dry_run =
       let dependents = close [] direct_hashes in
       let all_hashes = direct_hashes @ dependents in
       let verb = if dry_run then "Would remove" else "Removing" in
-      let dim s = Fmt.str "%a" Oi.Style.dim_string s in
+      let dim s = Fmt.str "%a" Oi.Style.pp_dim_string s in
       Oi.Say.step "%s %d layer(s) for %s" verb (List.length direct) target;
       List.iter
         (fun (n, v, h) -> Oi.Say.info "%s.%s  %s" n v (dim (short h)))
@@ -107,7 +107,7 @@ let cmd =
             (pkg_clean ~sys ~fs ~clock:clk ~cache ~os_key ~target:t ~dry_run)
     | None ->
         if not bulk_flags then begin
-          Fmt.pr "%a@.@." Oi.Style.header_string "Cleanable items";
+          Fmt.pr "%a@.@." Oi.Style.pp_header_string "Cleanable items";
           let items = Oi.Cache.cleanable_items cache ~data_dir in
           let rows =
             List.map
@@ -118,9 +118,8 @@ let cmd =
                     Eio.Path.is_directory item.path
                     || Eio.Path.is_file item.path
                   then
-                    Tty.Span.text
-                      (Fmt.str "%a" Oi.Cache.pp_size
-                         (Oi.Cache.size ~sys item.path))
+                    Fmt.kstr Tty.Span.text "%a" Oi.Cache.pp_size
+                      (Oi.Cache.size ~sys item.path)
                   else Tty.Span.styled Oi.Style.dim "(empty)"
                 in
                 [ Tty.Span.text flag; size; Tty.Span.text item.description ])

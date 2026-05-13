@@ -381,20 +381,20 @@ let render_text c =
   } =
     c
   in
-  Fmt.pr "@[<v>%a@," Oi.Style.header_string "Platform";
+  Fmt.pr "@[<v>%a@," Oi.Style.pp_header_string "Platform";
   Fmt.pr "  os-key:     %s@," platform.os_key;
   Fmt.pr "  ocaml:      %s (relocatable)@," platform.ocaml_version;
-  Fmt.pr "@,%a@," Oi.Style.header_string "Directories";
+  Fmt.pr "@,%a@," Oi.Style.pp_header_string "Directories";
   Fmt.pr "  data:       %s@," directories.data;
   Fmt.pr "  cache:      %s@," directories.cache;
-  Fmt.pr "@,%a@," Oi.Style.header_string "Registry";
+  Fmt.pr "@,%a@," Oi.Style.pp_header_string "Registry";
   Fmt.pr "  url:        %s@," registry.url;
   Fmt.pr "  index TTL:  %gs@," registry.index_ttl_s;
-  Fmt.pr "@,%a@," Oi.Style.header_string "Source mirror";
+  Fmt.pr "@,%a@," Oi.Style.pp_header_string "Source mirror";
   Fmt.pr "  dir:        %s@," source_mirror.dir;
   Fmt.pr "  blobs:      %d@," source_mirror.blobs;
   Fmt.pr "  total size: %s@," (human_bytes source_mirror.total_bytes);
-  Fmt.pr "@,%a@," Oi.Style.header_string "Toolchains";
+  Fmt.pr "@,%a@," Oi.Style.pp_header_string "Toolchains";
   Fmt.pr "  install root:  %s@," toolchains.install_root;
   List.iter
     (fun (t : toolchain_entry) ->
@@ -402,14 +402,15 @@ let render_text c =
         match t.ref_ with Some r -> Fmt.str "%s#%s" t.url r | None -> t.url
       in
       let mode_tag =
-        if t.relocatable then Fmt.str "[%a]" Oi.Style.ok_string "relocatable"
-        else Fmt.str "[%a]" Oi.Style.warn_string "fixed-prefix"
+        if t.relocatable then Fmt.str "[%a]" Oi.Style.pp_ok_string "relocatable"
+        else Fmt.str "[%a]" Oi.Style.pp_warn_string "fixed-prefix"
       in
       let default_tag =
-        if t.is_default then Fmt.str "  [%a]" Oi.Style.accent_string "default"
+        if t.is_default then
+          Fmt.str "  [%a]" Oi.Style.pp_accent_string "default"
         else ""
       in
-      Fmt.pr "  %a  %s%s  %s@," Oi.Style.header_string t.handle mode_tag
+      Fmt.pr "  %a  %s%s  %s@," Oi.Style.pp_header_string t.handle mode_tag
         default_tag url_with_ref;
       if t.depends <> [] then
         Fmt.pr "    depends:    %s@," (String.concat ", " t.depends);
@@ -420,33 +421,34 @@ let render_text c =
       else
         match t.installs with
         | [] ->
-            Fmt.pr "    status:     %a@," Oi.Style.dim_string "not installed"
+            Fmt.pr "    status:     %a@," Oi.Style.pp_dim_string "not installed"
         | xs ->
             List.iter
               (fun { path; ready } ->
                 let status =
-                  if ready then Fmt.str "%a" Oi.Style.ok_string "ready"
-                  else Fmt.str "%a" Oi.Style.warn_string "partial"
+                  if ready then Fmt.str "%a" Oi.Style.pp_ok_string "ready"
+                  else Fmt.str "%a" Oi.Style.pp_warn_string "partial"
                 in
                 Fmt.pr "    install:    %s  %s@," status path)
               xs)
     toolchains.entries;
-  Fmt.pr "@,%a@," Oi.Style.header_string "Base overlays (from reporepo)";
+  Fmt.pr "@,%a@," Oi.Style.pp_header_string "Base overlays (from reporepo)";
   if base_overlays = [] then
     Fmt.pr
       "  %a no 'relocatable' overlay in reporepo %s. Run 'oi repo add' to \
        bootstrap.@,"
-      Oi.Style.warn_string "(none)" (Terms.reporepo_path ())
+      Oi.Style.pp_warn_string "(none)" (Terms.reporepo_path ())
   else
     List.iter
       (fun (o : base_overlay) ->
         let status =
-          if o.url = "" then Fmt.str "%a" Oi.Style.dim_string "definition only"
+          if o.url = "" then
+            Fmt.str "%a" Oi.Style.pp_dim_string "definition only"
           else if o.materialised then
-            Fmt.str "%a" Oi.Style.ok_string "materialised"
-          else Fmt.str "%a" Oi.Style.warn_string "not materialised"
+            Fmt.str "%a" Oi.Style.pp_ok_string "materialised"
+          else Fmt.str "%a" Oi.Style.pp_warn_string "not materialised"
         in
-        Fmt.pr "  %a.%s  %s  %s@," Oi.Style.header_string o.handle o.version
+        Fmt.pr "  %a.%s  %s  %s@," Oi.Style.pp_header_string o.handle o.version
           status o.url)
       base_overlays;
   Fmt.pr "@]@.";
@@ -479,8 +481,8 @@ let render_text c =
       List.iter
         (fun (t : dev_tool) ->
           let mark =
-            if t.hit then Fmt.str "%a" Oi.Style.ok_string "hit"
-            else Fmt.str "%a" Oi.Style.dim_string "miss"
+            if t.hit then Fmt.str "%a" Oi.Style.pp_ok_string "hit"
+            else Fmt.str "%a" Oi.Style.pp_dim_string "miss"
           in
           Fmt.pr "  %-18s %-4s %s@." t.name mark t.detail)
         p.dev_tools
@@ -490,7 +492,7 @@ let render_json c =
   | Ok s ->
       print_string s;
       print_newline ()
-  | Error e -> Oi.Error.config_error "json encode failed: %s" e
+  | Error e -> Oi.Error.fail_config_error "json encode failed: %s" e
 
 let cmd =
   let run (c : Terms.common) skip_local =

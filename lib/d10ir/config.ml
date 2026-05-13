@@ -30,3 +30,9 @@ let with_env_overrides t =
     | Some _ -> true
   in
   { t with build_parallelism = parallel; keep_staging = keep }
+
+let pp ppf t =
+  Fmt.pf ppf "@[<h>{ parallelism = %d; keep_staging = %b; log_dir = %a }@]"
+    t.build_parallelism t.keep_staging
+    Fmt.(option ~none:(any "default") string)
+    t.log_dir

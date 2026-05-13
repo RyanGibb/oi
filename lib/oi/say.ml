@@ -29,7 +29,7 @@ let step fmt =
   Fmt.kstr
     (fun s ->
       interject (fun () ->
-          Fmt.pr "%a %s@." Style.accent_string "▸" s;
+          Fmt.pr "%a %s@." Style.pp_accent_string "▸" s;
           flush_out ()))
     fmt
 
@@ -45,7 +45,7 @@ let field label fmt =
   Fmt.kstr
     (fun v ->
       interject (fun () ->
-          Fmt.pr "  %a %s@." Style.dim_string
+          Fmt.pr "  %a %s@." Style.pp_dim_string
             (Fmt.str "%-*s" label_width (label ^ ":"))
             v;
           flush_out ()))
@@ -69,7 +69,7 @@ let field_list ?(sep = ", ") label items =
           (match String.split_on_char '\n' wrapped with
           | [] -> ()
           | first :: rest ->
-              Fmt.pr "  %a %s@." Style.dim_string
+              Fmt.pr "  %a %s@." Style.pp_dim_string
                 (Fmt.str "%-*s" label_width (label ^ ":"))
                 first;
               List.iter (fun line -> Fmt.pr "%s%s@." pad line) rest);
@@ -77,7 +77,7 @@ let field_list ?(sep = ", ") label items =
 
 let progress msg =
   if Tty.is_tty () then
-    interject (fun () -> Fmt.pr "\r\027[K%a%!" Style.dim_string msg)
+    interject (fun () -> Fmt.pr "\r\027[K%a%!" Style.pp_dim_string msg)
 
 let progress_clear () =
   if Tty.is_tty () then interject (fun () -> Fmt.pr "\r\027[K%!")
@@ -86,7 +86,7 @@ let header fmt =
   Fmt.kstr
     (fun s ->
       interject (fun () ->
-          Fmt.pr "%a@." Style.header_string s;
+          Fmt.pr "%a@." Style.pp_header_string s;
           flush_out ()))
     fmt
 
@@ -94,7 +94,7 @@ let ok fmt =
   Fmt.kstr
     (fun s ->
       interject (fun () ->
-          Fmt.pr "  %a %s@." Style.ok_string "✓" s;
+          Fmt.pr "  %a %s@." Style.pp_ok_string "✓" s;
           flush_out ()))
     fmt
 
@@ -102,7 +102,7 @@ let warn fmt =
   Fmt.kstr
     (fun s ->
       interject (fun () ->
-          Fmt.epr "%a %s@." Style.warn_string "warning:" s;
+          Fmt.epr "%a %s@." Style.pp_warn_string "warning:" s;
           try Stdlib.flush stderr with _ -> ()))
     fmt
 
@@ -110,7 +110,7 @@ let error fmt =
   Fmt.kstr
     (fun s ->
       interject (fun () ->
-          Fmt.epr "%a %s@." Style.error_string "error:" s;
+          Fmt.epr "%a %s@." Style.pp_error_string "error:" s;
           try Stdlib.flush stderr with _ -> ()))
     fmt
 

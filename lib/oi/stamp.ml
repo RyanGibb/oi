@@ -8,7 +8,7 @@ let data_schema = 1
 let toolchains_schema = 1
 let solver_cache_schema = "v8"
 let json_schema_version = "1.0"
-let stamp_filename = ".oi-stamp"
+let filename = ".oi-stamp"
 
 (* On-disk format is a tiny [key value] text file:
 
@@ -30,12 +30,12 @@ let render ~schema =
   Fmt.str "schema %d\nwritten_at %.0f\n" schema (Unix.gettimeofday ())
 
 let read ~fs ~root =
-  let path = Filename.concat root stamp_filename in
+  let path = Filename.concat root filename in
   if not (Sys.file_exists path) then None
   else try parse_schema (Eio.Path.load Eio.Path.(fs / path)) with _ -> None
 
 let write ~fs ~root ~schema =
-  let path = Filename.concat root stamp_filename in
+  let path = Filename.concat root filename in
   try
     Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / root);
     Eio.Path.save ~create:(`Or_truncate 0o644)
@@ -80,7 +80,7 @@ let ensure ~fs ~(cache : Cache.t) ~data_dir =
         sweep ~fs ~label ~root ~current ~previous items
   in
   go ~label:"cache" ~root:(Cache.root_s cache) ~current:cache_schema
-    ~items:(Cache.cache_items cache);
+    ~items:(Cache.items cache);
   go ~label:"data" ~root:data_dir ~current:data_schema
     ~items:(Cache.data_items cache ~data_dir);
   go ~label:"toolchain" ~root:(Cache.toolchains_root ())

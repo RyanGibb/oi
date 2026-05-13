@@ -2,6 +2,10 @@
 [@@@ai_model "claude-opus-4-6"]
 [@@@ai_provider "Anthropic"]
 
+let log_src = Logs.Src.create "d10.layer" ~doc:"d10 layer operations"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 
 (* Find the first packages_dir in which [<dir>/<name>/<name.version>/opam] exists,
@@ -35,7 +39,7 @@ let hash ~packages_dirs pkgs =
   in
   let concat = String.concat " " hashes in
   if Sys.getenv_opt "DAY10_DEBUG_HASH" <> None then
-    Printf.eprintf "layer_hash input: [%s] -> %S\n%!"
+    Fmt.epr "layer_hash input: [%s] -> %S\n%!"
       (String.concat "," (List.map OpamPackage.to_string pkgs))
       concat;
   Digest.string concat |> Digest.to_hex
@@ -77,7 +81,7 @@ let load_meta path =
     match Jsont_bytesrw.decode_string ~locs:true ~file meta_jsont s with
     | Ok meta -> Some meta
     | Error e ->
-        Logs.warn (fun m -> m "Bad layer.json: %s" e);
+        Log.warn (fun m -> m "Bad layer.json: %s" e);
         None
   with Eio.Exn.Io _ -> None
 
@@ -246,7 +250,7 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
             in
             if actual = expected then true
             else begin
-              Logs.warn (fun m ->
+              Log.warn (fun m ->
                   m "Checksum mismatch for %s: expected %s, got %s" hash
                     expected actual);
               false
@@ -260,7 +264,7 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
             Sysops.Tar.extract c.sys ~archive:tmp_file ~dst:staging_dir ();
             true
           with Eio.Io (Sysops.Cmd_failed _, _) as exn ->
-            Logs.warn (fun m ->
+            Log.warn (fun m ->
                 m "Failed to extract %s: %s" hash (Printexc.to_string exn));
             false
         in
@@ -275,7 +279,7 @@ let pull_remote (c : Config.t) ~session ~remote ~hash ?on_progress ?on_phase
             Eio.Path.rename staging_dir layer_dir;
             succeeded c ~hash
           with exn ->
-            Logs.warn (fun m ->
+            Log.warn (fun m ->
                 m "Failed to publish layer %s: %s" hash (Printexc.to_string exn));
             cleanup_staging ();
             false

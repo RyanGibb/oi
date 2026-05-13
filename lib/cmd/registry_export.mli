@@ -11,8 +11,7 @@ val run :
   registry:string ->
   output:string ->
   unit
-(** [run ~os_key ~cache ~registry ~output] writes the publishable registry tree
-    under [output].
+(** [run] writes the publishable registry tree under [output].
 
     Always written:
     - [<os_key>/<hash>.tar.zst] for every succeeded layer in the local cache

@@ -40,7 +40,7 @@ let pp_cycles ppf cycles =
    reported as a length-1 cycle.
 
    Each returned inner list is one cycle in discovery order. *)
-let find_scc_cycles g =
+let scc_cycles g =
   let module N = OpamPackage.Name in
   let index : (N.t, int) Hashtbl.t = Hashtbl.create 16 in
   let lowlink : (N.t, int) Hashtbl.t = Hashtbl.create 16 in
@@ -217,16 +217,16 @@ let of_solution ctx ?d10 ~packages_dirs pkgs =
      cyclic dependency set without complaint (it only checks
      satisfiability), but [D10ir.Direct.run] then deadlocks because each
      package's fiber awaits a dep promise that never resolves. *)
-  (match find_scc_cycles g with [] -> () | cycles -> raise (Cycle cycles));
+  (match scc_cycles g with [] -> () | cycles -> raise (Cycle cycles));
   g
 
 (* -- Graph accessors ----------------------------------------------------- *)
 
-let find_node g name = OpamPackage.Name.Map.find name g.nodes_by_name
-let nodes g = List.map (find_node g) g.topo_order
+let node_for g name = OpamPackage.Name.Map.find name g.nodes_by_name
+let nodes g = List.map (node_for g) g.topo_order
 
 let layer_hashes g =
-  List.map (fun name -> (find_node g name).layer_hash) g.topo_order
+  List.map (fun name -> (node_for g name).layer_hash) g.topo_order
 
 (* -- Executable plan ----------------------------------------------------- *)
 
@@ -540,7 +540,7 @@ let pp_package ~os_key fmt p =
     | Identity.Source -> "source"
     | Binary -> "binary (cached)"
   in
-  Fmt.pf fmt "@[<v>  %a [%s]@," Style.header_string p.pkg method_s;
+  Fmt.pf fmt "@[<v>  %a [%s]@," Style.pp_header_string p.pkg method_s;
   Fmt.pf fmt "    layer: %s/%s@," os_key (short_hash p.layer_hash);
   if p.dep_layers <> [] then begin
     Fmt.pf fmt "    needs:@,";

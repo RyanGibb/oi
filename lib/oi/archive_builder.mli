@@ -32,7 +32,7 @@ val build :
   ?cache_urls:OpamUrl.t list ->
   Plan.package_plan ->
   built
-(** Run the full source-prep pipeline and produce an archive. Used by
+(** [build] Run the full source-prep pipeline and produce an archive. Used by
     {!Recipe_emitter.emit} at recipe-emit time when the solver context is
     available. [?reporter] receives a [Status "Baking archive for <pkg>"] event
     when work begins. *)
@@ -51,11 +51,11 @@ val build_no_solve :
   opam_path:string ->
   unit ->
   built
-(** Solver-free variant of {!build}. Reads the opam file at [opam_path], fetches
-    the source, applies extra-files and filter-evaluated patches, runs opam
-    substitutions against a deterministic synthetic env (rooted at the
-    cache_root's build prefix), and tars the result into a content-addressed
-    archive.
+(** [build_no_solve] Solver-free variant of {!build}. Reads the opam file at
+    [opam_path], fetches the source, applies extra-files and filter-evaluated
+    patches, runs opam substitutions against a deterministic synthetic env
+    (rooted at the cache_root's build prefix), and tars the result into a
+    content-addressed archive.
 
     Used by [oi repo bump]: every package in the freshly materialised overlay
     gets baked without going through the solver, so URL pinning and archive

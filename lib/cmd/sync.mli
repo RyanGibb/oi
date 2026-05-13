@@ -23,12 +23,12 @@ val resolve_project_toolchain :
   cwd:string ->
   unit ->
   Oi.Toolchain.info option
-(** Resolve the toolchain a project-aware command should use, with the same
-    handle scope [oi sync] uses: project [x-repos:], URL-project overlays from
-    [--with], and [--with-repo=@h] handles. Used by [oi exec] / [oi env] to pick
-    the same toolchain [oi sync] would have, without doing a full sync.
-    [install] controls whether non-relocatable toolchains get prepared on disk.
-*)
+(** [resolve_project_toolchain] resolves the toolchain a project-aware command
+    should use, with the same handle scope [oi sync] uses: project [x-repos:],
+    URL-project overlays from [--with], and [--with-repo=@h] handles. Used by
+    [oi exec] / [oi env] to pick the same toolchain [oi sync] would have,
+    without doing a full sync. [install] controls whether non-relocatable
+    toolchains get prepared on disk. *)
 
 type envrc_mode = [ `Skip | `Always | `Detect ]
 (** Controls [.envrc] writing during {!run}. [`Detect] (the default) writes
@@ -36,8 +36,8 @@ type envrc_mode = [ `Skip | `Always | `Detect ]
     regardless. *)
 
 val envrc_mode_arg : envrc_mode Cmdliner.Term.t
-(** Cmdliner term for [--envrc=skip|always|detect]. Shared between [oi sync] and
-    [oi build]. *)
+(** [envrc_mode_arg] Cmdliner term for [--envrc=skip|always|detect]. Shared
+    between [oi sync] and [oi build]. *)
 
 val run :
   ?quiet:bool ->
@@ -62,10 +62,10 @@ val run :
   cwd:string ->
   unit ->
   string * Oi.Toolchain.info option
-(** Run a full sync in [cwd] and return the assembled [_oi/prefix/] path along
-    with the resolved toolchain so callers can reuse it (e.g. [oi exec] reading
-    env vars without re-resolving). [quiet] (default [false]) routes narration
-    to [Logs.info] instead of stdout.
+(** [run] Run a full sync in [cwd] and return the assembled [_oi/prefix/] path
+    along with the resolved toolchain so callers can reuse it (e.g. [oi exec]
+    reading env vars without re-resolving). [quiet] (default [false]) routes
+    narration to [Logs.info] instead of stdout.
 
     A unified [Progress_ui] is opened internally when on a TTY (and not
     [quiet]); otherwise narration goes to [Logs.info]. *)

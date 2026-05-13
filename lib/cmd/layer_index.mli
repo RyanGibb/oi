@@ -6,12 +6,12 @@
     with the remote registry's published [index.db]. *)
 
 val remote_index_max_age : float
-(** Seconds. Default [3600.0] (1 hour). The remote registry index is
-    re-downloaded on next use after this TTL. *)
+(** [remote_index_max_age] Seconds. Default [3600.0] (1 hour). The remote
+    registry index is re-downloaded on next use after this TTL. *)
 
 val url_join : string -> string -> string
-(** Join a registry base URL and a relative path with a single ['/'] regardless
-    of whether the base has a trailing slash. *)
+(** [url_join] Join a registry base URL and a relative path with a single ['/']
+    regardless of whether the base has a trailing slash. *)
 
 val ensure_local :
   sys:D10.Sysops.t ->
@@ -20,9 +20,10 @@ val ensure_local :
   cache:Oi.Cache.t ->
   os_key:string ->
   string
-(** Build/refresh the local index at [{cache_root}/layers/{os_key}/index.db].
-    Cheap staleness check rebuilds when the [layers/{os_key}/] directory count
-    exceeds the indexed-row count. Returns the index path. *)
+(** [ensure_local] Build/refresh the local index at
+    [{cache_root}/layers/{os_key}/index.db]. Cheap staleness check rebuilds when
+    the [layers/{os_key}/] directory count exceeds the indexed-row count.
+    Returns the index path. *)
 
 val ensure_remote :
   ?on_phase:(string -> unit) ->
@@ -33,9 +34,9 @@ val ensure_remote :
   registry:string ->
   unit ->
   string option
-(** Download the remote registry's [{os_key}/index.db] to a local cache location
-    ([<=1h] freshness window, atomic rename). Returns the local path on success,
-    [None] when the registry is empty/unreachable.
+(** [ensure_remote] Download the remote registry's [{os_key}/index.db] to a
+    local cache location ([<=1h] freshness window, atomic rename). Returns the
+    local path on success, [None] when the registry is empty/unreachable.
 
     [on_phase] surfaces the "fetching registry index" status to a caller-
     supplied sink (e.g. a TTY progress bar). When omitted, the status is routed
@@ -43,10 +44,11 @@ val ensure_remote :
 
 val merge_remote_into_local :
   fs:Eio.Fs.dir_ty Eio.Path.t -> index_path:string -> remote_path:string -> unit
-(** Open [index_path] (the local index) and merge every row from [remote_path].
-    A corrupt remote file is unlinked so the next call re-downloads it. *)
+(** [merge_remote_into_local] Open [index_path] (the local index) and merge
+    every row from [remote_path]. A corrupt remote file is unlinked so the next
+    call re-downloads it. *)
 
-val binary_to_package :
+val package_of_binary :
   ?on_phase:(string -> unit) ->
   sys:D10.Sysops.t ->
   fs:Eio.Fs.dir_ty Eio.Path.t ->
@@ -56,11 +58,11 @@ val binary_to_package :
   registry:string ->
   string ->
   (string * string option) option
-(** [binary_to_package … name] returns [Some (pkg, overlay_handle)] when the
-    merged local+remote index has a row for the binary [name]. The overlay
-    handle (if any) is load-bearing: the package may only be available in that
-    overlay's [packages/] tree, so callers should add the handle to their repo
-    set before solving.
+(** [package_of_binary] returns [Some (pkg, overlay_handle)] when the merged
+    local+remote index has a row for the binary [name]. The overlay handle (if
+    any) is load-bearing: the package may only be available in that overlay's
+    [packages/] tree, so callers should add the handle to their repo set before
+    solving.
 
     [on_phase], if supplied, is invoked with status updates while fetching the
     remote index — used by [oi run]'s preflight bar to keep the user informed

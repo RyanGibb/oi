@@ -169,7 +169,7 @@ let node_of_package_plan ~cache_root (p : Plan.package_plan) : D10ir.Plan.node =
           | Some path -> Fmt.str "@\n  opam file: %s" path
           | None -> ""
         in
-        Error.config_error
+        Error.fail_config_error
           "%s: opam file has no [x-d10-archive] — run [oi repo bump %s] to \
            populate the consolidated source archive sha.%s@\n\
            Bake is solver-free and writes shas into the v2 reporepo as part of \

@@ -62,6 +62,9 @@ type t = {
   results : entry list;
 }
 
+val pp : t Fmt.t
+(** [pp ppf t] renders a one-line summary: schema, OS key and package count. *)
+
 (** {1 Codec} *)
 
 val codec : t Jsont.t

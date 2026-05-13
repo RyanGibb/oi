@@ -59,7 +59,7 @@ val log_pointer_codec : log_pointer Jsont.t
 (** {1 Storage} *)
 
 val append : fs:Eio.Fs.dir_ty Eio.Path.t -> cache_root:string -> event -> unit
-(** [append ~cache_root e] appends [e] as a single JSON line to
+(** [append ~fs ~cache_root e] appends [e] as a single JSON line to
     {!local_log_path}. Errors are logged and swallowed so logging failure cannot
     abort the build. *)
 
@@ -68,7 +68,7 @@ val read_all :
   cache_root:string ->
   os_key:string ->
   event list
-(** [read_all ~cache_root ~os_key] reads every line of {!local_log_path},
+(** [read_all ~fs ~cache_root ~os_key] reads every line of {!local_log_path},
     decodes, and filters by [os_key]. Lines that fail to decode are skipped with
     a debug log. *)
 
@@ -83,7 +83,7 @@ val write_per_os :
   os_key:string ->
   event list ->
   unit
-(** [write_per_os ~output_dir ~os_key events] writes [events] (sorted by
+(** [write_per_os ~fs ~output_dir ~os_key events] writes [events] (sorted by
     [event_id]) to {!exported_log_path} as jsonl. *)
 
 (** {1 IDs and helpers} *)
@@ -92,14 +92,14 @@ val ulid : unit -> string
 (** A Crockford-base32 ULID. 26 chars: 48-bit ms-since-epoch + 80-bit random. *)
 
 val invocation_id : unit -> string
-(** Cached per-process ULID. Every event from a single [oi] invocation shares
-    this id. *)
+(** [invocation_id] Cached per-process ULID. Every event from a single [oi]
+    invocation shares this id. *)
 
 val default_context : unit -> context
-(** Construct a base [context] from the current process: [trigger] from
-    [Sys.argv], [host] from [Unix.gethostname], and [overlay] / [toolchain] /
-    [project] all left [None]. Producers fill in those three fields locally
-    before calling {!append}. *)
+(** [default_context] Construct a base [context] from the current process:
+    [trigger] from [Sys.argv], [host] from [Unix.gethostname], and [overlay] /
+    [toolchain] / [project] all left [None]. Producers fill in those three
+    fields locally before calling {!append}. *)
 
 val tail_of_file : ?lines:int -> path:string -> unit -> string option
 (** [tail_of_file ?lines ~path ()] returns the last [lines] lines of [path]

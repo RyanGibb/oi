@@ -16,15 +16,15 @@ type slice = {
 (** A registry-side data slice for one OS key. *)
 
 val handles : slice list -> string list
-(** Distinct overlay handles seen across every event's [context.overlay] in
-    [slices]. Sorted alphabetically. *)
+(** [handles] Distinct overlay handles seen across every event's
+    [context.overlay] in [slices]. Sorted alphabetically. *)
 
 val write_all :
   fs:Eio.Fs.dir_ty Eio.Path.t ->
   output_dir:string ->
   generated_at:float ->
   string list
-(** Convenience: read every slice under [output_dir], compute the union of
-    handles, and write [<output_dir>/handles/<handle>.md] for each handle that
-    has at least one failure. Returns the list of handles for which a file was
-    written. *)
+(** [write_all] Convenience: read every slice under [output_dir], compute the
+    union of handles, and write [<output_dir>/handles/<handle>.md] for each
+    handle that has at least one failure. Returns the list of handles for which
+    a file was written. *)

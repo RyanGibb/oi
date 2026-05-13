@@ -24,5 +24,4 @@ val run :
   Oi.Project.Script.dep list ->
   string list ->
   'a
-(** [run … script_path cli_deps args] never returns: it [exit]s with the
-    script's status code. *)
+(** [run] never returns: it [exit]s with the script's status code. *)

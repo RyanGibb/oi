@@ -12,16 +12,16 @@
     {!Ui.suspend} instead. *)
 
 val step : ('a, Format.formatter, unit, unit) format4 -> 'a
-(** [step "%s" msg] prints ["▸ msg"] in accent style — used for top-level action
+(** [step fmt] prints ["▸ <msg>"] in accent style — used for top-level action
     steps ("Solving", "Assembling prefix", "Wrote .envrc"). *)
 
 val info : ('a, Format.formatter, unit, unit) format4 -> 'a
-(** [info "%s" msg] prints ["  msg"] in default style — secondary lines indented
+(** [info fmt] prints ["  <msg>"] in default style — secondary lines indented
     under a {!step}. *)
 
 val field : string -> ('a, Format.formatter, unit, unit) format4 -> 'a
-(** [field "deps" "%s" v] prints ["  deps:    v"] with the label dim and a fixed
-    alignment column for the value. *)
+(** [field label fmt] prints ["  <label>: <value>"] with the label dim and a
+    fixed alignment column for the value. *)
 
 val field_list : ?sep:string -> string -> string list -> unit
 (** [field_list ?sep "deps" items] prints a field whose value is a list of
@@ -38,31 +38,31 @@ val progress : string -> unit
     No-op on non-TTY. *)
 
 val progress_clear : unit -> unit
-(** Erase the current in-place [progress] line without emitting a newline. Use
-    before a final {!step} so the summary lands cleanly on the same row. No-op
-    on non-TTY. *)
+(** [progress_clear] Erase the current in-place [progress] line without emitting
+    a newline. Use before a final {!step} so the summary lands cleanly on the
+    same row. No-op on non-TTY. *)
 
 val header : ('a, Format.formatter, unit, unit) format4 -> 'a
-(** [header "%s" h] prints ["h"] in bold — used for section headers in
+(** [header fmt] prints the message in bold — used for section headers in
     multi-block reports ([oi show], [oi config]). *)
 
 val ok : ('a, Format.formatter, unit, unit) format4 -> 'a
-(** [ok "%s" msg] prints ["  ✓ msg"] in success-green. *)
+(** [ok fmt] prints ["  ✓ <msg>"] in success-green. *)
 
 val warn : ('a, Format.formatter, unit, unit) format4 -> 'a
-(** [warn "%s" msg] prints ["warning: msg"] in yellow on stderr, then flushes —
+(** [warn fmt] prints ["warning: <msg>"] in yellow on stderr, then flushes —
     protects against the message being eaten by a subsequent progress bar
     redraw. *)
 
 val error : ('a, Format.formatter, unit, unit) format4 -> 'a
-(** [error "%s" msg] prints ["error: msg"] in red on stderr, then flushes. *)
+(** [error fmt] prints ["error: <msg>"] in red on stderr, then flushes. *)
 
 val newline : unit -> unit
 (** Emit a blank line on stdout — used to vertically separate logical sections.
 *)
 
 val set_around_emit : ((unit -> unit) -> unit) -> unit
-(** Install a hook that wraps every Say emission. Used by the cmdliner layer to
-    pause the active progress bar(s) while Say writes (so log lines don't tear
-    the bar) and resume after. Default is identity ([fun f -> f ()]); calling it
-    twice replaces the previous hook. *)
+(** [set_around_emit hook] installs a hook that wraps every Say emission. Used
+    by the cmdliner layer to pause the active progress bar(s) while Say writes
+    (so log lines don't tear the bar) and resume after. Default is identity
+    ([fun f -> f ()]); calling it twice replaces the previous hook. *)

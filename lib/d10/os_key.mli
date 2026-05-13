@@ -30,3 +30,6 @@ val to_string : t -> string
 
 val of_string : string -> t
 (** [of_string s] parses a key. Raises [Failure] if the format is invalid. *)
+
+val pp : t Fmt.t
+(** [pp] renders a key in {!to_string} form ([distro~os_version~arch]). *)

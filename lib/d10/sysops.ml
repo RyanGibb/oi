@@ -201,7 +201,7 @@ let disable_interactive_git () =
    default generator". Idempotent: subsequent calls are no-ops. *)
 let install_crypto_rng () = Crypto_rng_unix.use_default ()
 
-let create ?stdout ?stderr ~proc_mgr ~fs ~net ~clock () =
+let v ?stdout ?stderr ~proc_mgr ~fs ~net ~clock () =
   disable_interactive_git ();
   install_crypto_rng ();
   let stdout =
@@ -223,6 +223,8 @@ let create ?stdout ?stderr ~proc_mgr ~fs ~net ~clock () =
   in
   let tools = resolve_tools t_partial in
   { t_partial with tools }
+
+let pp ppf _t = Fmt.string ppf "<sysops>"
 
 (* -- File queries -------------------------------------------------------- *)
 

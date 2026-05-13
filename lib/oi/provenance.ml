@@ -140,6 +140,10 @@ let codec =
   |> Object.mem "build_env" build_env_codec ~enc:(fun r -> r.build_env)
   |> Object.finish
 
+let pp ppf t =
+  Fmt.pf ppf "@[<h>provenance %s %s %s %.1fs@]" t.layer_hash t.os_key
+    (Identity.to_string t.pkg) t.duration_s
+
 (* -- Storage ------------------------------------------------------------- *)
 
 let path ~cache_root ~os_key ~hash =

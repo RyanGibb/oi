@@ -1,5 +1,10 @@
 module S = OpamFile.Dot_install
 
+let log_src =
+  Logs.Src.create "d10ir.install_file" ~doc:"d10ir .install file parsing"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 
 let pkgname_of_install_file path =
@@ -96,6 +101,6 @@ let apply ~fs ~prefix ~build_dir ~install_file =
         in
         ()
       else
-        Logs.warn (fun m ->
+        Log.warn (fun m ->
             m "install %s: skipping misc file outside prefix: %s" pkg dst_s))
     (S.misc inst)

@@ -1,3 +1,7 @@
+let log_src = Logs.Src.create "oi.cmd.layer_index" ~doc:"oi layer index"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let ( / ) = Filename.concat
 let remote_index_max_age = 3600.0 (* 1 hour *)
 
@@ -30,7 +34,7 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
     Oi.Provenance.overlay_of_layer ~fs ~cache_root ~os_key ~hash
   in
   let rebuild reason =
-    Logs.info (fun m -> m "%s local index for %s" reason os_key);
+    Log.info (fun m -> m "%s local index for %s" reason os_key);
     let db = D10.Index.open_ ~fs ~path:index_path in
     D10.Index.rebuild d10 ~overlay_for db;
     D10.Index.close db
@@ -43,11 +47,11 @@ let ensure_local ~sys ~fs ~clock ~cache ~os_key =
     let stamp = D10.Index.indexer_stamp db ~os_key in
     D10.Index.close db;
     if stamp <> Some D10.Index.indexer_version then
-      rebuild
-        (Fmt.str "Refreshing (indexer %s, on-disk %s)" D10.Index.indexer_version
-           (Stdlib.Option.value stamp ~default:"unstamped"))
+      Fmt.kstr rebuild "Refreshing (indexer %s, on-disk %s)"
+        D10.Index.indexer_version
+        (Stdlib.Option.value stamp ~default:"unstamped")
     else if disk > s.layers then
-      rebuild (Fmt.str "Refreshing (%d on-disk vs %d indexed)" disk s.layers)
+      Fmt.kstr rebuild "Refreshing (%d on-disk vs %d indexed)" disk s.layers
   end;
   index_path
 
@@ -71,13 +75,13 @@ let ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () =
       Eio.Path.mkdirs ~exists_ok:true ~perm:0o755 Eio.Path.(fs / os_dir);
       (try Unix.unlink tmp_path with Unix.Unix_error _ -> ());
       (* Visible status goes through [on_phase] so [oi run] can wire it
-         into its preflight bar; otherwise it's a quiet [Logs.info]. The
-         previous [Logs.app] leaked the message to stderr unconditionally,
+         into its preflight bar; otherwise it's a quiet [Log.info]. The
+         previous [Log.app] leaked the message to stderr unconditionally,
          polluting [oi run]'s output. *)
       (match on_phase with
       | Some f -> f "Fetching registry index"
       | None ->
-          Logs.info (fun m ->
+          Log.info (fun m ->
               m "Fetching registry index from %s (this may take a moment)..."
                 url));
       let fmt_size n =
@@ -92,11 +96,9 @@ let ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () =
           (fun f ~received ~total ->
             match total with
             | Some t when Int64.compare t 0L > 0 ->
-                f
-                  (Fmt.str "Fetching registry index (%s / %s)"
-                     (fmt_size received) (fmt_size t))
-            | _ ->
-                f (Fmt.str "Fetching registry index (%s)" (fmt_size received)))
+                Fmt.kstr f "Fetching registry index (%s / %s)"
+                  (fmt_size received) (fmt_size t)
+            | _ -> Fmt.kstr f "Fetching registry index (%s)" (fmt_size received))
           on_phase
       in
       if D10.Sysops.Http.fetch ?on_progress sys ~url ~dst then begin
@@ -108,12 +110,12 @@ let ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () =
       else begin
         (try Unix.unlink tmp_path with Unix.Unix_error _ -> ());
         if Eio.Path.is_file Eio.Path.(fs / local_path) then begin
-          Logs.warn (fun m ->
+          Log.warn (fun m ->
               m "Failed to fetch registry index, using stale cache");
           Some local_path
         end
         else begin
-          Logs.warn (fun m ->
+          Log.warn (fun m ->
               m "Failed to fetch registry index from %s" registry);
           None
         end
@@ -124,7 +126,7 @@ let merge_remote_into_local ~fs ~index_path ~remote_path =
   let db = D10.Index.open_ ~fs ~path:index_path in
   (try D10.Index.merge_remote db ~remote_path
    with Failure msg -> (
-     Logs.warn (fun m ->
+     Log.warn (fun m ->
          m
            "Remote index merge failed (%s); removing %s so the next run \
             re-downloads it"
@@ -132,7 +134,7 @@ let merge_remote_into_local ~fs ~index_path ~remote_path =
      try Sys.remove remote_path with Sys_error _ -> ()));
   D10.Index.close db
 
-let binary_to_package ?on_phase ~sys ~fs ~clock ~cache ~os_key ~registry name =
+let package_of_binary ?on_phase ~sys ~fs ~clock ~cache ~os_key ~registry name =
   let clk = (clock :> D10.Config.clk) in
   let index_path = ensure_local ~sys ~fs ~clock:clk ~cache ~os_key in
   (match ensure_remote ?on_phase ~sys ~fs ~cache ~os_key ~registry () with

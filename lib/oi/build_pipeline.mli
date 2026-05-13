@@ -147,9 +147,9 @@ type solved = {
 }
 
 val solve : env -> ?reporter:Build_progress.reporter -> request -> solved
-(** Solve every group in [request.targets], elaborate each into an {!Plan.t},
-    emit one in-memory {!D10ir.Plan.t} per successful group, and merge the
-    recipes via {!D10ir.Plan.merge}.
+(** [solve] Solve every group in [request.targets], elaborate each into an
+    {!Plan.t}, emit one in-memory {!D10ir.Plan.t} per successful group, and
+    merge the recipes via {!D10ir.Plan.merge}.
 
     The function never raises for a per-group failure — those land in
     [group_result.error]. It can still raise for environment-level problems
@@ -196,8 +196,8 @@ val build :
   ?reporter:Build_progress.reporter ->
   build_inputs ->
   D10ir.Direct.result option
-(** Run the unified post-merge fetch + archive prefetch + [D10ir.Direct.run] on
-    [solved.merged].
+(** [build] Run the unified post-merge fetch + archive prefetch +
+    [D10ir.Direct.run] on [solved.merged].
 
     Returns [None] when [solved.merged = None] (every group failed its solve /
     elaborate / emit, so there's nothing to build). Otherwise [Some result]
@@ -212,17 +212,18 @@ val build :
     [Phase_started Building] / [Build _] / [Build_summary]. *)
 
 val layer_hashes : solved -> string list
-(** Layer hashes from the first (and usually only) successful group's
-    [exec_plan], in topological order. Empty when [solved.groups] has no
+(** [layer_hashes] Layer hashes from the first (and usually only) successful
+    group's [exec_plan], in topological order. Empty when [solved.groups] has no
     successful entry. The shape every single-target caller ([oi env], [oi run],
     [oi self], [oi sync], [Script_runner]) uses to feed
     {!Pipeline.assemble_prefix}. *)
 
 val root_layer_hashes : solved -> string list
-(** Layer hashes of the user-requested packages across every successful group,
-    deduped. Differs from {!layer_hashes} by filtering [exec_plan.packages] down
-    to the names listed in each group's [group.names] — i.e. the seed packages
-    the solver was asked about, not the transitive closure.
+(** [root_layer_hashes] Layer hashes of the user-requested packages across every
+    successful group, deduped. Differs from {!layer_hashes} by filtering
+    [exec_plan.packages] down to the names listed in each group's [group.names]
+    — i.e. the seed packages the solver was asked about, not the transitive
+    closure.
 
     Use this (not [solved.merged.roots]) anywhere you want "the binaries the
     user actually asked for": [oi install] copies them to a prefix;

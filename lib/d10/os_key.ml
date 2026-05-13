@@ -34,6 +34,7 @@ let of_platform (p : Osrel.t) =
   { os; distro; os_version; arch }
 
 let to_string k = Fmt.str "%s~%s~%s" k.distro k.os_version k.arch
+let pp ppf k = Fmt.string ppf (to_string k)
 
 let of_string s =
   match String.split_on_char '~' s with

@@ -1,3 +1,7 @@
+let log_src = Logs.Src.create "oi.cmd.os_override" ~doc:"oi --os override"
+
+module Log = (val Logs.src_log log_src : Logs.LOG)
+
 let resolve (conf_host : Oi.Solver.Ctx.conf) os_str =
   let known_os_values =
     [ "linux"; "macos"; "freebsd"; "openbsd"; "netbsd"; "win32"; "cygwin" ]
@@ -22,7 +26,7 @@ let resolve (conf_host : Oi.Solver.Ctx.conf) os_str =
       }
   | None ->
       if not (List.mem os_str known_os_values) then
-        Logs.warn (fun m ->
+        Log.warn (fun m ->
             m
               "--os=%s is not a known dockerfile-opam distro tag or opam os \
                value; only the 'os' variable was changed so depext filters \

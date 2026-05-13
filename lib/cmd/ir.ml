@@ -97,7 +97,7 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
   Oi.Pipeline.init_opam_root ~fs ~data_dir;
   ignore (Oi.Source.Reporepo.ensure_base ~fs ~sys ~data_dir ~refresh ());
   let conf =
-    Oi.Pipeline.make_conf ~platform ~ocaml_version:Workspace.ocaml_version
+    Oi.Pipeline.conf ~platform ~ocaml_version:Workspace.ocaml_version
   in
   (* [oi ir emit] is solver-only — no fetch / build phases run, so
      the [Terms.layer_remote] / [source_remote] selection is unused
@@ -144,7 +144,7 @@ let emit_run (c : Terms.common) refresh registry use_registry with_repos
          ~override:toolchain_override ~toolchain
   in
   if names = [] then
-    Oi.Error.config_error "oi ir emit: no target after pin extraction.";
+    Oi.Error.fail_config_error "oi ir emit: no target after pin extraction.";
   let pipeline_env : Oi.Build_pipeline.env =
     { proc_mgr; fs; clock; sys; os_key; cache; data_dir; http_session }
   in
@@ -253,9 +253,7 @@ let run_run (c : Terms.common) dir parallel keep_staging =
   in
   let plan = load_recipe dir in
   let d10 =
-    Oi.Pipeline.make_d10 ~sys ~fs
-      ~clock:(clock :> D10.Config.clk)
-      ~cache ~os_key
+    Oi.Pipeline.d10 ~sys ~fs ~clock:(clock :> D10.Config.clk) ~cache ~os_key
   in
   (match D10ir.Plan.validate ~d10 ~fs ~plan_dir:dir plan with
   | Ok () -> ()

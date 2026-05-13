@@ -1,9 +1,9 @@
+(** Solver subsystem: synthetic opam state, environment, persistent cache, and
+    the entry points that wrap [opam-0install]. *)
+
 [@@@ai_disclosure "ai-assisted"]
 [@@@ai_model "claude-opus-4-7"]
 [@@@ai_provider "Anthropic"]
-
-(** Solver subsystem: synthetic opam state, environment, persistent cache, and
-    the entry points that wrap [opam-0install]. *)
 
 (** {1 Synthetic opam switch state}
 
@@ -237,9 +237,9 @@ val solve :
   constraints:OpamFormula.version_constraint OpamTypes.name_map ->
   OpamPackage.Name.t list ->
   (OpamPackage.t list, string) result
-(** Resolve the dependency closure for [names]. Returns packages in topological
-    order. Successful solves are persisted via {!Memo} and re-used when an
-    identical input is presented again.
+(** [solve] Resolve the dependency closure for [names]. Returns packages in
+    topological order. Successful solves are persisted via {!Memo} and re-used
+    when an identical input is presented again.
 
     [test] / [doc] enable [{with-test}] / [{with-doc}] dependency filters for
     the named packages — typically the solve roots, so
@@ -260,9 +260,9 @@ val raw_solve :
   constraints:OpamFormula.version_constraint OpamTypes.name_map ->
   OpamPackage.Name.t list ->
   (OpamPackage.t list, string) result
-(** Lower-level entrypoint. Runs [opam-0install] over [packages_dirs] with
-    exactly the [constraints] and [env] supplied — no auto-pinning, no {!Ctx},
-    no memo. *)
+(** [raw_solve] Lower-level entrypoint. Runs [opam-0install] over
+    [packages_dirs] with exactly the [constraints] and [env] supplied — no
+    auto-pinning, no {!Ctx}, no memo. *)
 
 val direct_deps_within :
   packages_dirs:string list ->
@@ -286,5 +286,5 @@ val topo_sort :
   conf:Ctx.conf ->
   OpamPackage.t list ->
   OpamPackage.t list
-(** Re-order [pkgs] in dependency-first topological order under [conf]'s filter
-    env. Stable on already-sorted inputs. *)
+(** [topo_sort] Re-order [pkgs] in dependency-first topological order under
+    [conf]'s filter env. Stable on already-sorted inputs. *)
