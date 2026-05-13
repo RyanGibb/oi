@@ -192,7 +192,8 @@ let run_impl (c : Terms.common) refresh locked skip_local dry_run registry
        tagged for a different toolchain — the explicit flag wins. *)
   let project_overlays =
     Oi.Pipeline.filter_compatible_overlays
-      ~reporepo_path:(Terms.reporepo_path ()) ~toolchain project_overlays
+      ~reporepo_path:(Terms.reporepo_path ()) ~override:toolchain_override
+      ~toolchain project_overlays
   in
   let with_repos = project_overlays @ with_repos in
   let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in

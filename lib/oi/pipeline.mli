@@ -111,12 +111,19 @@ val classify_with_args :
 
 val filter_compatible_overlays :
   reporepo_path:string ->
+  ?override:string option ->
   toolchain:Toolchain.info option ->
   string list ->
   string list
 (** Drop project-declared reporepo overlays tagged with an [x-oi-toolchain] that
     doesn't match the active toolchain handle. Overlays without [x-oi-toolchain]
-    and overlays not present in the reporepo (URL-only handles) are kept. *)
+    and overlays not present in the reporepo (URL-only handles) are kept.
+
+    [?override] reflects whether the active toolchain was {b explicitly} chosen
+    ([--toolchain=NAME]) rather than auto-picked. When set, the filter is a
+    no-op: the user has overridden the project's toolchain preference, so we
+    trust them to know that their declared overlays still apply. Default is
+    [None] (auto-pick mode), in which case the filter runs. *)
 
 (** {1 Build pipeline} *)
 

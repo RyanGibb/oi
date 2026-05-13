@@ -156,10 +156,12 @@ let pick_batch_toolchain ?reporter ~env ~conf ~override ~all_handles () =
   | _ -> ());
   info
 
-let packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs ?pin_dir
-    ?local_packages_dir ~global_handles ~toolchain handles =
+let packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs
+    ?(toolchain_override = None) ?pin_dir ?local_packages_dir ~global_handles
+    ~toolchain handles =
   let global_handles =
-    Pipeline.filter_compatible_overlays ~reporepo_path ~toolchain global_handles
+    Pipeline.filter_compatible_overlays ~reporepo_path
+      ~override:toolchain_override ~toolchain global_handles
   in
   let effective = global_handles @ handles |> List.sort_uniq String.compare in
   let entries = try Source.Reporepo.load ~path:reporepo_path with _ -> [] in
@@ -214,8 +216,9 @@ let solve_group ~env ~conf ~toolchain_override ~global_handles ~base_pkgs_dirs
     ((tokens, group_handles) : string list * string list) : group_result =
   let label = String.concat ", " tokens in
   let pkgs_dir =
-    packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs ?pin_dir
-      ?local_packages_dir ~global_handles ~toolchain group_handles
+    packages_dirs_for_group ~env ~reporepo_path ~base_pkgs_dirs
+      ~toolchain_override ?pin_dir ?local_packages_dir ~global_handles
+      ~toolchain group_handles
   in
   let group_conf, tc_ctx = Pipeline.solver_inputs toolchain conf in
   (* Mirror [oi build]'s [--toolchain=NAME] behavior: strip

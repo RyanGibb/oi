@@ -97,7 +97,8 @@ let project_solve ~fs ~sys ~cache ~data_dir ~refresh ~platform ~with_repos
   let conf, tc_ctx = Oi.Pipeline.solver_inputs toolchain conf in
   let project_overlays =
     Oi.Pipeline.filter_compatible_overlays
-      ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
+      ~reporepo_path:(Terms.reporepo_path ()) ~override:toolchain_override
+      ~toolchain candidate_overlays
   in
   let with_repos = project_overlays @ with_repos in
   let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in

@@ -284,7 +284,8 @@ let run ?(quiet = false) ?(refresh = false) ?(skip_local = false)
   let conf, _ = Oi.Pipeline.solver_inputs toolchain conf in
   let project_overlays =
     Oi.Pipeline.filter_compatible_overlays
-      ~reporepo_path:(Terms.reporepo_path ()) ~toolchain candidate_overlays
+      ~reporepo_path:(Terms.reporepo_path ()) ~override:toolchain_override
+      ~toolchain candidate_overlays
   in
   say_field_list "overlays" project_overlays;
   let with_repos = project_overlays @ with_repos in

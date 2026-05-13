@@ -134,10 +134,18 @@ let classify_with_args ~fs ~sys ~cache ?refresh
   in
   (pkg_deps, url_project)
 
-let filter_compatible_overlays ~reporepo_path ~toolchain handles =
-  match (toolchain : Toolchain.info option) with
-  | None -> handles
-  | Some info ->
+let filter_compatible_overlays ~reporepo_path ?(override = None) ~toolchain
+    handles =
+  match (override, (toolchain : Toolchain.info option)) with
+  | Some _, _ ->
+      (* User explicitly named a toolchain via [--toolchain=NAME]. Honour
+         every declared overlay verbatim — if one is genuinely
+         incompatible the solver will surface the constraint failure,
+         which is a clearer signal than silently dropping a repo the
+         user expected to be in scope. *)
+      handles
+  | None, None -> handles
+  | None, Some info ->
       let entries =
         try Source.Reporepo.load ~path:reporepo_path with Error.E _ -> []
       in
@@ -153,8 +161,9 @@ let filter_compatible_overlays ~reporepo_path ~toolchain handles =
                   Logs.info (fun m ->
                       m
                         "Dropping overlay @%s: built against toolchain %s, \
-                         incompatible with --toolchain=%s"
-                        h t info.handle);
+                         incompatible with auto-picked toolchain %s. Pass \
+                         --toolchain=%s to override."
+                        h t info.handle t);
                   false))
         handles
 

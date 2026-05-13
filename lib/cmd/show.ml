@@ -1033,7 +1033,8 @@ let cmd =
     in
     let project_overlays =
       Oi.Pipeline.filter_compatible_overlays
-        ~reporepo_path:(Terms.reporepo_path ()) ~toolchain project_overlays
+        ~reporepo_path:(Terms.reporepo_path ()) ~override:toolchain_override
+        ~toolchain project_overlays
     in
     let with_repos = project_overlays @ with_repos in
     let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in

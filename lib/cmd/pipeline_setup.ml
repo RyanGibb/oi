@@ -87,11 +87,15 @@ let prepare ~(harness : Harness.env) ~refresh ~locked ~skip_local ~registry
     Oi.Pipeline.pick_toolchain ~fs ~sys ~data_dir ~conf ~install:true
       ~override:toolchain_override ~handles:tc_handles ()
   in
-  (* Drop project overlays tagged for an incompatible toolchain — the
-     explicit [--toolchain] flag (or default toolchain) wins. *)
+  (* When the toolchain was auto-picked, drop project overlays tagged
+     for a different one. When the user passed [--toolchain=NAME]
+     ([toolchain_override = Some _]), keep every declared overlay
+     verbatim — they explicitly overrode the project's preference, so
+     we shouldn't second-guess by silently filtering. *)
   let project_overlays =
     Oi.Pipeline.filter_compatible_overlays
-      ~reporepo_path:(Terms.reporepo_path ()) ~toolchain project_overlays
+      ~reporepo_path:(Terms.reporepo_path ()) ~override:toolchain_override
+      ~toolchain project_overlays
   in
   let with_repos = project_overlays @ with_repos in
   let cli_extras = Target.cli_extra_repos ~fs ~sys ?toolchain with_repos in
