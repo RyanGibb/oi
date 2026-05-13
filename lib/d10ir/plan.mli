@@ -174,7 +174,8 @@ val validate :
     - every [dep_layer_hash] is satisfiable (in-recipe producer or, when [d10]
       is provided, present and succeeded in the d10 store);
     - every [archive.path] resolves under [plan_dir/archive_root] and has a
-      matching sha256.
+      matching sha256, except for nodes whose layer is already succeeded in
+      [d10] (their archive is no longer needed to build).
 
     [plan_dir] is the directory containing [recipe.json]; archive paths are
     joined with [archive_root] relative to it. *)

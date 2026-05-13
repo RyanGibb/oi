@@ -511,33 +511,48 @@ let validate ?d10 ~fs ~plan_dir t =
                 let archive_err =
                   List.find_map
                     (fun n ->
-                      (* archive_root may be absolute (in-memory plans) or
-                         relative to plan_dir (portable plans). *)
-                      let rel_or_abs =
-                        if Filename.is_relative n.archive.path then
-                          Filename.concat t.archive_root n.archive.path
-                        else n.archive.path
+                      (* Skip the archive check for nodes whose layer is
+                         already succeeded in d10: the build path's
+                         [needs_archive] predicate doesn't fetch in that
+                         case, so requiring the archive here would reject
+                         a perfectly buildable plan whenever
+                         [d10ir-archives/<sha>.tar.zst] has been pruned. *)
+                      let already_built =
+                        match d10 with
+                        | None -> false
+                        | Some c ->
+                            D10.Layer.succeeded c
+                              ~hash:(Layer_hash.to_string n.layer_hash)
                       in
-                      let abs =
-                        if Filename.is_relative rel_or_abs then
-                          Filename.concat plan_dir rel_or_abs
-                        else rel_or_abs
-                      in
-                      if not (Sys.file_exists abs) then
-                        Some
-                          (Archive_missing { node = n.layer_hash; path = abs })
+                      if already_built then None
                       else
-                        let actual = sha256_of_file ~fs abs in
-                        if String.equal actual n.archive.sha256 then None
-                        else
+                        (* archive_root may be absolute (in-memory plans) or
+                           relative to plan_dir (portable plans). *)
+                        let rel_or_abs =
+                          if Filename.is_relative n.archive.path then
+                            Filename.concat t.archive_root n.archive.path
+                          else n.archive.path
+                        in
+                        let abs =
+                          if Filename.is_relative rel_or_abs then
+                            Filename.concat plan_dir rel_or_abs
+                          else rel_or_abs
+                        in
+                        if not (Sys.file_exists abs) then
                           Some
-                            (Archive_sha_mismatch
-                               {
-                                 node = n.layer_hash;
-                                 path = abs;
-                                 expected = n.archive.sha256;
-                                 actual;
-                               }))
+                            (Archive_missing { node = n.layer_hash; path = abs })
+                        else
+                          let actual = sha256_of_file ~fs abs in
+                          if String.equal actual n.archive.sha256 then None
+                          else
+                            Some
+                              (Archive_sha_mismatch
+                                 {
+                                   node = n.layer_hash;
+                                   path = abs;
+                                   expected = n.archive.sha256;
+                                   actual;
+                                 }))
                     t.nodes
                 in
                 match archive_err with Some err -> Error err | None -> Ok ())))
